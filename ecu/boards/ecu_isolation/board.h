@@ -250,6 +250,12 @@
 #define BOARD_ANALOG_EX4_ADC_BASE BOARD_APP_ADC16_BASE
 #define BOARD_ANALOG_EX4_ADC_CH   (7U)  /* PF10 -> ADC3_INA7 */
 
+/* XPI0 NOR parameters match the MR6750 module's 8 MiB boot flash. */
+#define BOARD_APP_XPI_NOR_XPI_BASE     HPM_XPI0
+#define BOARD_APP_XPI_NOR_CFG_OPT_HDR  (0xfcf90002U)
+#define BOARD_APP_XPI_NOR_CFG_OPT_OPT0 (0x00000007U)
+#define BOARD_APP_XPI_NOR_CFG_OPT_OPT1 (0x0000000EU)
+
 /* -------------------------------------------------------------------------- */
 /* Ethernet                                                                    */
 /* RTL8211E + ETH1 RGMII. PD30=PHY reset low-active, PD31=PHY INTB low-active. */
