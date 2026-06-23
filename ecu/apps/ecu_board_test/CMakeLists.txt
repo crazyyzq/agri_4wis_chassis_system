@@ -41,4 +41,9 @@ sdk_app_src(selftest/selftest_result.c)
 sdk_app_src(selftest/selftest_safety.c)
 sdk_app_src(selftest/selftest_cli_runner.c)
 sdk_app_src(selftest/selftest_algorithms.c)
+
+# Match the HPM SDK SEGGER RTT examples' native J-Link configuration while
+# retaining UART0 as this application's operator console (RTT is not enabled).
+sdk_ses_opt_debug_connection(J-Link)
+sdk_ses_opt_debug_jlink_speed(4000)
 generate_ide_projects()
