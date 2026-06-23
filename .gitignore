@@ -1,0 +1,35 @@
+# Vendor SDK and bundled toolchains (about 2.9 GiB; install separately)
+/ecu/sdk_env_v1.11.0/
+
+# Build and generated output
+/tmp/
+/build/
+**/*_build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/build.ninja
+**/compile_commands.json
+*.o
+*.obj
+*.a
+*.elf
+*.bin
+*.map
+
+# Local Superpowers/browser state and isolated worktrees
+/.superpowers/
+/.worktrees/
+
+# Test output (keep only documentation and ignore rules)
+/test/reports/*
+!/test/reports/.gitignore
+
+# IDE and operating-system state
+*.emSession
+*.jlinklog
+.vs/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+

@@ -1,0 +1,22 @@
+# Copyright (c) 2021-2024 HPMicro
+# SPDX-License-Identifier: BSD-3-Clause
+
+board:
+  soc: HPM6750 # the name of SOC used on this board
+  device: HPM6750xVMx # device name used for jlink connection
+  openocd-soc: hpm6750-single-core # used for openocd soc config file name: hpm6750-dual-core.cfg
+  openocd-probe: jlink # used for openocd probe config file name: ft2232.cfg
+  on-board-ram:
+    type: sdram
+    size: 32M # the size of on-board ram will be used in linker script as external ram size
+    width: 16bit
+  on-board-flash:
+    type: qspi-nor-flash
+    size: 8M # the size of on-board flash which will be used in linker script
+  feature:
+    - board_gpio_led
+    - board_pwm_rgb_led
+    - board_sdram
+  excluded_samples:
+    - samples/motor_ctrl/bldc_hfi
+    - samples/trace_recorder/rtthread-nano
