@@ -80,6 +80,11 @@
 - 2026-06-24：对相对注释设计基线变更的 42 个 ECU `.c/.h` 文件剥离块注释、行注释和空白后逐文件比较，结果 `COMMENT_ONLY=PASS`；生成的 `pinmux.c/.h` 未改变，`git diff --check` 通过。
 - 2026-06-24：注释增强后的 HPM SDK 1.11.0 GNU 全量构建通过（38 步），XPI0 使用 93,440 B，`ECU_TEST_FLASH` image 使用 0 B。
 - 2026-06-24：注释增强后的 SEGGER Embedded Studio 8.28 工程重新生成并由 `emBuild -config Debug -rebuild` 构建通过；生成 `demo.elf` 39,957,764 B、`demo.bin` 73,476 B、`demo.map` 254,362 B。
+- 2026-06-24：周期通信发送按 TDD 实现；新增自测首先因缺少 `periodic_tx.h` 正确编译失败，最小调度核心加入后 GNU 构建转绿。自测覆盖 499/500 ms 边界、CAN/ASCII 帧格式、暂停恢复、32 位时间回绕和单通道失败隔离。
+- 2026-06-24：新增三个默认关闭、可独立启用的构建开关：`ECU_PERIODIC_CAN_TX`、`ECU_PERIODIC_RS485_TX`、`ECU_PERIODIC_RS232_TX`。普通关闭构建和三组全开 GNU 构建均通过；全开构建确认三个定义均为 `1`。
+- 2026-06-24：三组全开的 SEGGER Embedded Studio 8.28 工程重新生成，并由 `emBuild -config Debug -rebuild` 构建通过。CAN 仍为 500 kbit/s Classic CAN，未启用 CAN-FD。
+- 2026-06-24：三组全开的 GNU 固件由 J-Link V9.16 下载并校验成功，VTref=3.277 V、TAP ID `0x1000563D`，Flash download 涉及 98,304 字节。
+- 2026-06-24：下载后经 COM9 执行 `SELFTEST.ALL`，结果为 `pass=6 fail=0`；新增 `periodic_tx` 自测 PASS。周期发送在 CLI 等待路径运行，注册测试执行期间暂停并在结束后重新初始化恢复。
 
 ## 尚未取得的硬件证据
 
@@ -88,10 +93,11 @@
 - 未保存任何板卡的 PASS JSONL，因此不得声称 ECU 已通过全功能硬件测试。
 - 软件复位、看门狗复位、外部复位需要分别实测并核对 `RESET flags`。
 - EEPROM 当前实现同次运行的备份、写读和恢复；断电保持/跨启动恢复仍需在 HIL 阶段验证并补强。
+- 尚未由外部分析仪保存本次周期发送帧：CAN1..4 的 `0x601..0x604`、RS485 1..3 和 RS232 1..4 当前仍为 UNVERIFIED；固件构建、自测和下载成功不能替代接口观测。
 
 ## 下一检查点
 
-1. 用 SES 8.28 重建最新源码，并检查 map/链接符号没有进入 `0x807F0000..0x80800000`。
-2. J-Link 下载最新固件并实物观察 RGB 启动/心跳状态。
-3. 串口设备可用后采集启动和 `SELFTEST.ALL` 日志。
+1. 由现场人员在 CAN 分析仪确认 CAN1..4 分别出现 `0x601..0x604`、DLC 8、约 500 ms 周期和递增计数。
+2. 分别连接 RS485 1..3、RS232 1..4，确认 115200 8N1 ASCII 周期行。
+3. 保存外部分析仪记录；未连接通道继续标记 UNVERIFIED。
 4. 按 `test/fixtures/ecu-board-test-procedure.md` 接夹具执行 `run all`，只依据保存日志标记结果。

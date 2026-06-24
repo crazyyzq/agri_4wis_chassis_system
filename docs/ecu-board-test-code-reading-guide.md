@@ -48,7 +48,7 @@ main
   -> status_led_init_default + BOOTING（红灯常亮）
   -> safety_init（DO/CAN 终端/RS485 全部安全）
   -> selftest_run_all
-  -> 恢复真实 Safety 和 RGB 后端
+  -> 恢复真实 Safety/RGB 后端并初始化可选 periodic_tx
   -> READY（绿灯 1 Hz）或 FAILED（红灯快闪）
   -> app_shell_run（永久前台循环）
 ```
@@ -70,7 +70,7 @@ operator_read_line
   -> READY 或 FAILED
 ```
 
-`operator_read_line()` 不再使用阻塞 `getchar()`；它轮询 UART0，并在等待字符时调用 `status_led_poll()`，所以主循环是否存活可以从绿灯心跳判断。
+`operator_read_line()` 不再使用阻塞 `getchar()`；它轮询 UART0，并在等待字符时调用 `status_led_poll()` 和 `periodic_tx_poll()`，所以主循环是否存活可以从绿灯心跳判断。注册硬件测试开始前暂停周期发送，结束后重新初始化相关通信口并恢复，避免诊断帧污染回显测试。
 
 ## 4. RGB 状态表
 
@@ -87,7 +87,7 @@ operator_read_line
 
 1. 板级定义：先看 `board.h`，对照原理图，再看 `board.c` 和生成 pinmux。
 2. 启动与框架：`main.c`、`app_shell.c`、`cli.c`、`test_registry.c`、`test_runner.c`。
-3. 安全与状态：`safety_manager.*`、`status_led.*`、`test_types.*`、`result_writer.*`。
+3. 安全与状态：`safety_manager.*`、`status_led.*`、`periodic_tx.*`、`test_types.*`、`result_writer.*`。
 4. 纯算法：`adc_math.*`、`comm_pattern.*`、`memory_patterns.*`、`sbus_decoder.*`。
 5. 目标侧自测：按 `selftest.c` 的注册顺序阅读其余自测文件。
 6. 硬件用例：先无破坏性项目，再看 DO/DIO、通信和内存破坏性测试。
@@ -127,6 +127,9 @@ operator_read_line
 | `ecu/apps/ecu_board_test/src/safety_manager.c` | 后端安装、互锁、快照、全关 | 不完整回调表被拒绝；`safety_backend()` 只用于作用域恢复 |
 | `ecu/apps/ecu_board_test/include/status_led.h` | 四状态和可注入硬件适配器 | `poll()` 非阻塞；override 为幂等单层所有权 |
 | `ecu/apps/ecu_board_test/src/status_led.c` | MCHTMR 时间换算、独占颜色和闪烁相位 | 32 位毫秒回绕用无符号差值处理；切状态立即重置相位 |
+| `ecu/apps/ecu_board_test/include/periodic_tx.h` | 500 ms 周期发送配置、后端和快照 API | 三组功能独立编译控制；suspend/resume 不清除通道计数 |
+| `ecu/apps/ecu_board_test/src/periodic_tx.c` | 硬件无关调度和 CAN/ASCII 帧格式 | CAN ID `0x601..0x604`；所有通道独立计数；跨 32 位毫秒回绕 |
+| `ecu/apps/ecu_board_test/src/periodic_tx_board.c` | HPM6750 CAN/UART/MCHTMR 后端 | CAN 非阻塞发送；RS485 使用硬件 DE；默认三个宏均关闭 |
 | `ecu/apps/ecu_board_test/include/result_writer.h` | 单项结果和 JSON API | 输出缓冲区固定上限 384 字节 |
 | `ecu/apps/ecu_board_test/src/result_writer.c` | 文本和单行 JSON 输出 | 引号、反斜杠转义；控制字符替换为空格；容量不足返回 `0x0104` |
 | `ecu/apps/ecu_board_test/include/adc_math.h` | ADC 分压换算接口 | 单位全部是微伏 |
@@ -151,6 +154,7 @@ operator_read_line
 | `ecu/apps/ecu_board_test/selftest/selftest_cli_runner.c` | CLI、灯态映射、abort、Runner cleanup | 独立 fake Safety；部分 `abort` 不可跨上下文拼接 |
 | `ecu/apps/ecu_board_test/selftest/selftest_algorithms.c` | ADC、RAM、通信、SBUS、注册表 | 非法枚举、空查询和 CRC 边界 |
 | `ecu/apps/ecu_board_test/selftest/selftest_status_led.c` | 灯态周期和 override | 使用假时间，不真实等待 500 ms |
+| `ecu/apps/ecu_board_test/selftest/selftest_periodic_tx.c` | 周期、帧格式、暂停恢复、失败隔离 | 假时钟和假通信后端；验证 499/500 ms 边界及时间回绕 |
 
 ## 9. 硬件测试文件
 
@@ -182,7 +186,7 @@ operator_read_line
 | `ecu/apps/ecu_board_test/linkers/iar/ecu_board_test_linker.icf` | IAR 等价布局 | 保留区必须与 GNU 一致 |
 | `ecu/apps/ecu_board_test/linkers/segger/ecu_board_test_linker.icf` | SES 8.28 等价布局 | 区域必须命名 `FLASH`；保留区同样为 64 KiB |
 | `ecu/scripts/build_ecu_test.ps1` | 固定 SDK/toolchain 环境并构建 GNU image | 输出实际名称是 `tmp/ecu_board_test_build/output/demo.elf` |
-| `ecu/scripts/generate_ses_ecu_test.ps1` | 生成并校验 `.emProject` | 修复 SDK 1.11 模板重复 `linker_output_format` 属性 |
+| `ecu/scripts/generate_ses_ecu_test.ps1` | 生成并校验 `.emProject` | 修复 SDK 1.11 模板重复属性；转发三个周期发送开关 |
 | `ecu/scripts/flash_ecu_test.ps1` | J-Link 非交互下载 | 同时检查 VTref、Downloading file 和 O.K.，避免假成功 |
 | `ecu/scripts/load_ecu_test.jlink` | 下载命令模板 | `__ECU_TEST_ELF__` 由 PowerShell 替换 |
 | `ecu/scripts/read_ecu_info.jlink` | 读取芯片/OTP/XIP 头信息 | 只读，不代表固件功能测试通过 |
@@ -199,6 +203,16 @@ GNU 全量构建：
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ecu\scripts\build_ecu_test.ps1
 ```
+
+默认构建不会自动发送通信帧。生成三组全部启用的诊断固件：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\ecu\scripts\build_ecu_test.ps1 `
+  -PeriodicCanTx -PeriodicRs485Tx -PeriodicRs232Tx
+```
+
+三个开关可分别省略或启用。周期发送只用于接口观测，不构成任何硬件 PASS 证据。
 
 生成 SES 8.28 工程：
 
@@ -233,4 +247,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ecu\scripts\serial_con
   -Port COM5 -LogPath .\test\reports\ECU-001.log
 ```
 
-当前 Windows 尚未枚举 ECU 串口，所以目标侧 `SELFTEST.ALL` 输出和全部 HIL 结果仍未验证。没有日志时只能确认“已编译/已下载/已看到灯态”，不能写“硬件测试 PASS”。
+当前 ECU 调试串口为 COM9、115200 8N1。目标侧自测和周期帧必须以本次下载后的新日志重新确认；未连接、未观测的接口仍只能标记 UNVERIFIED，不能写“硬件测试 PASS”。
