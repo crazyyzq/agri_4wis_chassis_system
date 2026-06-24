@@ -21,7 +21,8 @@ $template.Replace('__ECU_TEST_ELF__', $elf.Replace('\', '/')) |
     Set-Content -LiteralPath $commandFile -Encoding ascii
 
 $output = & $JLinkExe -device HPM6750xVMx -if JTAG -speed 4000 `
-    -AutoConnect 1 -ExitOnError 1 -CommanderScript $commandFile 2>&1
+    -AutoConnect 1 -ExitOnError 1 -JTAGConf -1,-1 `
+    -CommanderScript $commandFile 2>&1
 $exitCode = $LASTEXITCODE
 $output | Write-Output
 $transcript = $output -join "`n"
