@@ -286,52 +286,184 @@ extern "C" {
 
 typedef void (*board_timer_cb)(void);
 
+/**
+ * @brief Initialize core clocks, console, safe GPIO, and PMP for core 0.
+ * @note Safe GPIO levels are established before diagnostic banners are printed.
+ *       Fatal clock/console initialization failures remain in an infinite loop.
+ */
 void board_init(void);
+/** @brief Refresh core-1 clock state, console, and PMP configuration. */
 void board_init_core1(void);
+/**
+ * @brief Configure core/bus clocks and the HPM6750 DCDC operating point.
+ * @note A PLL0 configuration failure is fatal and remains in an infinite loop.
+ */
 void board_init_clock(void);
+/**
+ * @brief Initialize the 115200-baud UART0 debug console.
+ * @note Unsupported console types or initialization failure are fatal loops.
+ */
 void board_init_console(void);
+/** @brief Print selected core, bus, MCHTMR, and XPI frequencies in hertz. */
 void board_print_clock_freq(void);
+/** @brief Print the HPM SDK version, when available, and BOARD_NAME. */
 void board_print_banner(void);
+/** @brief Configure PMP/PMA entries for linker-defined noncacheable/shared RAM. */
 void board_init_pmp(void);
 
 /* External SDRAM / FEMC. Used when yaml enables on-board-ram: sdram. */
+/** @brief Apply generated MR6750 FEMC SDRAM pin multiplexing. */
 void board_init_sdram_pins(void);
+/**
+ * @brief Enable and configure the FEMC source clock.
+ * @return Actual FEMC clock frequency in hertz.
+ */
 uint32_t board_init_femc_clock(void);
+/**
+ * @brief Initialize the module's 32 MiB, 16-bit, four-bank external SDRAM.
+ * @note Available when INIT_EXT_RAM_FOR_DATA is enabled. Configuration failure
+ *       is fatal and remains in an infinite loop.
+ */
 void _init_ext_ram(void);
 
+/** @brief Busy-wait for a requested duration. @param ms Delay in milliseconds. */
 void board_delay_ms(uint32_t ms);
+/** @brief Busy-wait for a requested duration. @param us Delay in microseconds. */
 void board_delay_us(uint32_t us);
 
+/**
+ * @brief Initialize vehicle GPIO and force outputs, CAN termination, and RGB off.
+ * @note Safe logical levels are re-applied after generated pinmux initialization.
+ */
 void board_init_safe_gpio(void);
+/** @brief Compatibility wrapper that applies board_init_safe_gpio(). */
 void board_init_gpio_pins(void);
+/** @brief Initialize common-anode RGB pins and turn all colors logically off. */
 void board_init_led_pins(void);
+/**
+ * @brief Write the raw electrical level of the generic green SDK LED.
+ * @param state Raw GPIO level; BOARD_LED_ON_LEVEL is active-low on this board.
+ */
 void board_led_write(uint8_t state);
+/** @brief Toggle the generic green SDK LED's current raw GPIO level. */
 void board_led_toggle(void);
+/**
+ * @brief Set one RGB color using logical on/off semantics.
+ * @param color BOARD_RGB_RED, BOARD_RGB_GREEN, or BOARD_RGB_BLUE.
+ * @param on    Nonzero for on, zero for off; active-low polarity is handled here.
+ * @note Invalid color values are ignored.
+ */
 void board_rgb_write(uint8_t color, uint8_t on);
 
+/**
+ * @brief Set one protected external ECU output using logical on/off semantics.
+ * @param index One-based output number in 1..BOARD_ECU_OUTPUT_COUNT.
+ * @param on    Nonzero for on, zero for off.
+ * @note Invalid indexes are ignored.
+ */
 void board_ecu_output_write(uint8_t index, uint8_t on);
+/**
+ * @brief Read one isolated external ECU input as an active-high logical value.
+ * @param index One-based input number in 1..BOARD_ECU_INPUT_COUNT.
+ * @return One when the active-low hardware input is asserted; zero when inactive
+ *         or when index is invalid.
+ */
 uint8_t board_ecu_input_read(uint8_t index);
 
+/**
+ * @brief Enable the clock for a supported console/SBUS/RS232/RS485 UART.
+ * @param ptr UART0, 1, 5, or 10..15 as mapped by this board.
+ * @return Actual UART clock frequency in hertz, or zero when unsupported.
+ */
 uint32_t board_init_uart_clock(UART_Type *ptr);
+/**
+ * @brief Apply board pinmux and enable the clock for a supported UART.
+ * @param ptr Console, SBUS, RS232, or RS485 UART instance; unsupported instances
+ *            receive no pin configuration and have a zero clock result.
+ */
 void board_init_uart(UART_Type *ptr);
 
+/**
+ * @brief Enable the EEPROM I2C3 clock.
+ * @param ptr I2C instance; only HPM_I2C3 is supported.
+ * @return Actual I2C3 frequency in hertz, or zero when unsupported.
+ */
 uint32_t board_init_i2c_clock(I2C_Type *ptr);
+/**
+ * @brief Apply EEPROM pins and initialize I2C3 as a normal-mode master.
+ * @param ptr Must be HPM_I2C3.
+ * @note Initialization failure is fatal and remains in an infinite loop.
+ */
 void board_init_i2c(I2C_Type *ptr);
 
+/**
+ * @brief Enable and configure the clock for CAN0..CAN3.
+ * @param ptr CAN0, CAN1, CAN2, or CAN3.
+ * @return Actual 80 MHz CAN clock in hertz, or zero when unsupported.
+ */
 uint32_t board_init_can_clock(CAN_Type *ptr);
+/**
+ * @brief Apply all CAN pinmux settings and enable the selected CAN clock.
+ * @param ptr CAN0..CAN3; unsupported instances receive a zero clock result.
+ */
 void board_init_can(CAN_Type *ptr);
+/**
+ * @brief Set external 120 Ohm termination for one CAN connector.
+ * @param can_index One-based external CAN number in 1..4.
+ * @param enable    true to enable termination, false to disable it.
+ * @note Invalid indexes are ignored. This function handles the active-low GPIO.
+ */
 void board_set_can_termination(uint8_t can_index, bool enable);
 
+/**
+ * @brief Select, enable, and query the ADC3 clock.
+ * @param ptr         ADC instance; only HPM_ADC3 is supported.
+ * @param clk_src_bus true for AHB0, false for ANA2 derived from PLL1.
+ * @return Actual ADC3 frequency in hertz, or zero when unsupported.
+ */
 uint32_t board_init_adc_clock(void *ptr, bool clk_src_bus);
+/** @brief Apply generated pinmux for the four ADC3 external analog inputs. */
 void board_init_adc16_pins(void);
 
+/**
+ * @brief Configure ENET1 RGMII pins/clock while keeping the PHY in reset.
+ * @param ptr Must be HPM_ENET1.
+ * @return status_success, or status_invalid_argument for another instance.
+ * @note PHY INTB remains disabled until the driver ISR is ready.
+ */
 hpm_stat_t board_init_enet_pins(ENET_Type *ptr);
+/**
+ * @brief Pulse the active-low ENET1 PHY reset and wait for release.
+ * @param ptr Must be HPM_ENET1.
+ * @return status_success, or status_invalid_argument for another instance.
+ */
 hpm_stat_t board_reset_enet_phy(ENET_Type *ptr);
+/**
+ * @brief Configure the ENET1 PTP clock to 100 MHz.
+ * @param ptr Must be HPM_ENET1.
+ * @return status_success, or status_invalid_argument for another instance.
+ */
 hpm_stat_t board_init_enet_ptp_clock(ENET_Type *ptr);
+/**
+ * @brief Enable the machine interrupt for ENET1.
+ * @param ptr Must be HPM_ENET1.
+ * @return status_success, or status_invalid_argument for another instance.
+ */
 hpm_stat_t board_enable_enet_irq(ENET_Type *ptr);
+/**
+ * @brief Disable the machine interrupt for ENET1.
+ * @param ptr Must be HPM_ENET1.
+ * @return status_success, or status_invalid_argument for another instance.
+ */
 hpm_stat_t board_disable_enet_irq(ENET_Type *ptr);
+/**
+ * @brief Return the fixed ENET DMA programmable-burst length.
+ * @param ptr ENET instance; currently ignored for SDK compatibility.
+ * @return enet_pbl_32.
+ */
 uint8_t board_get_enet_dma_pbl(ENET_Type *ptr);
 
+/** @brief Keep the running core clock and MCHTMR available in low-power mode. */
 void board_ungate_mchtmr_at_lp_mode(void);
 
 #if defined(__cplusplus)
