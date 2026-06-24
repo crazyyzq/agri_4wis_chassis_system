@@ -1,3 +1,4 @@
+/* Bounded, allocation-free parser for the ECU test console. */
 #include <ctype.h>
 #include <string.h>
 #include "cli.h"

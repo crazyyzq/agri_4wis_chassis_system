@@ -1,3 +1,4 @@
+/* Four-channel calibrated ADC test using prompted external voltage points. */
 #include <stdio.h>
 #include "adc_math.h"
 #include "board.h"

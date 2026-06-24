@@ -1,3 +1,4 @@
+/* Required/optional result aggregation regression coverage. */
 #include "selftest.h"
 #include "test_types.h"
 

@@ -1,3 +1,4 @@
+/* Side-effect-free parser for the bounded UART operator command language. */
 #ifndef ECU_CLI_H
 #define ECU_CLI_H
 
@@ -14,6 +15,7 @@ typedef struct {
     char argument[CLI_LINE_MAX];
 } cli_command_t;
 
+/* Parse at most CLI_LINE_MAX characters; invalid input clears command. */
 cli_action_t cli_parse(const char *line, cli_command_t *command);
 
 #endif

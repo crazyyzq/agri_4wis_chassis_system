@@ -1,3 +1,4 @@
+/* Single ordered catalogue controlling test IDs, requirements and dependencies. */
 #include <string.h>
 #include "test_cases.h"
 #include "test_registry.h"
@@ -26,6 +27,7 @@ const test_descriptor_t *test_registry_all(size_t *count)
 }
 const test_descriptor_t *test_registry_find(const char *id)
 {
+    if (id == NULL) return NULL;
     for (size_t i = 0U; i < sizeof(registry) / sizeof(registry[0]); ++i)
         if (strcmp(registry[i].id, id) == 0) return &registry[i];
     return NULL;

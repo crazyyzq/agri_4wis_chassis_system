@@ -1,3 +1,4 @@
+/* Internal RAM, SDRAM, reserved QSPI sector and restore-after-test EEPROM checks. */
 #include <stdio.h>
 #include <string.h>
 #include "board.h"
@@ -71,8 +72,12 @@ ATTR_RAMFUNC test_status_t test_qspi_flash(test_context_t *context)
     option.option1.U = BOARD_APP_XPI_NOR_CFG_OPT_OPT1;
     if (rom_xpi_nor_auto_config(BOARD_APP_XPI_NOR_XPI_BASE, &config, &option) != status_success) return TEST_FAIL;
     uint32_t flash_size = 0U, sector_size = 0U;
-    rom_xpi_nor_get_property(BOARD_APP_XPI_NOR_XPI_BASE, &config, xpi_nor_property_total_size, &flash_size);
-    rom_xpi_nor_get_property(BOARD_APP_XPI_NOR_XPI_BASE, &config, xpi_nor_property_sector_size, &sector_size);
+    if (rom_xpi_nor_get_property(BOARD_APP_XPI_NOR_XPI_BASE, &config,
+            xpi_nor_property_total_size, &flash_size) != status_success ||
+        rom_xpi_nor_get_property(BOARD_APP_XPI_NOR_XPI_BASE, &config,
+            xpi_nor_property_sector_size, &sector_size) != status_success) {
+        return TEST_FAIL;
+    }
     if (flash_size != 8U * SIZE_1MB || sector_size == 0U || (64U * 1024U) % sector_size != 0U) return TEST_BLOCKED;
     uint32_t offset = flash_size - 64U * 1024U;
     uint8_t *write_bytes = (uint8_t *)s_flash_write;

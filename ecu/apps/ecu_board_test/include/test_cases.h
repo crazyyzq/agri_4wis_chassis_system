@@ -1,3 +1,4 @@
+/* Public entry points registered by test_registry.c. */
 #ifndef ECU_TEST_CASES_H
 #define ECU_TEST_CASES_H
 #include "test_runner.h"

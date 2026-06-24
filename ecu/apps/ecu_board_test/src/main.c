@@ -1,3 +1,4 @@
+/* ECU board-test entry point: safe board init, self-test, then operator shell. */
 #include <stdio.h>
 
 #include "app_shell.h"

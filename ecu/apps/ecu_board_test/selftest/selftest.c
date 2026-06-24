@@ -1,3 +1,4 @@
+/* Ordered target-side regression-test dispatcher and summary. */
 #include <stdio.h>
 #include "selftest.h"
 

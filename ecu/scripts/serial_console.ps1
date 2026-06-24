@@ -1,3 +1,4 @@
+# Interactive UART0 console with append-only UTF-8 capture for test evidence.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [ValidatePattern('^COM\d+$')] [string]$Port,

@@ -1,3 +1,4 @@
+/* Decode the standard packed 25-byte SBUS payload after UART framing. */
 #include <string.h>
 #include "sbus_decoder.h"
 sbus_status_t sbus_decode(const uint8_t *data, size_t length, sbus_frame_t *frame)

@@ -1,3 +1,4 @@
+/* Verify tracked vehicle-affecting resources remain safe after startup. */
 #include <stdio.h>
 #include "safety_manager.h"
 #include "test_cases.h"

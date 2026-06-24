@@ -1,3 +1,4 @@
+/* Manual color verification with temporary ownership of the status RGB LED. */
 #include "board.h"
 #include "operator_io.h"
 #include "status_led.h"

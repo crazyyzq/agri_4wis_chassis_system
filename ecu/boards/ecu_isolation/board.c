@@ -84,8 +84,9 @@ static const board_gpio_desc_t s_ecu_inputs[BOARD_ECU_INPUT_COUNT] = {
 static void board_gpio_output_initial(const board_gpio_desc_t *gpio, uint8_t level)
 {
     gpiom_set_pin_controller(HPM_GPIOM, gpio->assign, gpio->pin, gpiom_soc_gpio0);
-    gpio_set_pin_output(HPM_GPIO0, gpio->oe_index, gpio->pin);
+    /* Program the latch before OE to avoid a polarity-dependent output pulse. */
     gpio_write_pin(HPM_GPIO0, gpio->do_index, gpio->pin, level);
+    gpio_set_pin_output(HPM_GPIO0, gpio->oe_index, gpio->pin);
 }
 
 static void board_gpio_input(const board_gpio_desc_t *gpio)

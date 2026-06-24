@@ -1,3 +1,4 @@
+/* Operator-entered measurements for the five board supply rails. */
 #include <stdio.h>
 #include "operator_io.h"
 #include "test_cases.h"

@@ -1,3 +1,4 @@
+/* Central ownership and fail-safe shutdown for vehicle-affecting test IO. */
 #ifndef ECU_SAFETY_MANAGER_H
 #define ECU_SAFETY_MANAGER_H
 
@@ -22,12 +23,17 @@ typedef struct {
     uint8_t rs485_tx_mask;
 } safety_snapshot_t;
 
+/* Install a complete backend and immediately drive every resource safe. */
 void safety_init(const safety_hw_ops_t *ops);
+/* Borrow the installed backend pointer so scoped self-tests can restore it. */
+const safety_hw_ops_t *safety_backend(void);
+/* Output, CAN and RS485 indexes are one-based external channel numbers. */
 safety_status_t safety_output_on(uint8_t index);
 void safety_output_off(uint8_t index);
 safety_status_t safety_can_term_set(uint8_t index, bool enable);
 safety_status_t safety_rs485_transmit(uint8_t index);
 void safety_rs485_receive(uint8_t index);
+/* Idempotently disable all outputs/terminations and select RS485 receive. */
 void safety_all_off(void);
 safety_snapshot_t safety_snapshot(void);
 

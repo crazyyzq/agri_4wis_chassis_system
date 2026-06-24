@@ -1,3 +1,4 @@
+/* Hardware-independent safety ownership for outputs, termination and RS485 DE. */
 #include <stddef.h>
 #include "safety_manager.h"
 
@@ -6,7 +7,8 @@ static safety_snapshot_t s_state;
 
 void safety_all_off(void)
 {
-    if (s_ops == NULL) return;
+    if (s_ops == NULL || s_ops->output_write == NULL ||
+        s_ops->can_term_write == NULL || s_ops->rs485_direction_write == NULL) return;
     for (uint8_t i = 1U; i <= SAFETY_OUTPUT_COUNT; ++i) s_ops->output_write(i, false);
     for (uint8_t i = 1U; i <= SAFETY_CAN_COUNT; ++i) s_ops->can_term_write(i, false);
     for (uint8_t i = 1U; i <= SAFETY_RS485_COUNT; ++i) s_ops->rs485_direction_write(i, false);
@@ -17,9 +19,17 @@ void safety_all_off(void)
 
 void safety_init(const safety_hw_ops_t *ops)
 {
-    s_ops = ops;
+    s_ops = ops != NULL && ops->output_write != NULL &&
+            ops->can_term_write != NULL && ops->rs485_direction_write != NULL
+        ? ops
+        : NULL;
     s_state = (safety_snapshot_t){ 0 };
     safety_all_off();
+}
+
+const safety_hw_ops_t *safety_backend(void)
+{
+    return s_ops;
 }
 
 safety_status_t safety_output_on(uint8_t index)

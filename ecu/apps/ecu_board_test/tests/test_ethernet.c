@@ -1,3 +1,4 @@
+/* Approved placeholder: Ethernet remains optional until link equipment exists. */
 #include "test_cases.h"
 test_status_t test_ethernet_skip(test_context_t *context)
 {

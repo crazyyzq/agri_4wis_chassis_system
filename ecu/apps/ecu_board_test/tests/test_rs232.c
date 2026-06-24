@@ -1,3 +1,4 @@
+/* Four-port RS232 deterministic echo and physical polarity confirmation. */
 #include <stdio.h>
 #include "board.h"
 #include "operator_io.h"

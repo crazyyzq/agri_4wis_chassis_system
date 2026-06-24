@@ -1,3 +1,4 @@
+/* Prepare/execute/cleanup lifecycle and cooperative console abort handling. */
 #ifndef ECU_TEST_RUNNER_H
 #define ECU_TEST_RUNNER_H
 
@@ -7,6 +8,8 @@
 
 typedef struct {
     volatile bool abort_requested;
+    /* Partial foreground-console match; scoped to one test execution. */
+    uint8_t abort_match_length;
     void *user;
 } test_context_t;
 
@@ -20,8 +23,13 @@ typedef struct test_descriptor {
     void (*cleanup)(test_context_t *context);
 } test_descriptor_t;
 
+/* Execute one descriptor and always finish with safety_all_off(). */
 test_status_t test_runner_execute(const test_descriptor_t *descriptor,
                                   test_context_t *context);
+/* Service status LED and consume available UART0 bytes without blocking. */
 bool test_runner_poll_abort(test_context_t *context);
+
+/* Feed one console byte into the exact lowercase "abort" recognizer. */
+bool test_runner_consume_abort_byte(test_context_t *context, uint8_t byte);
 
 #endif

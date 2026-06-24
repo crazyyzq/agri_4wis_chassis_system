@@ -1,3 +1,4 @@
+/* Emit each test result in operator text and escaped single-line JSON. */
 #include <stdio.h>
 #include <string.h>
 #include "result_writer.h"
@@ -46,6 +47,10 @@ int result_writer_json(const test_result_t *result, const char *board_serial,
 
 void result_writer_print(const test_result_t *result, const char *board_serial)
 {
+    if (result == NULL) {
+        printf("RESULT_WRITER FAIL error=0x0104\n");
+        return;
+    }
     char json[RESULT_JSON_MAX];
     printf("RESULT %-22s %s error=0x%04x %s\n", result->id,
            test_status_name(result->status), result->error_code,

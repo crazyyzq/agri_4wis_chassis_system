@@ -1,3 +1,4 @@
+# Download the GNU ELF through JTAG and reject ambiguous J-Link transcripts.
 [CmdletBinding()]
 param(
     [string]$JLinkExe = 'C:\Program Files\SEGGER\JLink_V916\JLink.exe'

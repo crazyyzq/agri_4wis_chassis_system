@@ -1,3 +1,4 @@
+/* Polled UART0 line editor; polling keeps the foreground heartbeat alive. */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -36,6 +37,7 @@ bool operator_read_line(char *buffer, size_t capacity)
 
 bool operator_confirm(const char *prompt)
 {
+    if (prompt == NULL) return false;
     char line[8];
     printf("%s [y/n]: ", prompt);
     if (!operator_read_line(line, sizeof(line))) return false;
@@ -44,6 +46,7 @@ bool operator_confirm(const char *prompt)
 
 bool operator_read_u32(const char *prompt, uint32_t *value)
 {
+    if (prompt == NULL || value == NULL) return false;
     char line[24];
     char *end;
     printf("%s: ", prompt);

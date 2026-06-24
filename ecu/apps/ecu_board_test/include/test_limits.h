@@ -1,3 +1,4 @@
+/* Approved electrical limits, durations and communication test counts. */
 #ifndef ECU_TEST_LIMITS_H
 #define ECU_TEST_LIMITS_H
 

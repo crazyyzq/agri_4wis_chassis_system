@@ -1,3 +1,4 @@
+/* Classic CAN 2.0 loopback/termination test for four isolated channels. */
 #include <stdio.h>
 #include <string.h>
 #include "board.h"
@@ -8,9 +9,11 @@
 #include "test_limits.h"
 
 static CAN_Type *const can_bases[] = { BOARD_CAN1_BASE, BOARD_CAN2_BASE, BOARD_CAN3_BASE, BOARD_CAN4_BASE };
-static bool can_receive_timeout(CAN_Type *base, can_receive_buf_t *message)
+static bool can_receive_timeout(CAN_Type *base, can_receive_buf_t *message,
+                                test_context_t *context)
 {
     for (uint32_t wait = 0U; wait < 2000U; ++wait) {
+        if (test_runner_poll_abort(context)) return false;
         if (can_is_data_available_in_receive_buffer(base)) {
             can_read_received_message(base, message);
             return true;
@@ -47,7 +50,7 @@ test_status_t test_can(test_context_t *context)
             tx.dlc = (sequence % 17U == 0U) ? 0U : 8U;
             for (uint8_t i = 0U; i < tx.dlc; ++i) tx.data[i] = (uint8_t)(sequence + i + port);
             if (can_send_message_blocking(can_bases[port], &tx) != status_success ||
-                !can_receive_timeout(can_bases[port], &rx) || rx.id != tx.id ||
+                !can_receive_timeout(can_bases[port], &rx, context) || rx.id != tx.id ||
                 rx.extend_id != tx.extend_id || rx.dlc != tx.dlc ||
                 memcmp(rx.data, tx.data, tx.dlc) != 0) {
                 printf("CAN%u failure sequence=%lu\n", port + 1U, (unsigned long)sequence);

@@ -1,3 +1,4 @@
+/* Fixed-point ADC divider conversion; no floating point or hardware access. */
 #include "adc_math.h"
 #include "test_limits.h"
 uint32_t adc_pin_uv_from_external_uv(uint32_t external_uv)

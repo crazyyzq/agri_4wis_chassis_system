@@ -1,3 +1,4 @@
+# Configure and build the flash_sdram_xip image with the pinned SDK 1.11 tools.
 [CmdletBinding()]
 param(
     [switch]$ConfigureOnly

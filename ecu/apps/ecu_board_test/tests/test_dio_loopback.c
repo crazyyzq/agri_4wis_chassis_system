@@ -1,3 +1,4 @@
+/* Fixture loopback between each protected output and matching digital input. */
 #include <stdio.h>
 #include "board.h"
 #include "operator_io.h"

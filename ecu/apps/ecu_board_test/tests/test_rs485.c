@@ -1,3 +1,4 @@
+/* Three-port RS485 echo using UART hardware-DE pinmux. */
 #include <stdio.h>
 #include "board.h"
 #include "operator_io.h"

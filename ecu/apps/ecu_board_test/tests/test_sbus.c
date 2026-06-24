@@ -1,9 +1,22 @@
+/* Receive/decode 100 SBUS frames and verify the transmitter can go silent. */
 #include <stdio.h>
 #include "board.h"
 #include "operator_io.h"
 #include "sbus_decoder.h"
 #include "test_cases.h"
 #include "test_serial_common.h"
+
+static bool sbus_stream_is_silent(test_context_t *context, uint32_t observe_ms)
+{
+    for (uint32_t elapsed = 0U; elapsed < observe_ms; ++elapsed) {
+        if (test_runner_poll_abort(context)) return false;
+        uint8_t byte;
+        if (uart_try_receive_byte(BOARD_SBUS_UART_BASE, &byte) == status_success) return false;
+        board_delay_ms(1U);
+    }
+    return true;
+}
+
 test_status_t test_sbus(test_context_t *context)
 {
     if (!operator_confirm("SBUS receiver is connected and transmitting")) return TEST_BLOCKED;
@@ -28,5 +41,7 @@ test_status_t test_sbus(test_context_t *context)
         }
     }
     if (valid < 100U) return TEST_FAIL;
-    return operator_confirm("Stop transmitter now; stream timeout observed") ? TEST_PASS : TEST_FAIL;
+    if (!operator_confirm("Stop the SBUS transmitter, then confirm")) return TEST_BLOCKED;
+    return sbus_stream_is_silent(context, 50U) ? TEST_PASS :
+        (context->abort_requested ? TEST_BLOCKED : TEST_FAIL);
 }

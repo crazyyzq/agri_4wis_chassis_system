@@ -1,3 +1,4 @@
+/* Internal UART test helpers; not part of the application-wide public API. */
 #ifndef ECU_TEST_SERIAL_COMMON_H
 #define ECU_TEST_SERIAL_COMMON_H
 #include <stdbool.h>

@@ -1,3 +1,4 @@
+/* Destructive RAM pattern write/read verification used by internal RAM/SDRAM. */
 #include <stddef.h>
 #include "memory_patterns.h"
 static uint32_t pattern_value(memory_pattern_t pattern, size_t index, uint32_t walk)
@@ -15,7 +16,7 @@ static uint32_t pattern_value(memory_pattern_t pattern, size_t index, uint32_t w
 bool memory_pattern_test(volatile uint32_t *base, size_t word_count,
                          memory_pattern_t pattern, memory_mismatch_t *mismatch)
 {
-    if (base == NULL || word_count == 0U) return false;
+    if (base == NULL || word_count == 0U || pattern > MEMORY_PATTERN_WALKING_ONE) return false;
     uint32_t passes = pattern == MEMORY_PATTERN_WALKING_ONE ? 32U : 1U;
     for (uint32_t walk = 0U; walk < passes; ++walk) {
         for (size_t i = 0; i < word_count; ++i) base[i] = pattern_value(pattern, i, walk);

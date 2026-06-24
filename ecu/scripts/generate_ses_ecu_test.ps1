@@ -1,3 +1,4 @@
+# Generate a native SES 8.28 project and repair the known SDK 1.11 XML defect.
 $ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'build_ecu_test.ps1') -ConfigureOnly
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

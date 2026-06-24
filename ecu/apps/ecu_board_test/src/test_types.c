@@ -1,3 +1,4 @@
+/* Aggregate individual outcomes into a release-oriented board session status. */
 #include <string.h>
 #include "test_types.h"
 

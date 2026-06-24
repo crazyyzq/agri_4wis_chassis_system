@@ -1,3 +1,4 @@
+/* Operator-driven inactive/12 V stability checks for 12 isolated inputs. */
 #include <stdio.h>
 #include "board.h"
 #include "operator_io.h"

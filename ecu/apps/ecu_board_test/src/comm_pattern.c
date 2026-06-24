@@ -1,9 +1,11 @@
+/* Deterministic binary loopback frame format with CRC-16/CCITT-FALSE. */
 #include <string.h>
 #include "comm_pattern.h"
 #define COMM_MAGIC0 0xEC
 #define COMM_MAGIC1 0x55
 uint16_t comm_crc16(const uint8_t *data, size_t length)
 {
+    if (data == NULL && length != 0U) return 0U;
     uint16_t crc = 0xFFFFU;
     for (size_t i = 0; i < length; ++i) {
         crc ^= (uint16_t)data[i] << 8U;

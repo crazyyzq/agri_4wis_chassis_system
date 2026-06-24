@@ -1,3 +1,4 @@
+/* Pure algorithm, registry and malformed-input regression coverage. */
 #include <string.h>
 #include "selftest.h"
 #include "test_limits.h"
@@ -20,6 +21,7 @@ bool selftest_algorithms(void)
     memory_mismatch_t mismatch;
     SELFTEST_ASSERT_TRUE(memory_pattern_test(words, 256U, MEMORY_PATTERN_ADDRESS, &mismatch));
     SELFTEST_ASSERT_TRUE(memory_pattern_test(words, 256U, MEMORY_PATTERN_WALKING_ONE, &mismatch));
+    SELFTEST_ASSERT_TRUE(!memory_pattern_test(words, 256U, (memory_pattern_t)99, &mismatch));
 
     comm_frame_t frame;
     uint8_t encoded[64];
@@ -30,6 +32,7 @@ bool selftest_algorithms(void)
     SELFTEST_ASSERT_EQ(COMM_OK, comm_frame_decode(encoded, length, &decoded));
     encoded[length - 1U] ^= 1U;
     SELFTEST_ASSERT_EQ(COMM_BAD_CRC, comm_frame_decode(encoded, length, &decoded));
+    SELFTEST_ASSERT_EQ(0U, comm_crc16(NULL, 1U));
 
     uint8_t sbus[25] = { 0x0FU };
     sbus[24] = 0x00U;
@@ -39,6 +42,7 @@ bool selftest_algorithms(void)
 
     size_t registry_count;
     const test_descriptor_t *registry = test_registry_all(&registry_count);
+    SELFTEST_ASSERT_TRUE(test_registry_find(NULL) == NULL);
     SELFTEST_ASSERT_TRUE(registry_count >= 16U);
     SELFTEST_ASSERT_TRUE(strcmp(registry[0].id, "SAFE.BOOT") == 0);
     SELFTEST_ASSERT_TRUE(strcmp(registry[registry_count - 1U].id, "ETH.SKIP_NO_DEVICE") == 0);
