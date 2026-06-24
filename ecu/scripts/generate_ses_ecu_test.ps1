@@ -1,6 +1,19 @@
 # Generate a native SES 8.28 project and repair the known SDK 1.11 XML defect.
+[CmdletBinding()]
+param(
+    [switch]$PeriodicCanTx,
+    [switch]$PeriodicRs485Tx,
+    [switch]$PeriodicRs232Tx
+)
+
 $ErrorActionPreference = 'Stop'
-& (Join-Path $PSScriptRoot 'build_ecu_test.ps1') -ConfigureOnly
+$buildParams = @{
+    ConfigureOnly = $true
+    PeriodicCanTx = $PeriodicCanTx.IsPresent
+    PeriodicRs485Tx = $PeriodicRs485Tx.IsPresent
+    PeriodicRs232Tx = $PeriodicRs232Tx.IsPresent
+}
+& (Join-Path $PSScriptRoot 'build_ecu_test.ps1') @buildParams
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
