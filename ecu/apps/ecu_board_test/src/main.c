@@ -4,6 +4,7 @@
 #include "app_shell.h"
 #include "board.h"
 #include "hpm_ppor_drv.h"
+#include "periodic_tx.h"
 #include "safety_manager.h"
 #include "selftest.h"
 #include "status_led.h"
@@ -52,6 +53,8 @@ int main(void)
     safety_init(&real_safety_ops);
     /* The status self-test also installs a fake adapter with automatic storage. */
     status_led_init_default();
+    /* The periodic self-test installs a fake backend; start real diagnostics only now. */
+    periodic_tx_init_default();
     if (selftest_result == 0) {
         status_led_set(STATUS_LED_READY);
         printf("ECU_TEST READY board=%s sdk=1.11.0\n", BOARD_NAME);

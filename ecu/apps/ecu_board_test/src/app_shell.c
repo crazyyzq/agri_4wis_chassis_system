@@ -4,6 +4,7 @@
 #include "app_shell.h"
 #include "cli.h"
 #include "operator_io.h"
+#include "periodic_tx.h"
 #include "result_writer.h"
 #include "safety_manager.h"
 #include "selftest.h"
@@ -58,8 +59,11 @@ static void print_list(void)
 static test_status_t run_descriptor(const test_descriptor_t *descriptor)
 {
     context.abort_requested = false;
+    /* Registered tests receive exclusive ownership of CAN and serial ports. */
+    periodic_tx_suspend();
     status_led_set(STATUS_LED_TESTING);
     test_status_t status = test_runner_execute(descriptor, &context);
+    periodic_tx_resume();
     test_result_t result = {
         descriptor->id,
         descriptor->requirement,
@@ -186,11 +190,14 @@ void app_shell_run(void)
             printf("ABORTED: all controlled outputs returned safe\n");
             break;
         case CLI_SELFTEST: {
+            periodic_tx_suspend();
             status_led_set(STATUS_LED_BOOTING);
             const safety_hw_ops_t *saved_safety_backend = safety_backend();
             int result = selftest_run_all();
             safety_init(saved_safety_backend);
             status_led_init_default();
+            /* selftest_periodic_tx() replaces the backend, so restore rather than resume. */
+            periodic_tx_init_default();
             status_led_set(result == 0 ? STATUS_LED_READY : STATUS_LED_FAILED);
             break;
         }
