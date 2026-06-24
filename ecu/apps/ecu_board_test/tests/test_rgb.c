@@ -4,6 +4,7 @@
 #include "status_led.h"
 #include "test_cases.h"
 
+/** @brief Drive all three logical RGB colors off before switching/cleanup. */
 static void rgb_all_off(void)
 {
     for (uint8_t color = BOARD_RGB_RED; color <= BOARD_RGB_BLUE; ++color) {

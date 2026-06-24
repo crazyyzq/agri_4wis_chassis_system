@@ -15,7 +15,17 @@
 #define TEST_ADC_EXTERNAL_FS_UV 5000000U
 #define TEST_ADC_TOLERANCE_UV 100000U
 
+/**
+ * @brief Check the measured 5 V rail against its inclusive release limits.
+ * @param mv Measured voltage in millivolts.
+ * @return true for 4750..5250 mV; otherwise false.
+ */
 static inline bool test_5v_in_range(uint32_t mv) { return mv >= TEST_5V_MIN_MV && mv <= TEST_5V_MAX_MV; }
+/**
+ * @brief Check the measured 3.3 V rail against its inclusive release limits.
+ * @param mv Measured voltage in millivolts.
+ * @return true for 3135..3465 mV; otherwise false.
+ */
 static inline bool test_3v3_in_range(uint32_t mv) { return mv >= TEST_3V3_MIN_MV && mv <= TEST_3V3_MAX_MV; }
 
 #endif

@@ -9,6 +9,13 @@
 #include "test_limits.h"
 
 static CAN_Type *const can_bases[] = { BOARD_CAN1_BASE, BOARD_CAN2_BASE, BOARD_CAN3_BASE, BOARD_CAN4_BASE };
+/**
+ * @brief Poll one CAN receive buffer for at most 2000 ms.
+ * @param base    CAN instance being tested.
+ * @param message Destination receive buffer.
+ * @param context Active context checked for abort once per millisecond.
+ * @return true when a message arrives; false on timeout or operator abort.
+ */
 static bool can_receive_timeout(CAN_Type *base, can_receive_buf_t *message,
                                 test_context_t *context)
 {

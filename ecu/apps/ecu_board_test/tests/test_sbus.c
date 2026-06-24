@@ -6,6 +6,12 @@
 #include "test_cases.h"
 #include "test_serial_common.h"
 
+/**
+ * @brief Verify that no SBUS byte arrives during a continuous observation window.
+ * @param context    Active context polled for abort once per millisecond.
+ * @param observe_ms Required silent interval in milliseconds.
+ * @return true only when the complete interval is silent; false on data or abort.
+ */
 static bool sbus_stream_is_silent(test_context_t *context, uint32_t observe_ms)
 {
     for (uint32_t elapsed = 0U; elapsed < observe_ms; ++elapsed) {

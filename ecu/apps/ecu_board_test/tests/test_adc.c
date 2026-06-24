@@ -6,6 +6,15 @@
 #include "operator_io.h"
 #include "test_cases.h"
 
+/**
+ * @brief Acquire 128 blocking one-shot samples and calculate basic statistics.
+ *
+ * @param channel ADC16 channel number selected by the board mapping.
+ * @param mean    Destination for the integer mean ADC code.
+ * @param minimum Destination for the minimum ADC code.
+ * @param maximum Destination for the maximum ADC code.
+ * @return true after all 128 conversions; false on channel/conversion failure.
+ */
 static bool adc_sample_channel(uint8_t channel, uint32_t *mean, uint16_t *minimum,
                                uint16_t *maximum)
 {

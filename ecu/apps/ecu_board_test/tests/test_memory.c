@@ -15,6 +15,13 @@ static uint32_t s_ram_scratch[1024];
 static uint32_t s_flash_write[64];
 static uint32_t s_flash_read[64];
 
+/**
+ * @brief Run five destructive fixed/address memory patterns over one region.
+ * @param base    First volatile 32-bit word.
+ * @param words   Number of words overwritten by every pattern.
+ * @param context Active context polled for abort before each pattern.
+ * @return true after all patterns; false on abort or first readback mismatch.
+ */
 static bool run_basic_patterns(volatile uint32_t *base, size_t words, test_context_t *context)
 {
     memory_mismatch_t mismatch;

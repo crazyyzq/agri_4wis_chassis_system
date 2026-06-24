@@ -3,6 +3,13 @@
 #include "board.h"
 #include "operator_io.h"
 #include "test_cases.h"
+/**
+ * @brief Require 20 consecutive input samples to equal one logical state.
+ * @param index    One-based external input number.
+ * @param expected Expected logical level, zero or one.
+ * @return true when all samples match; false at the first mismatch.
+ * @note Samples are spaced 2 ms apart, covering approximately 40 ms.
+ */
 static bool input_stable(uint8_t index, uint8_t expected)
 {
     for (uint8_t sample = 0U; sample < 20U; ++sample) {

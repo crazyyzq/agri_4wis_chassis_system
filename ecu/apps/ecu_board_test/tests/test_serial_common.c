@@ -19,6 +19,14 @@ bool test_uart_configure(UART_Type *uart, uint32_t baudrate, parity_setting_t pa
     config.modem_config.auto_flow_ctrl_en = automatic_de;
     return uart_init(uart, &config) == status_success;
 }
+/**
+ * @brief Wait up to 2000 ms for one byte from a configured UART.
+ * @param uart Configured UART instance.
+ * @param byte Destination for the received byte.
+ * @return true when one byte arrives; false for invalid arguments or timeout.
+ * @note The wait sleeps 1 ms per unsuccessful poll. Abort/RGB servicing occurs
+ *       once per complete echoed frame in test_uart_echo_frames().
+ */
 static bool receive_byte_timeout(UART_Type *uart, uint8_t *byte)
 {
     if (uart == NULL || byte == NULL) return false;
