@@ -1,6 +1,6 @@
 # ECU 板级全功能测试：上下文与进度
 
-最后更新：2026-06-23
+最后更新：2026-06-24
 
 ## 项目与硬件
 
@@ -47,6 +47,10 @@
 - 电源、RGB、片内 RAM、SDRAM、QSPI、EEPROM、ADC、DI、DO、DIO 回环测试。
 - Classic CAN、RS485、RS232、SBUS 测试；CAN-FD 未注册。
 - 原理图 U64 接线表和完整操作规程。
+- RGB 运行状态：启动红灯常亮、READY 绿灯 1 Hz、测试蓝灯快闪、失败红灯快闪；`RGB.ALL` 可临时独占后恢复。
+- 完成手写应用/板级/脚本静态审查和模块/公共 API 注释，通读指南见 `docs/ecu-board-test-code-reading-guide.md`。
+- 审查修复：Runner 所有退出安全清理、abort 跨测试误匹配、SELFTEST 假后端恢复、DO 500 ms 上限、CAN 等待中止、SBUS 实际停流、QSPI 属性返回值、边界空指针和注册表容量保护。
+- 生成 pinmux 中四路低有效 CAN 终端改为先写高电平锁存器再使能 OE；重新生成前必须在 Pinmux Tool 工程中把对应默认电平同步为 1。
 
 ## 已取得的证据
 
@@ -58,6 +62,9 @@
 - 2026-06-24：J-Link V9.16 在 JTAG 4 MHz 下连接成功，VTref=3.283 V，检测到单个 RV32 TAP（ID `0x1000563D`）。
 - 2026-06-24：`demo.elf` 下载成功；首次写入并校验 90,112 字节，复验显示 Flash 内容一致，复位后 MCU 正常运行。
 - 2026-06-24：OTP Shadow 读得 Chip ID `0x20201341`、MAC0 `00:14:97:63:F2:19`、UUID words `F76E6CBB-440E0360-081180FF-C0B5E6E3`。
+- 2026-06-24：RGB 状态机按 TDD 加入；缺少实现时链接失败，最小实现后 GNU 构建通过。
+- 2026-06-24：代码审查修复后 GNU `flash_sdram_xip` 全量构建通过，XPI0 使用 93,288 B，保留区仍为 0 B image 占用。
+- 2026-06-24：PowerShell 脚本语法解析通过；GNU/IAR/SES 三份链接文件均保留末尾 64 KiB；Classic CAN 配置确认 `enable_canfd=false` 且 DLC 仅 0/8。
 
 ## 尚未取得的硬件证据
 
@@ -68,7 +75,7 @@
 
 ## 下一检查点
 
-1. 清零编译警告并做静态检查、注册表审计、链接符号检查。
-2. J-Link 下载并采集启动/自测日志。
-3. 按 `test/fixtures/ecu-board-test-procedure.md` 接夹具执行 `run all`。
-4. 只根据保存的 `.log`/`.jsonl` 标记 PASS、FAIL 或 BLOCKED。
+1. 用 SES 8.28 重建最新源码，并检查 map/链接符号没有进入 `0x807F0000..0x80800000`。
+2. J-Link 下载最新固件并实物观察 RGB 启动/心跳状态。
+3. 串口设备可用后采集启动和 `SELFTEST.ALL` 日志。
+4. 按 `test/fixtures/ecu-board-test-procedure.md` 接夹具执行 `run all`，只依据保存日志标记结果。
