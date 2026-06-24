@@ -121,8 +121,8 @@ operator_read_line
 | `ecu/apps/ecu_board_test/src/test_runner.c` | `test_runner_execute()`、`test_runner_poll_abort()` | 所有返回都 `safety_all_off()`；只识别精确小写 `abort` 字节序列 |
 | `ecu/apps/ecu_board_test/include/test_registry.h` | 注册表查询 API | 返回静态只读存储 |
 | `ecu/apps/ecu_board_test/src/test_registry.c` | 16 个测试的唯一顺序表 | required/optional、依赖、超时、cleanup；无 CAN-FD 注册项 |
-| `ecu/apps/ecu_board_test/include/test_types.h` | 单项/整板状态和会话计数 | optional SKIP 不阻止整板 PASS；required SKIP 视为 INCOMPLETE |
-| `ecu/apps/ecu_board_test/src/test_types.c` | 会话初始化、计数和名称映射 | 板号最多保存 23 字符；ABORTED 优先于 FAIL |
+| `ecu/apps/ecu_board_test/include/test_types.h` | 单项/整板状态和会话计数 | optional SKIP 不阻止整板 PASS；required SKIP 视为 INCOMPLETE；只有声明了 required 总数的完整运行才可能 PASS |
+| `ecu/apps/ecu_board_test/src/test_types.c` | 会话初始化、计数和名称映射 | 板号最多保存 23 字符；ABORTED 优先于 FAIL；单项/临时会话保持 INCOMPLETE |
 | `ecu/apps/ecu_board_test/include/safety_manager.h` | 危险资源的硬件无关接口 | 12/4/3 路均使用一基编号；同一时间最多一路 DO 导通 |
 | `ecu/apps/ecu_board_test/src/safety_manager.c` | 后端安装、互锁、快照、全关 | 不完整回调表被拒绝；`safety_backend()` 只用于作用域恢复 |
 | `ecu/apps/ecu_board_test/include/status_led.h` | 四状态和可注入硬件适配器 | `poll()` 非阻塞；override 为幂等单层所有权 |

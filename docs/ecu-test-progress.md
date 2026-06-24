@@ -71,10 +71,15 @@
 - 2026-06-24：GNU 和 SES ELF 均检查到保留区无加载节重叠；两者导出的 `__ecu_test_flash_start__/end` 都是 `0x807F0000/0x80800000`，且包含全部 `status_led_*` 和 `selftest_status_led` 符号。
 - 2026-06-24：最新 GNU 固件由 J-Link V9.16 下载并校验成功，涉及 94,208 B；VTref 3.283 V、TAP ID `0x1000563D`。
 - 2026-06-24：下载后 PC 位于 `operator_read_line()` 的 1 ms 时钟延时路径。运行间隔采样 GPIOE DO 得到 `0xA4 -> 0x84 -> 0x84 -> 0xA4 -> 0x84`；低有效绿灯位翻转、红蓝位保持关闭，证明固件已进入 READY 心跳。
+- 2026-06-24：接入 COM9 后复现并修复会话完整性缺陷：过去只运行 `SAFE.BOOT` 就可能显示 `BOARD PASS`；现在只有 `run all` 声明并完成全部 required 项后才可能 PASS，临时单项会话保持 INCOMPLETE。
+- 2026-06-24：COM9（USB Serial Device，115200 8N1）启动日志采集成功。时钟为 CPU0/1 816 MHz、AHB/AXI 200 MHz、MCHTMR 24 MHz、XPI0 133.333 MHz；复位标志 `0x00000010`。
+- 2026-06-24：COM9 启动和重复执行 `SELFTEST.ALL` 均为 `pass=5 fail=0`；`help/list/status`、板号设置、未知测试处理、SAFE.BOOT 和 Ethernet SKIP 均符合预期。
+- 2026-06-24：修复后的部分会话实测为 `BOARD INCOMPLETE serial=ECU-COM9 pass=1 fail=0 skip=1 blocked=0`，不再误报 PASS。
+- 2026-06-24：在 `run all` 的首个电源输入处主动输入非数字，使未接外设安全阻塞；结果为 SAFE.BOOT PASS、PWR.RAILS 及其 14 个 required 路径 BLOCKED、Ethernet SKIP，汇总 `BOARD SUMMARY INCOMPLETE pass=1 fail=0 skip=1 blocked=14`，没有进入 DO/CAN/RS485 等危险执行路径。
 
 ## 尚未取得的硬件证据
 
-- 2026-06-24 Windows 仍未枚举出任何 COM 口，因此尚未完成串口 `SELFTEST.ALL` 运行和实物 HIL 全流程。
+- COM9 已可用于调试串口并完成启动/CLI/自测冒烟验证，但尚未执行带夹具的完整 HIL。
 - 尚未由现场人员或摄像头目视确认 RGB 实际发光；当前只有 GPIO 寄存器心跳证据。
 - 未保存任何板卡的 PASS JSONL，因此不得声称 ECU 已通过全功能硬件测试。
 - 软件复位、看门狗复位、外部复位需要分别实测并核对 `RESET flags`。

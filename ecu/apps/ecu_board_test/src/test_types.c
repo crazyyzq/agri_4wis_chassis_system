@@ -12,6 +12,12 @@ void test_session_init(test_session_t *session, const char *serial)
     }
 }
 
+void test_session_set_expected_required(test_session_t *session, uint16_t count)
+{
+    if (session == NULL) return;
+    session->expected_required_count = count;
+}
+
 void test_session_add(test_session_t *session, test_requirement_t requirement,
                       test_status_t status)
 {
@@ -32,9 +38,13 @@ void test_session_add(test_session_t *session, test_requirement_t requirement,
 
 test_board_status_t test_session_status(const test_session_t *session)
 {
-    if (session == NULL || session->required_count == 0U) return TEST_BOARD_INCOMPLETE;
+    if (session == NULL) return TEST_BOARD_INCOMPLETE;
     if (session->aborted) return TEST_BOARD_ABORTED;
     if (session->required_fail_count != 0U) return TEST_BOARD_FAIL;
+    if (session->expected_required_count == 0U ||
+        session->required_count != session->expected_required_count) {
+        return TEST_BOARD_INCOMPLETE;
+    }
     if (session->required_blocked_count != 0U) return TEST_BOARD_INCOMPLETE;
     return TEST_BOARD_PASS;
 }

@@ -78,6 +78,13 @@ static void run_all(void)
                (unsigned long)count, APP_MAX_TESTS);
         return;
     }
+    uint16_t expected_required = 0U;
+    for (size_t i = 0U; i < count; ++i) {
+        if (tests[i].requirement == TEST_REQUIRED) {
+            ++expected_required;
+        }
+    }
+    test_session_set_expected_required(&session, expected_required);
     for (size_t i = 0U; i < APP_MAX_TESTS; ++i) {
         statuses[i] = TEST_BLOCKED;
     }

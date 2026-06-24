@@ -25,10 +25,14 @@ typedef struct {
     uint16_t required_fail_count;
     uint16_t required_blocked_count;
     uint16_t required_count;
+    /* Zero means this is an ad-hoc/partial session, never a board PASS. */
+    uint16_t expected_required_count;
 } test_session_t;
 
 /* Reset all counters and copy a serial into the fixed 23-character field. */
 void test_session_init(test_session_t *session, const char *serial);
+/* Declare how many required cases constitute a complete board run. */
+void test_session_set_expected_required(test_session_t *session, uint16_t count);
 void test_session_add(test_session_t *session, test_requirement_t requirement,
                       test_status_t status);
 test_board_status_t test_session_status(const test_session_t *session);
