@@ -27,6 +27,8 @@ bool selftest_cli_runner(void);
 bool selftest_algorithms(void);
 /** @brief Verify RGB timing, exclusive colors, and override restoration. @return true only when every assertion passes. */
 bool selftest_status_led(void);
+/** @brief Verify periodic communication scheduling, formatting, and ownership. @return true only when every assertion passes. */
+bool selftest_periodic_tx(void);
 /**
  * @brief Run every registered target-side self-test and print a summary.
  *

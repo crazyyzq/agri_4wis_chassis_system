@@ -10,6 +10,7 @@ int selftest_run_all(void)
         { "cli_runner", selftest_cli_runner },
         { "algorithms", selftest_algorithms },
         { "status_led", selftest_status_led },
+        { "periodic_tx", selftest_periodic_tx },
     };
     uint32_t pass = 0U;
     uint32_t fail = 0U;

@@ -22,6 +22,7 @@ sdk_app_src(src/result_writer.c)
 sdk_app_src(src/test_registry.c)
 sdk_app_src(src/app_shell.c)
 sdk_app_src(src/status_led.c)
+sdk_app_src(src/periodic_tx.c)
 sdk_app_src(tests/test_boot.c)
 sdk_app_src(tests/test_power.c)
 sdk_app_src(tests/test_rgb.c)
@@ -43,6 +44,7 @@ sdk_app_src(selftest/selftest_safety.c)
 sdk_app_src(selftest/selftest_cli_runner.c)
 sdk_app_src(selftest/selftest_algorithms.c)
 sdk_app_src(selftest/selftest_status_led.c)
+sdk_app_src(selftest/selftest_periodic_tx.c)
 
 # Match the HPM SDK SEGGER RTT examples' native J-Link configuration while
 # retaining UART0 as this application's operator console (RTT is not enabled).
