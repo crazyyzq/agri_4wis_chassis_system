@@ -2,6 +2,7 @@
 #include <string.h>
 #include "test_cases.h"
 #include "test_registry.h"
+/* Static const storage makes catalogue order and dependency metadata immutable. */
 static const test_descriptor_t registry[] = {
     { "SAFE.BOOT", TEST_REQUIRED, NULL, 3000U, NULL, test_safe_boot, NULL },
     { "PWR.RAILS", TEST_REQUIRED, "SAFE.BOOT", 120000U, NULL, test_power, NULL },

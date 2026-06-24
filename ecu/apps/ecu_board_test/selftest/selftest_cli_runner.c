@@ -8,15 +8,20 @@
 
 static uint32_t cleanup_calls;
 static uint32_t execute_calls;
+/* No-op callbacks provide a complete backend without touching target hardware. */
 static void runner_output_write(uint8_t index, bool on) { (void)index; (void)on; }
 static void runner_term_write(uint8_t index, bool on) { (void)index; (void)on; }
 static void runner_rs485_write(uint8_t index, bool transmit) { (void)index; (void)transmit; }
 static const safety_hw_ops_t runner_safety_ops = {
     runner_output_write, runner_term_write, runner_rs485_write
 };
+/** @brief Model successful resource acquisition for lifecycle assertions. */
 static test_status_t fake_prepare(test_context_t *ctx) { (void)ctx; return TEST_PASS; }
+/** @brief Model preparation failure, for which cleanup must not run. */
 static test_status_t fake_prepare_fail(test_context_t *ctx) { (void)ctx; return TEST_FAIL; }
+/** @brief Count execution and return a deterministic functional failure. */
 static test_status_t fake_fail(test_context_t *ctx) { (void)ctx; ++execute_calls; return TEST_FAIL; }
+/** @brief Count cleanup calls so lifecycle guarantees are directly asserted. */
 static void fake_cleanup(test_context_t *ctx) { (void)ctx; ++cleanup_calls; }
 
 bool selftest_cli_runner(void)

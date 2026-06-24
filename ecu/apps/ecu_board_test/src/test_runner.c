@@ -14,6 +14,7 @@ bool test_runner_poll_abort(test_context_t *context)
         return true;
     }
     status_led_poll();
+    /* Drain without waiting so long hardware loops can call this frequently. */
     while (uart_try_receive_byte(BOARD_CONSOLE_UART_BASE, &byte) == status_success) {
         if (test_runner_consume_abort_byte(context, byte)) {
             safety_all_off();
@@ -25,6 +26,7 @@ bool test_runner_poll_abort(test_context_t *context)
 
 bool test_runner_consume_abort_byte(test_context_t *context, uint8_t byte)
 {
+    /* Deliberately case-sensitive: only the exact lowercase safety word acts. */
     static const uint8_t command[] = { 'a', 'b', 'o', 'r', 't' };
     if (context == NULL) {
         return true;
@@ -72,8 +74,9 @@ test_status_t test_runner_execute(const test_descriptor_t *descriptor,
     }
     if (prepared) status = context->abort_requested ? TEST_BLOCKED : descriptor->execute(context);
 
-    /* Cleanup is a lifecycle guarantee, not a best-effort convention. */
+    /* A failed prepare owns no acquired fixture state, so its cleanup is skipped. */
     if (prepared && descriptor->cleanup != NULL) descriptor->cleanup(context);
+    /* Safe shutdown is unconditional, including invalid and prepare-failure paths. */
     safety_all_off();
     return status;
 }

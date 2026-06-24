@@ -23,13 +23,40 @@ typedef struct test_descriptor {
     void (*cleanup)(test_context_t *context);
 } test_descriptor_t;
 
-/* Execute one descriptor and always finish with safety_all_off(). */
+/**
+ * @brief Execute one test descriptor through prepare, execute, and cleanup.
+ *
+ * @param descriptor Immutable lifecycle descriptor with a valid execute callback.
+ * @param context    Per-execution context carrying abort state and user storage.
+ * @return Lifecycle result, or TEST_BLOCKED for invalid input or a preexisting
+ *         abort request.
+ *
+ * @note Cleanup runs only after successful preparation, including when execute
+ *       fails. safety_all_off() runs on every exit, including prepare failure.
+ */
 test_status_t test_runner_execute(const test_descriptor_t *descriptor,
                                   test_context_t *context);
-/* Service status LED and consume available UART0 bytes without blocking. */
+/**
+ * @brief Poll RGB service and consume all currently available UART0 abort bytes.
+ *
+ * @param context Active per-test context; null forces safe shutdown.
+ * @return true when abort is requested or context is null; otherwise false.
+ *
+ * @note This function does not wait for UART input. Recognized abort immediately
+ *       invokes safety_all_off().
+ */
 bool test_runner_poll_abort(test_context_t *context);
 
-/* Feed one console byte into the exact lowercase "abort" recognizer. */
+/**
+ * @brief Feed one console byte to the exact lowercase "abort" recognizer.
+ *
+ * @param context Per-execution parser state; null is treated as aborted.
+ * @param byte    Next raw console byte.
+ * @return true once "abort" has matched or an abort was already requested.
+ *
+ * @note Matching state belongs to one context and tolerates a new 'a' as the
+ *       start of a new candidate after a mismatch.
+ */
 bool test_runner_consume_abort_byte(test_context_t *context, uint8_t byte);
 
 #endif

@@ -16,12 +16,21 @@ typedef struct {
 #define SELFTEST_ASSERT_EQ(expected, actual) \
     do { if ((uint32_t)(expected) != (uint32_t)(actual)) { return false; } } while (0)
 
+/** @brief Verify result aggregation and complete-session rules. @return true only when every assertion passes. */
 bool selftest_result(void);
+/** @brief Verify safe initialization and exclusive-output rules. @return true only when every assertion passes. */
 bool selftest_safety(void);
+/** @brief Verify CLI parsing, LED policy, abort parsing, and runner cleanup. @return true only when every assertion passes. */
 bool selftest_cli_runner(void);
+/** @brief Verify pure algorithms, malformed inputs, and registry policy. @return true only when every assertion passes. */
 bool selftest_algorithms(void);
+/** @brief Verify RGB timing, exclusive colors, and override restoration. @return true only when every assertion passes. */
 bool selftest_status_led(void);
-/* Return zero only when every registered self-test passes. */
+/**
+ * @brief Run every registered target-side self-test and print a summary.
+ *
+ * @return Zero only when every self-test passes; otherwise -1.
+ */
 int selftest_run_all(void);
 
 #endif

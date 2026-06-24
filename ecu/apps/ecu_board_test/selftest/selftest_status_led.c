@@ -6,11 +6,13 @@
 static uint32_t fake_now_ms;
 static bool fake_levels[3];
 
+/** @brief Return deterministic foreground time controlled by this self-test. */
 static uint32_t fake_now(void)
 {
     return fake_now_ms;
 }
 
+/** @brief Capture logical RGB levels without applying electrical polarity. */
 static void fake_write(uint8_t color, bool on)
 {
     if (color <= BOARD_RGB_BLUE) {
@@ -18,6 +20,7 @@ static void fake_write(uint8_t color, bool on)
     }
 }
 
+/** @brief Check the exclusive-color invariant used by every rendered state. */
 static bool only_color_is_on(uint8_t color)
 {
     for (uint8_t i = BOARD_RGB_RED; i <= BOARD_RGB_BLUE; ++i) {

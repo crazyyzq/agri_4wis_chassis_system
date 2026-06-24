@@ -3,8 +3,21 @@
 #define ECU_TEST_REGISTRY_H
 #include <stddef.h>
 #include "test_runner.h"
-/* Returned storage is static; count may be null and callers must not modify it. */
+/**
+ * @brief Return the complete ordered test descriptor catalogue.
+ *
+ * @param count Optional destination receiving the number of descriptors.
+ * @return Borrowed pointer to immutable, statically owned descriptor storage.
+ *
+ * @warning Callers must not modify or free the returned array.
+ */
 const test_descriptor_t *test_registry_all(size_t *count);
-/* Return null for a null or unknown exact case-sensitive identifier. */
+/**
+ * @brief Find one registered test by exact case-sensitive identifier.
+ *
+ * @param id NUL-terminated test identifier.
+ * @return Borrowed pointer to immutable static storage, or null for a null or
+ *         unknown identifier.
+ */
 const test_descriptor_t *test_registry_find(const char *id);
 #endif

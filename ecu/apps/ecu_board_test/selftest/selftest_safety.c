@@ -6,6 +6,7 @@
 static bool outputs[12];
 static bool terms[4];
 static bool rs485_tx[3];
+/* Fake callbacks mirror the manager's one-based external indexing in arrays. */
 static void set_output(uint8_t i, bool on) { outputs[i - 1U] = on; }
 static void set_term(uint8_t i, bool on) { terms[i - 1U] = on; }
 static void set_rs485(uint8_t i, bool tx) { rs485_tx[i - 1U] = tx; }

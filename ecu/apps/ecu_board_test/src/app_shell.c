@@ -27,12 +27,14 @@ status_led_state_t app_shell_board_led_state(test_board_status_t status)
         : STATUS_LED_READY;
 }
 
+/** @brief Print the complete operator command grammar. */
 static void print_help(void)
 {
     printf("Commands: help | list | board <serial> | run <id> | run all | "
            "status | report | abort | SELFTEST.ALL\n");
 }
 
+/** @brief Print registered tests in execution order with release metadata. */
 static void print_list(void)
 {
     size_t count;
@@ -44,6 +46,15 @@ static void print_list(void)
     }
 }
 
+/**
+ * @brief Run, report, and aggregate one already-resolved test descriptor.
+ *
+ * @param descriptor Borrowed registry descriptor to execute.
+ * @return The individual test status returned by the lifecycle runner.
+ *
+ * @note Clears the previous abort request and brackets execution with TESTING
+ *       and persistent outcome indications.
+ */
 static test_status_t run_descriptor(const test_descriptor_t *descriptor)
 {
     context.abort_requested = false;
@@ -62,6 +73,13 @@ static test_status_t run_descriptor(const test_descriptor_t *descriptor)
     return status;
 }
 
+/**
+ * @brief Execute the ordered registry as one dependency-aware board session.
+ *
+ * @note Counts all required descriptors before execution so a partial path can
+ *       never report PASS. A case is BLOCKED when its earlier dependency did not
+ *       pass. The final path always drives managed hardware safe.
+ */
 static void run_all(void)
 {
     char serial[sizeof(session.board_serial)];

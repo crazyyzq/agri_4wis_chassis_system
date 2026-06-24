@@ -24,22 +24,58 @@ typedef struct {
     void (*write)(uint8_t color, bool on);
 } status_led_hw_ops_t;
 
-/* Install an adapter and reset the state machine to BOOTING. */
+/**
+ * @brief Install an RGB/timing adapter and reset the state to BOOTING.
+ *
+ * @param ops Borrowed adapter pointer; null or incomplete adapters disable I/O.
+ *
+ * @note The initial BOOTING indication is rendered immediately when valid.
+ */
 void status_led_init(const status_led_hw_ops_t *ops);
 
-/* Install the HPM6750 MCHTMR and board RGB adapter. */
+/**
+ * @brief Install the HPM6750 MCHTMR clock and board RGB GPIO adapter.
+ *
+ * @note Timing is derived from the foreground-polled 64-bit MCHTMR counter; no
+ *       interrupt or peripheral timer is reserved.
+ */
 void status_led_init_default(void);
 
-/* Change state, restart its animation phase and render it immediately. */
+/**
+ * @brief Change status, restart its animation phase, and render immediately.
+ *
+ * @param state BOOTING, READY, TESTING, or FAILED; invalid values fall back to
+ *              STATUS_LED_FAILED.
+ *
+ * @note BOOTING is steady red; READY blinks green at a 500 ms half-period;
+ *       TESTING blinks blue and FAILED blinks red at a 125 ms half-period.
+ */
 void status_led_set(status_led_state_t state);
+/** @brief Read the selected logical RGB status. @return Current state value. */
 status_led_state_t status_led_get(void);
 
-/* Advance the active animation using the adapter clock; never blocks. */
+/**
+ * @brief Advance the current RGB animation from the adapter clock.
+ *
+ * @note Non-blocking and safe across uint32_t millisecond wrap. Does nothing for
+ *       BOOTING, override mode, or an invalid adapter.
+ */
 void status_led_poll(void);
 
-/* Temporarily give a hardware test direct ownership of all three RGB channels. */
+/**
+ * @brief Suspend status rendering so a hardware test owns all RGB channels.
+ *
+ * @note Repeated calls keep override active and do not alter physical outputs.
+ */
 void status_led_override_begin(void);
+/**
+ * @brief End direct RGB ownership and immediately restore status indication.
+ *
+ * @note Idempotent when no override is active. Restoration restarts the blink
+ *       phase in the on state.
+ */
 void status_led_override_end(void);
+/** @brief Query direct RGB ownership. @return true while override is active. */
 bool status_led_is_overridden(void);
 
 #endif

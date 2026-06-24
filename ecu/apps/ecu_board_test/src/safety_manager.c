@@ -9,6 +9,7 @@ void safety_all_off(void)
 {
     if (s_ops == NULL || s_ops->output_write == NULL ||
         s_ops->can_term_write == NULL || s_ops->rs485_direction_write == NULL) return;
+    /* External hardware channels are intentionally one-based throughout. */
     for (uint8_t i = 1U; i <= SAFETY_OUTPUT_COUNT; ++i) s_ops->output_write(i, false);
     for (uint8_t i = 1U; i <= SAFETY_CAN_COUNT; ++i) s_ops->can_term_write(i, false);
     for (uint8_t i = 1U; i <= SAFETY_RS485_COUNT; ++i) s_ops->rs485_direction_write(i, false);

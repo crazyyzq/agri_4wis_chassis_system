@@ -8,8 +8,15 @@
 #include "selftest.h"
 #include "status_led.h"
 
+/** @brief Adapt Safety Manager logical outputs to the one-based board API. */
 static void real_output_write(uint8_t index, bool on) { board_ecu_output_write(index, on ? 1U : 0U); }
+/** @brief Adapt logical CAN termination state to board-owned active-low GPIO. */
 static void real_can_term_write(uint8_t index, bool enable) { board_set_can_termination(index, enable); }
+/**
+ * @brief Satisfy the common safety backend when UART hardware controls RS485 DE.
+ *
+ * @note No GPIO write is needed because this pinmux routes automatic UART DE.
+ */
 static void real_rs485_direction_write(uint8_t index, bool transmit)
 {
     (void)index;
@@ -20,6 +27,14 @@ static const safety_hw_ops_t real_safety_ops = {
     real_output_write, real_can_term_write, real_rs485_direction_write
 };
 
+/**
+ * @brief Initialize the ECU safely, run target regression tests, and enter CLI.
+ *
+ * @return Not reached because app_shell_run() is an infinite foreground loop.
+ *
+ * @note A startup self-test failure leaves a red FAILED indication but still
+ *       enters the CLI, allowing diagnosis and repeated SELFTEST.ALL execution.
+ */
 int main(void)
 {
     /* board_init() establishes the hardware-safe GPIO levels before the
