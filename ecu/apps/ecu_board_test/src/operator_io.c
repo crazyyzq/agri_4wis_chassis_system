@@ -1,14 +1,23 @@
 #include <stdio.h>
 #include <stdlib.h>
+
+#include "board.h"
+#include "hpm_uart_drv.h"
 #include "operator_io.h"
+#include "status_led.h"
 
 bool operator_read_line(char *buffer, size_t capacity)
 {
     if (buffer == NULL || capacity < 2U) return false;
     size_t length = 0U;
     for (;;) {
-        int c = getchar();
-        if (c == EOF) continue;
+        uint8_t byte;
+        status_led_poll();
+        if (uart_try_receive_byte(BOARD_CONSOLE_UART_BASE, &byte) != status_success) {
+            board_delay_ms(1U);
+            continue;
+        }
+        int c = (int)byte;
         if (c == '\r' || c == '\n') {
             if (length == 0U) continue;
             putchar('\n');

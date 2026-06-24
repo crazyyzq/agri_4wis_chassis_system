@@ -1,5 +1,6 @@
 #include <string.h>
 #include "selftest.h"
+#include "app_shell.h"
 #include "cli.h"
 #include "test_runner.h"
 
@@ -17,6 +18,15 @@ bool selftest_cli_runner(void)
     SELFTEST_ASSERT_EQ(CLI_RUN_ALL, cli_parse("run all", &cmd));
     SELFTEST_ASSERT_EQ(CLI_BOARD, cli_parse("board ECU-001", &cmd));
     SELFTEST_ASSERT_EQ(CLI_INVALID, cli_parse("run", &cmd));
+
+    SELFTEST_ASSERT_EQ(STATUS_LED_READY, app_shell_test_led_state(TEST_PASS));
+    SELFTEST_ASSERT_EQ(STATUS_LED_FAILED, app_shell_test_led_state(TEST_FAIL));
+    SELFTEST_ASSERT_EQ(STATUS_LED_READY, app_shell_test_led_state(TEST_SKIP));
+    SELFTEST_ASSERT_EQ(STATUS_LED_READY, app_shell_test_led_state(TEST_BLOCKED));
+    SELFTEST_ASSERT_EQ(STATUS_LED_READY, app_shell_board_led_state(TEST_BOARD_PASS));
+    SELFTEST_ASSERT_EQ(STATUS_LED_FAILED, app_shell_board_led_state(TEST_BOARD_FAIL));
+    SELFTEST_ASSERT_EQ(STATUS_LED_READY, app_shell_board_led_state(TEST_BOARD_INCOMPLETE));
+    SELFTEST_ASSERT_EQ(STATUS_LED_FAILED, app_shell_board_led_state(TEST_BOARD_ABORTED));
 
     const test_descriptor_t descriptor = {
         "FAKE.FAIL", TEST_REQUIRED, NULL, 100U,

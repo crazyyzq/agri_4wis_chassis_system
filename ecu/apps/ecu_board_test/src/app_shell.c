@@ -6,9 +6,23 @@
 #include "result_writer.h"
 #include "safety_manager.h"
 #include "selftest.h"
+#include "status_led.h"
 #include "test_registry.h"
 static test_session_t session;
 static test_context_t context;
+
+status_led_state_t app_shell_test_led_state(test_status_t status)
+{
+    return status == TEST_FAIL ? STATUS_LED_FAILED : STATUS_LED_READY;
+}
+
+status_led_state_t app_shell_board_led_state(test_board_status_t status)
+{
+    return status == TEST_BOARD_FAIL || status == TEST_BOARD_ABORTED
+        ? STATUS_LED_FAILED
+        : STATUS_LED_READY;
+}
+
 static void print_help(void) { printf("Commands: help | list | board <serial> | run <id> | run all | status | report | abort | SELFTEST.ALL\n"); }
 static void print_list(void)
 {
@@ -20,11 +34,13 @@ static void print_list(void)
 static test_status_t run_descriptor(const test_descriptor_t *descriptor)
 {
     context.abort_requested = false;
+    status_led_set(STATUS_LED_TESTING);
     test_status_t status = test_runner_execute(descriptor, &context);
     test_result_t result = { descriptor->id, descriptor->requirement, status, 0U,
         status == TEST_BLOCKED ? "operator/equipment prerequisite not met" : "" };
     result_writer_print(&result, session.board_serial);
     test_session_add(&session, descriptor->requirement, status);
+    status_led_set(app_shell_test_led_state(status));
     return status;
 }
 static void run_all(void)
@@ -50,8 +66,10 @@ static void run_all(void)
         } else statuses[i] = run_descriptor(&tests[i]);
     }
     safety_all_off();
+    test_board_status_t board_status = test_session_status(&session);
+    status_led_set(app_shell_board_led_state(board_status));
     printf("BOARD SUMMARY %s pass=%u fail=%u skip=%u blocked=%u\n",
-        test_board_status_name(test_session_status(&session)), session.pass_count,
+        test_board_status_name(board_status), session.pass_count,
         session.fail_count, session.skip_count, session.blocked_count);
 }
 void app_shell_run(void)
@@ -70,8 +88,14 @@ void app_shell_run(void)
         case CLI_REPORT: printf("BOARD %s serial=%s pass=%u fail=%u skip=%u blocked=%u\n",
             test_board_status_name(test_session_status(&session)), session.board_serial,
             session.pass_count, session.fail_count, session.skip_count, session.blocked_count); break;
-        case CLI_ABORT: context.abort_requested = true; safety_all_off(); session.aborted = true; printf("ABORTED: all controlled outputs returned safe\n"); break;
-        case CLI_SELFTEST: selftest_run_all(); break;
+        case CLI_ABORT: context.abort_requested = true; safety_all_off(); session.aborted = true; status_led_set(STATUS_LED_FAILED); printf("ABORTED: all controlled outputs returned safe\n"); break;
+        case CLI_SELFTEST: {
+            status_led_set(STATUS_LED_BOOTING);
+            int result = selftest_run_all();
+            status_led_init_default();
+            status_led_set(result == 0 ? STATUS_LED_READY : STATUS_LED_FAILED);
+            break;
+        }
         default: printf("Invalid command\n"); print_help(); break;
         }
     }

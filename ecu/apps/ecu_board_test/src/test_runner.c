@@ -2,6 +2,7 @@
 #include "board.h"
 #include "hpm_uart_drv.h"
 #include "safety_manager.h"
+#include "status_led.h"
 #include "test_runner.h"
 
 bool test_runner_poll_abort(test_context_t *context)
@@ -10,6 +11,7 @@ bool test_runner_poll_abort(test_context_t *context)
     static uint8_t matched;
     uint8_t byte;
     if (context == NULL) return true;
+    status_led_poll();
     while (uart_try_receive_byte(BOARD_CONSOLE_UART_BASE, &byte) == status_success) {
         if (byte == (uint8_t)command[matched]) {
             if (++matched == sizeof(command) - 1U) {
