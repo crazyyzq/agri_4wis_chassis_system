@@ -3,6 +3,18 @@
 #include <string.h>
 #include "result_writer.h"
 
+/**
+ * @brief Append JSON-safe text while preserving space for the final NUL byte.
+ *
+ * @param output   Destination buffer already containing a valid prefix.
+ * @param capacity Total destination capacity in bytes.
+ * @param used     In/out number of occupied bytes before the NUL terminator.
+ * @param input    Text to append; null is treated as an empty string.
+ * @return true when all text was appended; false when capacity is insufficient.
+ *
+ * @note Quotes and backslashes are escaped. Other control characters become
+ *       spaces so one result can never inject extra console/JSON lines.
+ */
 static bool append_escaped(char *output, size_t capacity, size_t *used, const char *input)
 {
     if (input == NULL) input = "";

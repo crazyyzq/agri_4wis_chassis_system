@@ -1,6 +1,14 @@
 /* Destructive RAM pattern write/read verification used by internal RAM/SDRAM. */
 #include <stddef.h>
 #include "memory_patterns.h"
+/**
+ * @brief Derive the value written for one pattern pass and word index.
+ *
+ * @param pattern Selected memory pattern.
+ * @param index   Zero-based word index within the tested region.
+ * @param walk    Walking-one bit position; ignored by other patterns.
+ * @return The 32-bit value to write and later verify.
+ */
 static uint32_t pattern_value(memory_pattern_t pattern, size_t index, uint32_t walk)
 {
     switch (pattern) {

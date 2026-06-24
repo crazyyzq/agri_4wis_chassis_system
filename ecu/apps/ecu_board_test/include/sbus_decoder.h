@@ -12,6 +12,17 @@ typedef struct {
     bool frame_lost;
     bool failsafe;
 } sbus_frame_t;
-/* Expand 16 packed 11-bit channels plus digital/lost/failsafe flags. */
+/**
+ * @brief Decode one standard SBUS frame into channel values and status flags.
+ *
+ * @param data   Encoded SBUS frame containing exactly 25 bytes.
+ * @param length Input length, which must equal 25.
+ * @param frame  Caller-owned destination cleared and populated on success.
+ * @return SBUS_OK on success, SBUS_INVALID_LENGTH for null arguments or any
+ *         non-25-byte input, or SBUS_INVALID_MARKER for invalid start/end bytes.
+ *
+ * @note Expands sixteen little-endian packed 11-bit analog channels and the
+ *       channel-17, channel-18, frame-lost, and failsafe flags.
+ */
 sbus_status_t sbus_decode(const uint8_t *data, size_t length, sbus_frame_t *frame);
 #endif

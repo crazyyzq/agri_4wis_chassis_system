@@ -3,6 +3,12 @@
 #include <string.h>
 #include "cli.h"
 
+/**
+ * @brief Advance over console separator characters without modifying input.
+ *
+ * @param p Current position in a valid NUL-terminated command string.
+ * @return Pointer to the first character that is neither a space nor a tab.
+ */
 static const char *skip_space(const char *p) { while (*p == ' ' || *p == '\t') ++p; return p; }
 
 cli_action_t cli_parse(const char *line, cli_command_t *command)

@@ -6,6 +6,7 @@
 uint16_t comm_crc16(const uint8_t *data, size_t length)
 {
     if (data == NULL && length != 0U) return 0U;
+    /* CCITT-FALSE processes each byte most-significant bit first. */
     uint16_t crc = 0xFFFFU;
     for (size_t i = 0; i < length; ++i) {
         crc ^= (uint16_t)data[i] << 8U;
@@ -27,6 +28,7 @@ size_t comm_frame_encode(const comm_frame_t *frame, uint8_t *output, size_t capa
     if (frame == NULL || output == NULL || frame->length > COMM_PAYLOAD_MAX) return 0U;
     size_t needed = 11U + frame->length;
     if (capacity < needed) return 0U;
+    /* Wire layout: magic, metadata, LE sequence, length, payload, LE CRC. */
     output[0] = COMM_MAGIC0; output[1] = COMM_MAGIC1;
     output[2] = frame->channel; output[3] = frame->direction;
     output[4] = (uint8_t)frame->sequence; output[5] = (uint8_t)(frame->sequence >> 8U);
@@ -43,6 +45,7 @@ comm_status_t comm_frame_decode(const uint8_t *data, size_t length, comm_frame_t
     if (data == NULL || frame == NULL) return COMM_INVALID;
     if (length < 11U) return COMM_TRUNCATED;
     if (data[0] != COMM_MAGIC0 || data[1] != COMM_MAGIC1 || data[8] > COMM_PAYLOAD_MAX) return COMM_INVALID;
+    /* Exact equality rejects both truncated input and concatenated/trailing data. */
     size_t expected_length = 11U + data[8];
     if (length != expected_length) return COMM_TRUNCATED;
     uint16_t expected_crc = (uint16_t)data[length - 2U] | ((uint16_t)data[length - 1U] << 8U);

@@ -29,14 +29,60 @@ typedef struct {
     uint16_t expected_required_count;
 } test_session_t;
 
-/* Reset all counters and copy a serial into the fixed 23-character field. */
+/**
+ * @brief Reset a test session and assign its board serial number.
+ *
+ * @param session Caller-owned session to initialize; null is ignored.
+ * @param serial  NUL-terminated serial to copy; null leaves an empty serial.
+ *
+ * @note At most 23 serial characters are retained and the field is always
+ *       NUL-terminated.
+ */
 void test_session_init(test_session_t *session, const char *serial);
-/* Declare how many required cases constitute a complete board run. */
+/**
+ * @brief Set the number of required cases expected in a complete board run.
+ *
+ * @param session Caller-owned session to update; null is ignored.
+ * @param count   Required-case total; zero explicitly denotes a partial or
+ *                ad-hoc session that cannot report TEST_BOARD_PASS.
+ */
 void test_session_set_expected_required(test_session_t *session, uint16_t count);
+/**
+ * @brief Accumulate one test outcome into a board session.
+ *
+ * @param session     Caller-owned session to update; null is ignored.
+ * @param requirement Whether the case is required or optional.
+ * @param status      PASS, FAIL, SKIP, or BLOCKED result to count; invalid
+ *                    values are ignored.
+ *
+ * @note A required SKIP is counted as required-blocked because it prevents a
+ *       complete release result. Optional outcomes never affect release status.
+ */
 void test_session_add(test_session_t *session, test_requirement_t requirement,
                       test_status_t status);
+/**
+ * @brief Derive the release-oriented aggregate status of a board session.
+ *
+ * @param session Session to evaluate.
+ * @return TEST_BOARD_ABORTED when marked aborted; otherwise TEST_BOARD_FAIL on
+ *         a required failure, TEST_BOARD_INCOMPLETE for a null/partial/mismatched
+ *         or required-blocked run, and TEST_BOARD_PASS only when the nonzero
+ *         expected required count is matched exactly with no blocking outcome.
+ */
 test_board_status_t test_session_status(const test_session_t *session);
+/**
+ * @brief Return the printable name of an individual test status.
+ *
+ * @param status Status value to translate.
+ * @return A pointer to immutable static text, or "INVALID" for an unknown value.
+ */
 const char *test_status_name(test_status_t status);
+/**
+ * @brief Return the printable name of an aggregate board status.
+ *
+ * @param status Board status value to translate.
+ * @return A pointer to immutable static text, or "INVALID" for an unknown value.
+ */
 const char *test_board_status_name(test_board_status_t status);
 
 #endif

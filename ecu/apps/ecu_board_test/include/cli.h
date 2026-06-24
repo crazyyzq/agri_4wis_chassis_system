@@ -15,7 +15,19 @@ typedef struct {
     char argument[CLI_LINE_MAX];
 } cli_command_t;
 
-/* Parse at most CLI_LINE_MAX characters; invalid input clears command. */
+/**
+ * @brief Parse one bounded operator-console command without side effects.
+ *
+ * @param line    NUL-terminated input containing at most CLI_LINE_MAX bytes,
+ *                excluding the terminator.
+ * @param command Caller-owned destination cleared before any non-null input is
+ *                parsed; receives the action and optional argument.
+ * @return The parsed action, or CLI_INVALID for null arguments, an empty line,
+ *         an overlength line, or unrecognized syntax.
+ *
+ * @note Leading spaces and tabs and trailing whitespace are ignored. The
+ *       returned argument is always NUL-terminated when parsing succeeds.
+ */
 cli_action_t cli_parse(const char *line, cli_command_t *command);
 
 #endif

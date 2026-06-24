@@ -38,6 +38,7 @@ void test_session_add(test_session_t *session, test_requirement_t requirement,
 
 test_board_status_t test_session_status(const test_session_t *session)
 {
+    /* Status precedence is ABORTED, required FAIL, INCOMPLETE, then PASS. */
     if (session == NULL) return TEST_BOARD_INCOMPLETE;
     if (session->aborted) return TEST_BOARD_ABORTED;
     if (session->required_fail_count != 0U) return TEST_BOARD_FAIL;
