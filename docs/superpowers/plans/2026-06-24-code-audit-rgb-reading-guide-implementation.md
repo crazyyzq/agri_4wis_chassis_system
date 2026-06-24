@@ -359,8 +359,8 @@ Include these commands with expected artifacts:
 & .\ecu\scripts\build_ecu_test.ps1
 & .\ecu\scripts\generate_ses_ecu_test.ps1
 & 'D:\Program Files\SEGGER\SEGGER Embedded Studio 8.28\bin\emBuild.exe' `
-  .\tmp\ecu_board_test_build\segger_embedded_studio\ecu_board_test.emProject `
-  'ecu_board_test;Debug' -rebuild
+  -config Debug -rebuild `
+  .\tmp\ecu_board_test_build\segger_embedded_studio\ecu_board_test.emProject
 & .\ecu\scripts\flash_ecu_test.ps1
 ```
 
@@ -411,10 +411,11 @@ Expected: exit code 0 and fresh ELF/bin/map output.
 
 ```powershell
 $project = & .\ecu\scripts\generate_ses_ecu_test.ps1
-& 'D:\Program Files\SEGGER\SEGGER Embedded Studio 8.28\bin\emBuild.exe' $project 'ecu_board_test;Debug' -rebuild
+& 'D:\Program Files\SEGGER\SEGGER Embedded Studio 8.28\bin\emBuild.exe' `
+  -config Debug -rebuild $project
 ```
 
-Expected: XML validation passes and `emBuild` reports Build Complete without errors.
+Expected: XML validation passes, `emBuild` exits 0, and Debug `demo.elf/.bin/.map` are refreshed.
 
 - [ ] **Step 3: Verify reserved flash boundaries and symbols**
 
@@ -453,4 +454,3 @@ git commit -m "test: record RGB firmware verification evidence"
 ```
 
 Expected: `git diff --check` produces no output and the final worktree is clean after the commit.
-

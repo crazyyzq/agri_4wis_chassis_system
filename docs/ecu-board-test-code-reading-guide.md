@@ -216,8 +216,8 @@ tmp/ecu_board_test_build/segger_embedded_studio/ecu_board_test.emProject
 
 ```powershell
 & 'D:\Program Files\SEGGER\SEGGER Embedded Studio 8.28\bin\emBuild.exe' `
-  .\tmp\ecu_board_test_build\segger_embedded_studio\ecu_board_test.emProject `
-  'ecu_board_test;Debug' -rebuild
+  -config Debug -rebuild `
+  .\tmp\ecu_board_test_build\segger_embedded_studio\ecu_board_test.emProject
 ```
 
 J-Link 下载：
@@ -234,4 +234,3 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ecu\scripts\serial_con
 ```
 
 当前 Windows 尚未枚举 ECU 串口，所以目标侧 `SELFTEST.ALL` 输出和全部 HIL 结果仍未验证。没有日志时只能确认“已编译/已下载/已看到灯态”，不能写“硬件测试 PASS”。
-

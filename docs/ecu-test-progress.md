@@ -65,10 +65,17 @@
 - 2026-06-24：RGB 状态机按 TDD 加入；缺少实现时链接失败，最小实现后 GNU 构建通过。
 - 2026-06-24：代码审查修复后 GNU `flash_sdram_xip` 全量构建通过，XPI0 使用 93,288 B，保留区仍为 0 B image 占用。
 - 2026-06-24：PowerShell 脚本语法解析通过；GNU/IAR/SES 三份链接文件均保留末尾 64 KiB；Classic CAN 配置确认 `enable_canfd=false` 且 DLC 仅 0/8。
+- 2026-06-24：确认 SES 8.28 `emBuild` 必须使用 `-config Debug`；位置参数 `'ecu_board_test;Debug'` 会报 `-config must be specified`，指南已修正。
+- 2026-06-24：删除旧构建目录后的 GNU 干净构建通过，共 89 步；XPI0 93,288 B，`ECU_TEST_FLASH` image 使用 0 B。
+- 2026-06-24：SES 8.28 使用 `emBuild -config Debug -rebuild` 成功，生成 `demo.elf` 39,956,037 B、`demo.bin` 73,284 B、`demo.map` 253,699 B。
+- 2026-06-24：GNU 和 SES ELF 均检查到保留区无加载节重叠；两者导出的 `__ecu_test_flash_start__/end` 都是 `0x807F0000/0x80800000`，且包含全部 `status_led_*` 和 `selftest_status_led` 符号。
+- 2026-06-24：最新 GNU 固件由 J-Link V9.16 下载并校验成功，涉及 94,208 B；VTref 3.283 V、TAP ID `0x1000563D`。
+- 2026-06-24：下载后 PC 位于 `operator_read_line()` 的 1 ms 时钟延时路径。运行间隔采样 GPIOE DO 得到 `0xA4 -> 0x84 -> 0x84 -> 0xA4 -> 0x84`；低有效绿灯位翻转、红蓝位保持关闭，证明固件已进入 READY 心跳。
 
 ## 尚未取得的硬件证据
 
 - 2026-06-24 Windows 仍未枚举出任何 COM 口，因此尚未完成串口 `SELFTEST.ALL` 运行和实物 HIL 全流程。
+- 尚未由现场人员或摄像头目视确认 RGB 实际发光；当前只有 GPIO 寄存器心跳证据。
 - 未保存任何板卡的 PASS JSONL，因此不得声称 ECU 已通过全功能硬件测试。
 - 软件复位、看门狗复位、外部复位需要分别实测并核对 `RESET flags`。
 - EEPROM 当前实现同次运行的备份、写读和恢复；断电保持/跨启动恢复仍需在 HIL 阶段验证并补强。
