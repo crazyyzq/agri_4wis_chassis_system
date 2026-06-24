@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/** @brief Target self-test callback returning true only when all checks pass. */
 typedef bool (*selftest_fn_t)(void);
 
 typedef struct {

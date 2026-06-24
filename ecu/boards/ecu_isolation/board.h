@@ -284,6 +284,7 @@
 extern "C" {
 #endif
 
+/** @brief Generic no-argument board timer callback signature. */
 typedef void (*board_timer_cb)(void);
 
 /**

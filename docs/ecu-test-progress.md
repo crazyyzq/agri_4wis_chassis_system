@@ -76,6 +76,10 @@
 - 2026-06-24：COM9 启动和重复执行 `SELFTEST.ALL` 均为 `pass=5 fail=0`；`help/list/status`、板号设置、未知测试处理、SAFE.BOOT 和 Ethernet SKIP 均符合预期。
 - 2026-06-24：修复后的部分会话实测为 `BOARD INCOMPLETE serial=ECU-COM9 pass=1 fail=0 skip=1 blocked=0`，不再误报 PASS。
 - 2026-06-24：在 `run all` 的首个电源输入处主动输入非数字，使未接外设安全阻塞；结果为 SAFE.BOOT PASS、PWR.RAILS 及其 14 个 required 路径 BLOCKED、Ethernet SKIP，汇总 `BOARD SUMMARY INCOMPLETE pass=1 fail=0 skip=1 blocked=14`，没有进入 DO/CAN/RS485 等危险执行路径。
+- 2026-06-24：完成英文 Doxygen 函数契约审计：110/110 个公共函数声明均具备 `@brief`，全部参数和非 `void` 返回值标签匹配；另补充 2 个函数回调类型说明。
+- 2026-06-24：对相对注释设计基线变更的 42 个 ECU `.c/.h` 文件剥离块注释、行注释和空白后逐文件比较，结果 `COMMENT_ONLY=PASS`；生成的 `pinmux.c/.h` 未改变，`git diff --check` 通过。
+- 2026-06-24：注释增强后的 HPM SDK 1.11.0 GNU 全量构建通过（38 步），XPI0 使用 93,440 B，`ECU_TEST_FLASH` image 使用 0 B。
+- 2026-06-24：注释增强后的 SEGGER Embedded Studio 8.28 工程重新生成并由 `emBuild -config Debug -rebuild` 构建通过；生成 `demo.elf` 39,957,764 B、`demo.bin` 73,476 B、`demo.map` 254,362 B。
 
 ## 尚未取得的硬件证据
 
