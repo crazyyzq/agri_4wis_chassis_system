@@ -55,11 +55,13 @@
 - CMake 成功生成 SES 8.28 可打开的 `.emProject`。
 - TDD 红灯已观察：加入自测后因 `test_types.h`、`safety_manager.h` 尚不存在而编译失败；实现后重新构建通过。
 - 编译通过不能代表硬件 PASS；所有硬件结果仍需保存串口日志。
+- 2026-06-24：J-Link V9.16 在 JTAG 4 MHz 下连接成功，VTref=3.283 V，检测到单个 RV32 TAP（ID `0x1000563D`）。
+- 2026-06-24：`demo.elf` 下载成功；首次写入并校验 90,112 字节，复验显示 Flash 内容一致，复位后 MCU 正常运行。
+- 2026-06-24：OTP Shadow 读得 Chip ID `0x20201341`、MAC0 `00:14:97:63:F2:19`、UUID words `F76E6CBB-440E0360-081180FF-C0B5E6E3`。
 
 ## 尚未取得的硬件证据
 
-- 2026-06-23 最终检查时 J-Link 可枚举，但目标 `VTref=0.000V`，板卡未上电；下载脚本已正确返回失败而非假成功。
-- Windows 未枚举出任何 COM 口，因此尚未完成串口 `SELFTEST.ALL` 运行和实物 HIL 全流程。
+- 2026-06-24 Windows 仍未枚举出任何 COM 口，因此尚未完成串口 `SELFTEST.ALL` 运行和实物 HIL 全流程。
 - 未保存任何板卡的 PASS JSONL，因此不得声称 ECU 已通过全功能硬件测试。
 - 软件复位、看门狗复位、外部复位需要分别实测并核对 `RESET flags`。
 - EEPROM 当前实现同次运行的备份、写读和恢复；断电保持/跨启动恢复仍需在 HIL 阶段验证并补强。
