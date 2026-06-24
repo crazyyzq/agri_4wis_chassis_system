@@ -8,6 +8,7 @@ int selftest_run_all(void)
         { "safety", selftest_safety },
         { "cli_runner", selftest_cli_runner },
         { "algorithms", selftest_algorithms },
+        { "status_led", selftest_status_led },
     };
     uint32_t pass = 0U;
     uint32_t fail = 0U;

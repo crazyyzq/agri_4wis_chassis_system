@@ -19,6 +19,7 @@ bool selftest_result(void);
 bool selftest_safety(void);
 bool selftest_cli_runner(void);
 bool selftest_algorithms(void);
+bool selftest_status_led(void);
 int selftest_run_all(void);
 
 #endif
