@@ -149,6 +149,23 @@ bool selftest_debug_monitor(void)
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX_OUT2=") == NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX_OUT3=1") != NULL);
 
+    fake_now_ms = 1400U;
+    g_ecu_debug_monitor.enable = 1U;
+    g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_DI;
+    g_ecu_debug_monitor.do_enable = 1U;
+    g_ecu_debug_monitor.do_mask = 0x00000003UL;
+    ecu_debug_monitor_suspend();
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_EQ(0U, fake_do_mask);
+    uint32_t lines_before_resume = fake_line_count;
+    fake_now_ms = 1600U;
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_EQ(lines_before_resume, fake_line_count);
+    ecu_debug_monitor_resume();
+    fake_now_ms = 1800U;
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_TRUE(fake_line_count > lines_before_resume);
+
     ecu_debug_monitor_restore_default_backend();
     return true;
 }

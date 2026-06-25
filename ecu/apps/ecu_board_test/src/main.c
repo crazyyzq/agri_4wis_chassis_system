@@ -3,6 +3,7 @@
 
 #include "app_shell.h"
 #include "board.h"
+#include "debug_monitor.h"
 #include "hpm_ppor_drv.h"
 #include "periodic_tx.h"
 #include "safety_manager.h"
@@ -55,6 +56,8 @@ int main(void)
     status_led_init_default();
     /* The periodic self-test installs a fake backend; start real diagnostics only now. */
     periodic_tx_init_default();
+    /* The debug monitor self-test installs a fake backend; restore the board backend disabled. */
+    ecu_debug_monitor_init();
     if (selftest_result == 0) {
         status_led_set(STATUS_LED_READY);
         printf("ECU_TEST READY board=%s sdk=1.11.0\n", BOARD_NAME);

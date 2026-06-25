@@ -3,6 +3,7 @@
 #include <string.h>
 #include "app_shell.h"
 #include "cli.h"
+#include "debug_monitor.h"
 #include "operator_io.h"
 #include "periodic_tx.h"
 #include "result_writer.h"
@@ -61,8 +62,11 @@ static test_status_t run_descriptor(const test_descriptor_t *descriptor)
     context.abort_requested = false;
     /* Registered tests receive exclusive ownership of CAN and serial ports. */
     periodic_tx_suspend();
+    /* Registered tests also receive exclusive ownership of debug-controlled DO. */
+    ecu_debug_monitor_suspend();
     status_led_set(STATUS_LED_TESTING);
     test_status_t status = test_runner_execute(descriptor, &context);
+    ecu_debug_monitor_resume();
     periodic_tx_resume();
     test_result_t result = {
         descriptor->id,
@@ -191,6 +195,7 @@ void app_shell_run(void)
             break;
         case CLI_SELFTEST: {
             periodic_tx_suspend();
+            ecu_debug_monitor_suspend();
             status_led_set(STATUS_LED_BOOTING);
             const safety_hw_ops_t *saved_safety_backend = safety_backend();
             int result = selftest_run_all();
@@ -198,6 +203,8 @@ void app_shell_run(void)
             status_led_init_default();
             /* selftest_periodic_tx() replaces the backend, so restore rather than resume. */
             periodic_tx_init_default();
+            /* selftest_debug_monitor() replaces the backend, so restore disabled board control. */
+            ecu_debug_monitor_init();
             status_led_set(result == 0 ? STATUS_LED_READY : STATUS_LED_FAILED);
             break;
         }

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "board.h"
+#include "debug_monitor.h"
 #include "hpm_uart_drv.h"
 #include "operator_io.h"
 #include "periodic_tx.h"
@@ -16,6 +17,7 @@ bool operator_read_line(char *buffer, size_t capacity)
         uint8_t byte;
         status_led_poll();
         periodic_tx_poll();
+        ecu_debug_monitor_poll();
         if (uart_try_receive_byte(BOARD_CONSOLE_UART_BASE, &byte) != status_success) {
             board_delay_ms(1U);
             continue;
