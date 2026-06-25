@@ -29,6 +29,8 @@ bool selftest_algorithms(void);
 bool selftest_status_led(void);
 /** @brief Verify periodic communication scheduling, formatting, and ownership. @return true only when every assertion passes. */
 bool selftest_periodic_tx(void);
+/** @brief Verify SBUS service parsing, state publishing, and timeout policy. @return true only when every assertion passes. */
+bool selftest_sbus_service(void);
 /** @brief Verify debugger monitor scheduling, formatting, and output mask mapping. @return true only when every assertion passes. */
 bool selftest_debug_monitor(void);
 /**
