@@ -11,6 +11,7 @@ int selftest_run_all(void)
         { "algorithms", selftest_algorithms },
         { "status_led", selftest_status_led },
         { "periodic_tx", selftest_periodic_tx },
+        { "debug_monitor", selftest_debug_monitor },
     };
     uint32_t pass = 0U;
     uint32_t fail = 0U;
