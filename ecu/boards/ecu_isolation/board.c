@@ -81,13 +81,23 @@ static const board_gpio_desc_t s_ecu_inputs[BOARD_ECU_INPUT_COUNT] = {
     /* EX_IN12 */ { GPIOM_ASSIGN_GPIOA, GPIO_OE_GPIOA, GPIO_DO_GPIOA, GPIO_DI_GPIOA, 12U },
 };
 
+/**
+ * @brief Assign one pin to GPIO and enable output without an unsafe transient.
+ * @param gpio  Static descriptor for controller/register indexes and pin number.
+ * @param level Raw electrical level that must be present when OE is enabled.
+ */
 static void board_gpio_output_initial(const board_gpio_desc_t *gpio, uint8_t level)
 {
     gpiom_set_pin_controller(HPM_GPIOM, gpio->assign, gpio->pin, gpiom_soc_gpio0);
-    gpio_set_pin_output(HPM_GPIO0, gpio->oe_index, gpio->pin);
+    /* Program the latch before OE to avoid a polarity-dependent output pulse. */
     gpio_write_pin(HPM_GPIO0, gpio->do_index, gpio->pin, level);
+    gpio_set_pin_output(HPM_GPIO0, gpio->oe_index, gpio->pin);
 }
 
+/**
+ * @brief Assign one described pin to GPIO and leave its output driver disabled.
+ * @param gpio Static descriptor for controller/register indexes and pin number.
+ */
 static void board_gpio_input(const board_gpio_desc_t *gpio)
 {
     gpiom_set_pin_controller(HPM_GPIOM, gpio->assign, gpio->pin, gpiom_soc_gpio0);
@@ -279,6 +289,7 @@ void board_init_safe_gpio(void)
 
 void board_init(void)
 {
+    /* Establish clocks/console first, then safe I/O before any diagnostic output. */
     board_init_clock();
     board_init_console();
     board_init_safe_gpio();
@@ -443,6 +454,7 @@ uint32_t board_init_uart_clock(UART_Type *ptr)
     } else if (ptr == HPM_UART15) {
         clk = clock_uart15;
     } else {
+        /* A zero frequency makes unsupported-instance failure explicit upstream. */
         return 0U;
     }
 
@@ -474,6 +486,7 @@ uint32_t board_init_i2c_clock(I2C_Type *ptr)
         freq = clock_get_frequency(clock_i2c3);
     }
 
+    /* Unsupported instances retain zero rather than borrowing another I2C clock. */
     return freq;
 }
 
@@ -518,6 +531,7 @@ uint32_t board_init_can_clock(CAN_Type *ptr)
     } else if (ptr == HPM_CAN3) {
         clk = clock_can3;
     } else {
+        /* Never configure a clock for an instance without board CAN routing. */
         return 0U;
     }
 
@@ -564,6 +578,7 @@ uint32_t board_init_adc_clock(void *ptr, bool clk_src_bus)
         freq = clock_get_frequency(clock_adc3);
     }
 
+    /* Unsupported ADC instances retain zero and receive no clock-side effects. */
     return freq;
 }
 

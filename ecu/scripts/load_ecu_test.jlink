@@ -1,0 +1,6 @@
+r
+h
+loadfile __ECU_TEST_ELF__
+r
+g
+exit
