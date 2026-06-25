@@ -2,7 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "adc_math.h"
+#include "board.h"
 #include "debug_monitor.h"
+#include "hpm_adc16_drv.h"
+#include "hpm_clock_drv.h"
+#include "hpm_mchtmr_drv.h"
+#include "hpm_uart_drv.h"
+#include "test_serial_common.h"
 
 #define ECU_DEBUG_MONITOR_DEFAULT_PERIOD_MS 200U
 #define ECU_DEBUG_MONITOR_MIN_PERIOD_MS 50U
@@ -207,31 +214,87 @@ void ecu_debug_monitor_restore_default_backend(void)
 
 static uint32_t default_now_ms(void)
 {
-    return 0U;
+    uint32_t frequency = clock_get_frequency(clock_mchtmr0);
+    if (frequency == 0U) return 0U;
+    return (uint32_t)((mchtmr_get_count(HPM_MCHTMR) * 1000ULL) / frequency);
 }
 
 static bool default_read_sbus(sbus_frame_t *frame)
 {
-    (void)frame;
+    static bool configured;
+    static uint8_t data[25];
+    static uint8_t position;
+
+    if (frame == NULL) return false;
+    if (!configured) {
+        if (!test_uart_configure(BOARD_SBUS_UART_BASE, BOARD_SBUS_BAUDRATE,
+                                 parity_even, stop_bits_2, false)) {
+            return false;
+        }
+        configured = true;
+    }
+    for (uint16_t attempts = 0U; attempts < 256U; ++attempts) {
+        uint8_t byte;
+        if (uart_try_receive_byte(BOARD_SBUS_UART_BASE, &byte) != status_success) break;
+        if (position == 0U && byte != 0x0FU) continue;
+        data[position++] = byte;
+        if (position == sizeof(data)) {
+            position = 0U;
+            return sbus_decode(data, sizeof(data), frame) == SBUS_OK;
+        }
+    }
     return false;
 }
 
 static bool default_read_adc_mv(uint8_t channel, uint32_t *mv)
 {
-    (void)channel;
-    (void)mv;
-    return false;
+    static bool configured;
+    static const uint8_t adc_channels[] = {
+        BOARD_ANALOG_EX1_ADC_CH, BOARD_ANALOG_EX2_ADC_CH,
+        BOARD_ANALOG_EX3_ADC_CH, BOARD_ANALOG_EX4_ADC_CH
+    };
+
+    if (channel < 1U || channel > 4U || mv == NULL) return false;
+    if (!configured) {
+        adc16_config_t config;
+        board_init_adc16_pins();
+        board_init_adc_clock(BOARD_APP_ADC16_BASE, true);
+        adc16_get_default_config(&config);
+        config.res = adc16_res_16_bits;
+        config.conv_mode = adc16_conv_mode_oneshot;
+        config.adc_clk_div = adc16_clock_divider_4;
+        config.sel_sync_ahb = true;
+        if (adc16_init(BOARD_APP_ADC16_BASE, &config) != status_success) return false;
+        configured = true;
+    }
+
+    adc16_channel_config_t channel_config;
+    adc16_get_channel_default_config(&channel_config);
+    channel_config.ch = adc_channels[channel - 1U];
+    channel_config.sample_cycle = 20U;
+    if (adc16_init_channel(BOARD_APP_ADC16_BASE, &channel_config) != status_success) return false;
+
+    uint16_t raw;
+    if (adc16_get_oneshot_result(BOARD_APP_ADC16_BASE, adc_channels[channel - 1U],
+                                 &raw) != status_success) {
+        return false;
+    }
+    *mv = adc_external_uv_from_raw(raw, 3300000U) / 1000U;
+    return true;
 }
 
 static uint8_t default_read_di(uint8_t channel)
 {
-    (void)channel;
-    return 0U;
+    if (channel < 1U || channel > BOARD_ECU_INPUT_COUNT) return 0U;
+    return board_ecu_input_read(channel) ? 1U : 0U;
 }
 
 static void default_write_do_mask(uint32_t mask)
 {
-    (void)mask;
+    for (uint8_t channel = 1U; channel <= BOARD_ECU_OUTPUT_COUNT; ++channel) {
+        bool on = (mask & (1UL << (channel - 1U))) != 0UL;
+        board_ecu_output_write(channel, on ? 1U : 0U);
+    }
 }
 
 static void default_write_line(const char *line)

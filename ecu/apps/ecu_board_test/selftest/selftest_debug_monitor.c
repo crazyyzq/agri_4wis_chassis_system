@@ -132,6 +132,23 @@ bool selftest_debug_monitor(void)
     ecu_debug_monitor_poll();
     SELFTEST_ASSERT_EQ(0U, fake_do_mask);
 
+    fake_now_ms = 1000U;
+    g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_ADC;
+    g_ecu_debug_monitor.channel = 2U;
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX1=") == NULL);
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX2=2500mV") != NULL);
+
+    fake_now_ms = 1200U;
+    g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_DO;
+    g_ecu_debug_monitor.channel = 3U;
+    g_ecu_debug_monitor.do_enable = 1U;
+    g_ecu_debug_monitor.do_mask = 0x00001FFFUL;
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_EQ(0x00000FFFUL, fake_do_mask);
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX_OUT2=") == NULL);
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX_OUT3=1") != NULL);
+
     ecu_debug_monitor_restore_default_backend();
     return true;
 }
