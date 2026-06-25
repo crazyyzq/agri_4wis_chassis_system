@@ -16,6 +16,15 @@ static uint8_t s_frame_position;
 static uint32_t s_service_now_ms;
 static bool s_hardware_initialized;
 
+/** @brief Clear parser progress and published state without touching UART registers. */
+static void reset_parser_and_state(void)
+{
+    memset((void *)&g_sbus_debug_state, 0, sizeof(g_sbus_debug_state));
+    memset(s_frame_buffer, 0, sizeof(s_frame_buffer));
+    s_frame_position = 0U;
+    s_service_now_ms = 0U;
+}
+
 /**
  * @brief Return a monotonic millisecond timestamp from MCHTMR.
  *
@@ -134,6 +143,8 @@ void sbus_uart_isr(void)
 
 void sbus_service_init(void)
 {
+    sbus_service_stop();
+    reset_parser_and_state();
     board_init_uart(BOARD_SBUS_UART_BASE);
 
     uart_config_t config;
@@ -169,6 +180,18 @@ void sbus_service_init(void)
     }
 }
 
+void sbus_service_stop(void)
+{
+    if (!s_hardware_initialized) return;
+    uint32_t irq_mask = uart_intr_rx_data_avail_or_timeout | uart_intr_rx_line_stat;
+#if defined(HPM_IP_FEATURE_UART_RX_IDLE_DETECT) && (HPM_IP_FEATURE_UART_RX_IDLE_DETECT == 1)
+    irq_mask |= uart_intr_rx_line_idle;
+#endif
+    uart_disable_irq(BOARD_SBUS_UART_BASE, irq_mask);
+    intc_m_disable_irq(BOARD_SBUS_UART_IRQ);
+    s_hardware_initialized = false;
+}
+
 void sbus_service_poll(void)
 {
     uint32_t now_ms = s_hardware_initialized ? service_now_ms() : s_service_now_ms;
@@ -178,15 +201,23 @@ void sbus_service_poll(void)
 void sbus_service_get_snapshot(sbus_debug_state_t *snapshot)
 {
     if (snapshot == NULL) return;
-    *snapshot = g_sbus_debug_state;
+    snapshot->connected = g_sbus_debug_state.connected;
+    snapshot->frame_count = g_sbus_debug_state.frame_count;
+    snapshot->decode_error_count = g_sbus_debug_state.decode_error_count;
+    snapshot->uart_error_count = g_sbus_debug_state.uart_error_count;
+    snapshot->last_frame_ms = g_sbus_debug_state.last_frame_ms;
+    for (uint8_t i = 0U; i < SBUS_SERVICE_CHANNEL_COUNT; ++i) {
+        snapshot->channels[i] = g_sbus_debug_state.channels[i];
+    }
+    snapshot->frame_lost = g_sbus_debug_state.frame_lost;
+    snapshot->failsafe = g_sbus_debug_state.failsafe;
+    snapshot->channel17 = g_sbus_debug_state.channel17;
+    snapshot->channel18 = g_sbus_debug_state.channel18;
 }
 
 void sbus_service_test_reset(void)
 {
-    memset((void *)&g_sbus_debug_state, 0, sizeof(g_sbus_debug_state));
-    memset(s_frame_buffer, 0, sizeof(s_frame_buffer));
-    s_frame_position = 0U;
-    s_service_now_ms = 0U;
+    reset_parser_and_state();
     s_hardware_initialized = false;
 }
 

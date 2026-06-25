@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "sbus_decoder.h"
+#include "sbus_service.h"
 
 typedef enum {
     ECU_DEBUG_VIEW_NONE = 0,
@@ -27,7 +27,7 @@ typedef struct {
 
 typedef struct {
     uint32_t (*now_ms)(void);
-    bool (*read_sbus)(sbus_frame_t *frame);
+    bool (*read_sbus_state)(sbus_debug_state_t *state);
     bool (*read_adc_mv)(uint8_t channel, uint32_t *mv);
     uint8_t (*read_di)(uint8_t channel);
     void (*write_do_mask)(uint32_t mask);

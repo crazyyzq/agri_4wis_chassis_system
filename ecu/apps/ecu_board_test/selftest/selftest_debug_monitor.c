@@ -9,17 +9,17 @@ static uint32_t fake_line_count;
 static uint32_t fake_do_mask;
 static uint8_t fake_di[12];
 static uint32_t fake_adc_mv[4];
-static sbus_frame_t fake_sbus;
+static sbus_debug_state_t fake_sbus;
 
 static uint32_t fake_now(void)
 {
     return fake_now_ms;
 }
 
-static bool fake_read_sbus(sbus_frame_t *frame)
+static bool fake_read_sbus_state(sbus_debug_state_t *state)
 {
-    if (frame == NULL) return false;
-    *frame = fake_sbus;
+    if (state == NULL) return false;
+    *state = fake_sbus;
     return true;
 }
 
@@ -57,11 +57,14 @@ static void reset_fake_backend(void)
     memset(fake_di, 0, sizeof(fake_di));
     memset(fake_adc_mv, 0, sizeof(fake_adc_mv));
     memset(&fake_sbus, 0, sizeof(fake_sbus));
+    fake_sbus.connected = 1U;
+    fake_sbus.frame_count = 42U;
+    fake_sbus.last_frame_ms = 1234U;
     for (uint8_t i = 0U; i < 16U; ++i) {
         fake_sbus.channels[i] = (uint16_t)(1000U + i);
     }
-    fake_sbus.frame_lost = true;
-    fake_sbus.failsafe = false;
+    fake_sbus.frame_lost = 1U;
+    fake_sbus.failsafe = 0U;
     fake_adc_mv[0] = 1200U;
     fake_adc_mv[1] = 2500U;
     fake_adc_mv[2] = 0U;
@@ -72,7 +75,7 @@ static void reset_fake_backend(void)
 
 static const ecu_debug_monitor_backend_t fake_backend = {
     fake_now,
-    fake_read_sbus,
+    fake_read_sbus_state,
     fake_read_adc_mv,
     fake_read_di,
     fake_write_do_mask,
@@ -111,6 +114,8 @@ bool selftest_debug_monitor(void)
     fake_now_ms = 400U;
     g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_SBUS;
     ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "connected=1") != NULL);
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "frames=42") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "ch1=1000") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "ch16=1015") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "lost=1") != NULL);

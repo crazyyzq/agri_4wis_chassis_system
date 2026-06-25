@@ -3,6 +3,7 @@
 #include "board.h"
 #include "hpm_uart_drv.h"
 #include "safety_manager.h"
+#include "sbus_service.h"
 #include "status_led.h"
 #include "test_runner.h"
 
@@ -14,6 +15,7 @@ bool test_runner_poll_abort(test_context_t *context)
         return true;
     }
     status_led_poll();
+    sbus_service_poll();
     /* Drain without waiting so long hardware loops can call this frequently. */
     while (uart_try_receive_byte(BOARD_CONSOLE_UART_BASE, &byte) == status_success) {
         if (test_runner_consume_abort_byte(context, byte)) {

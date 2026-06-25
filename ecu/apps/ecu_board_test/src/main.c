@@ -8,6 +8,7 @@
 #include "periodic_tx.h"
 #include "safety_manager.h"
 #include "selftest.h"
+#include "sbus_service.h"
 #include "status_led.h"
 
 /** @brief Adapt Safety Manager logical outputs to the one-based board API. */
@@ -56,6 +57,8 @@ int main(void)
     status_led_init_default();
     /* The periodic self-test installs a fake backend; start real diagnostics only now. */
     periodic_tx_init_default();
+    /* Start SBUS after selftests so test-feed state cannot race live UART IRQs. */
+    sbus_service_init();
     /* The debug monitor self-test installs a fake backend; restore the board backend disabled. */
     ecu_debug_monitor_init();
     if (selftest_result == 0) {

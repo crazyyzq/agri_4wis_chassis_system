@@ -8,6 +8,7 @@
 #include "periodic_tx.h"
 #include "result_writer.h"
 #include "safety_manager.h"
+#include "sbus_service.h"
 #include "selftest.h"
 #include "status_led.h"
 #include "test_registry.h"
@@ -195,6 +196,7 @@ void app_shell_run(void)
             break;
         case CLI_SELFTEST: {
             periodic_tx_suspend();
+            sbus_service_stop();
             ecu_debug_monitor_suspend();
             status_led_set(STATUS_LED_BOOTING);
             const safety_hw_ops_t *saved_safety_backend = safety_backend();
@@ -203,6 +205,8 @@ void app_shell_run(void)
             status_led_init_default();
             /* selftest_periodic_tx() replaces the backend, so restore rather than resume. */
             periodic_tx_init_default();
+            /* selftest_sbus_service() uses parser injection, so restart the real UART IRQ service. */
+            sbus_service_init();
             /* selftest_debug_monitor() replaces the backend, so restore disabled board control. */
             ecu_debug_monitor_init();
             status_led_set(result == 0 ? STATUS_LED_READY : STATUS_LED_FAILED);

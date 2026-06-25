@@ -8,8 +8,7 @@
 #include "hpm_adc16_drv.h"
 #include "hpm_clock_drv.h"
 #include "hpm_mchtmr_drv.h"
-#include "hpm_uart_drv.h"
-#include "test_serial_common.h"
+#include "sbus_service.h"
 
 #define ECU_DEBUG_MONITOR_DEFAULT_PERIOD_MS 200U
 #define ECU_DEBUG_MONITOR_MIN_PERIOD_MS 50U
@@ -20,7 +19,7 @@ volatile ecu_debug_monitor_t g_ecu_debug_monitor = {
 };
 
 static uint32_t default_now_ms(void);
-static bool default_read_sbus(sbus_frame_t *frame);
+static bool default_read_sbus_state(sbus_debug_state_t *state);
 static bool default_read_adc_mv(uint8_t channel, uint32_t *mv);
 static uint8_t default_read_di(uint8_t channel);
 static void default_write_do_mask(uint32_t mask);
@@ -28,7 +27,7 @@ static void default_write_line(const char *line);
 
 static const ecu_debug_monitor_backend_t s_default_backend = {
     default_now_ms,
-    default_read_sbus,
+    default_read_sbus_state,
     default_read_adc_mv,
     default_read_di,
     default_write_do_mask,
@@ -104,21 +103,27 @@ static void print_di(const ecu_debug_monitor_backend_t *backend)
 
 static void print_sbus(const ecu_debug_monitor_backend_t *backend)
 {
-    sbus_frame_t frame;
-    if (!backend->read_sbus(&frame)) {
-        backend->write_line("SBUS no_frame");
+    sbus_debug_state_t state;
+    if (!backend->read_sbus_state(&state)) {
+        backend->write_line("SBUS state_unavailable");
         return;
     }
-    char line[192] = "SBUS";
+    char line[320];
+    (void)snprintf(line, sizeof(line), "SBUS connected=%lu frames=%lu errors=%lu",
+                   (unsigned long)state.connected,
+                   (unsigned long)state.frame_count,
+                   (unsigned long)(state.decode_error_count + state.uart_error_count));
     for (uint8_t ch = 1U; ch <= 16U; ++ch) {
         if (!selected(ch)) continue;
         char fragment[20];
-        (void)snprintf(fragment, sizeof(fragment), " ch%u=%u", ch, frame.channels[ch - 1U]);
+        (void)snprintf(fragment, sizeof(fragment), " ch%u=%u", ch, state.channels[ch - 1U]);
         append_text(line, sizeof(line), fragment);
     }
-    char status[32];
-    (void)snprintf(status, sizeof(status), " lost=%u failsafe=%u",
-                   frame.frame_lost ? 1U : 0U, frame.failsafe ? 1U : 0U);
+    char status[80];
+    (void)snprintf(status, sizeof(status), " lost=%u failsafe=%u ch17=%u ch18=%u last_ms=%lu",
+                   state.frame_lost ? 1U : 0U, state.failsafe ? 1U : 0U,
+                   state.channel17 ? 1U : 0U, state.channel18 ? 1U : 0U,
+                   (unsigned long)state.last_frame_ms);
     append_text(line, sizeof(line), status);
     backend->write_line(line);
 }
@@ -222,31 +227,11 @@ static uint32_t default_now_ms(void)
     return (uint32_t)((mchtmr_get_count(HPM_MCHTMR) * 1000ULL) / frequency);
 }
 
-static bool default_read_sbus(sbus_frame_t *frame)
+static bool default_read_sbus_state(sbus_debug_state_t *state)
 {
-    static bool configured;
-    static uint8_t data[25];
-    static uint8_t position;
-
-    if (frame == NULL) return false;
-    if (!configured) {
-        if (!test_uart_configure(BOARD_SBUS_UART_BASE, BOARD_SBUS_BAUDRATE,
-                                 parity_even, stop_bits_2, false)) {
-            return false;
-        }
-        configured = true;
-    }
-    for (uint16_t attempts = 0U; attempts < 256U; ++attempts) {
-        uint8_t byte;
-        if (uart_try_receive_byte(BOARD_SBUS_UART_BASE, &byte) != status_success) break;
-        if (position == 0U && byte != 0x0FU) continue;
-        data[position++] = byte;
-        if (position == sizeof(data)) {
-            position = 0U;
-            return sbus_decode(data, sizeof(data), frame) == SBUS_OK;
-        }
-    }
-    return false;
+    if (state == NULL) return false;
+    sbus_service_get_snapshot(state);
+    return true;
 }
 
 static bool default_read_adc_mv(uint8_t channel, uint32_t *mv)

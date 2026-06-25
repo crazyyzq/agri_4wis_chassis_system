@@ -35,6 +35,9 @@ extern volatile sbus_debug_state_t g_sbus_debug_state;
 /** @brief Configure UART1 and start continuous interrupt-driven SBUS reception. */
 void sbus_service_init(void);
 
+/** @brief Stop UART1 SBUS interrupts so selftests can safely own service state. */
+void sbus_service_stop(void);
+
 /** @brief Refresh timeout-derived connection state from the foreground loop. */
 void sbus_service_poll(void);
 
