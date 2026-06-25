@@ -4,11 +4,12 @@
 #include "selftest.h"
 
 static uint32_t fake_now_ms;
-static char fake_last_line[192];
+static char fake_last_line[384];
 static uint32_t fake_line_count;
 static uint32_t fake_do_mask;
 static uint8_t fake_di[12];
 static uint32_t fake_adc_mv[4];
+static uint8_t fake_adc_valid[4];
 static sbus_debug_state_t fake_sbus;
 
 static uint32_t fake_now(void)
@@ -26,6 +27,7 @@ static bool fake_read_sbus_state(sbus_debug_state_t *state)
 static bool fake_read_adc_mv(uint8_t channel, uint32_t *mv)
 {
     if (channel < 1U || channel > 4U || mv == NULL) return false;
+    if (fake_adc_valid[channel - 1U] == 0U) return false;
     *mv = fake_adc_mv[channel - 1U];
     return true;
 }
@@ -56,6 +58,7 @@ static void reset_fake_backend(void)
     memset(fake_last_line, 0, sizeof(fake_last_line));
     memset(fake_di, 0, sizeof(fake_di));
     memset(fake_adc_mv, 0, sizeof(fake_adc_mv));
+    memset(fake_adc_valid, 1, sizeof(fake_adc_valid));
     memset(&fake_sbus, 0, sizeof(fake_sbus));
     fake_sbus.connected = 1U;
     fake_sbus.frame_count = 42U;
@@ -69,6 +72,7 @@ static void reset_fake_backend(void)
     fake_adc_mv[1] = 2500U;
     fake_adc_mv[2] = 0U;
     fake_adc_mv[3] = 4998U;
+    fake_adc_valid[2] = 0U;
     fake_di[0] = 1U;
     fake_di[5] = 1U;
 }
@@ -100,6 +104,7 @@ bool selftest_debug_monitor(void)
     SELFTEST_ASSERT_EQ(1U, fake_line_count);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "ADC") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX1=1200mV") != NULL);
+    SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX3=ERR") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX4=4998mV") != NULL);
 
     ecu_debug_monitor_poll();

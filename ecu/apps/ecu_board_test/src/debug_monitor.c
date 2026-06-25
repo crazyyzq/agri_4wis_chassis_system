@@ -78,11 +78,14 @@ static void print_adc(const ecu_debug_monitor_backend_t *backend)
     for (uint8_t ch = 1U; ch <= 4U; ++ch) {
         if (!selected(ch)) continue;
         uint32_t mv = 0U;
+        char prefix[16];
+        (void)snprintf(prefix, sizeof(prefix), " EX%u=", ch);
         if (backend->read_adc_mv(ch, &mv)) {
-            char prefix[16];
-            (void)snprintf(prefix, sizeof(prefix), " EX%u=", ch);
             append_u32(line, sizeof(line), prefix, mv);
             append_text(line, sizeof(line), "mV");
+        } else {
+            append_text(line, sizeof(line), prefix);
+            append_text(line, sizeof(line), "ERR");
         }
     }
     backend->write_line(line);
@@ -262,9 +265,15 @@ static bool default_read_adc_mv(uint8_t channel, uint32_t *mv)
     channel_config.sample_cycle = 20U;
     if (adc16_init_channel(BOARD_APP_ADC16_BASE, &channel_config) != status_success) return false;
 
-    uint16_t raw;
-    if (adc16_get_oneshot_result(BOARD_APP_ADC16_BASE, adc_channels[channel - 1U],
-                                 &raw) != status_success) {
+    uint16_t raw = 0U;
+    hpm_stat_t result = status_fail;
+    for (uint8_t attempt = 0U; attempt < 8U; ++attempt) {
+        result = adc16_get_oneshot_result(BOARD_APP_ADC16_BASE,
+                                          adc_channels[channel - 1U], &raw);
+        if (result == status_success) break;
+        board_delay_us(20U);
+    }
+    if (result != status_success) {
         return false;
     }
     *mv = adc_external_uv_from_raw(raw, 3300000U) / 1000U;
