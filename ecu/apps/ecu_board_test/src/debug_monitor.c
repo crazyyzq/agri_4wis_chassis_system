@@ -154,11 +154,14 @@ void ecu_debug_monitor_init(void)
 void ecu_debug_monitor_poll(void)
 {
     const ecu_debug_monitor_backend_t *backend = active_backend();
+    if (s_suspended) {
+        backend->write_do_mask(0U);
+        return;
+    }
     uint32_t applied_mask = g_ecu_debug_monitor.do_enable ?
                             (g_ecu_debug_monitor.do_mask & ECU_DEBUG_MONITOR_DO_MASK_ALL) : 0U;
     backend->write_do_mask(applied_mask);
-    if (s_suspended || g_ecu_debug_monitor.enable == 0U ||
-        g_ecu_debug_monitor.view == ECU_DEBUG_VIEW_NONE) {
+    if (g_ecu_debug_monitor.enable == 0U || g_ecu_debug_monitor.view == ECU_DEBUG_VIEW_NONE) {
         return;
     }
 

@@ -1,6 +1,6 @@
 # ECU 板级测试固件：项目结构与代码通读指南
 
-最后更新：2026-06-24
+最后更新：2026-06-25
 
 ## 1. 先明确这套程序做什么
 
@@ -48,7 +48,7 @@ main
   -> status_led_init_default + BOOTING（红灯常亮）
   -> safety_init（DO/CAN 终端/RS485 全部安全）
   -> selftest_run_all
-  -> 恢复真实 Safety/RGB 后端并初始化可选 periodic_tx
+  -> 恢复真实 Safety/RGB 后端并初始化可选 periodic_tx/debug_monitor
   -> READY（绿灯 1 Hz）或 FAILED（红灯快闪）
   -> app_shell_run（永久前台循环）
 ```
@@ -70,7 +70,7 @@ operator_read_line
   -> READY 或 FAILED
 ```
 
-`operator_read_line()` 不再使用阻塞 `getchar()`；它轮询 UART0，并在等待字符时调用 `status_led_poll()` 和 `periodic_tx_poll()`，所以主循环是否存活可以从绿灯心跳判断。注册硬件测试开始前暂停周期发送，结束后重新初始化相关通信口并恢复，避免诊断帧污染回显测试。
+`operator_read_line()` 不再使用阻塞 `getchar()`；它轮询 UART0，并在等待字符时调用 `status_led_poll()`、`periodic_tx_poll()` 和 `ecu_debug_monitor_poll()`，所以主循环是否存活可以从绿灯心跳判断。注册硬件测试开始前暂停周期发送和调试监控，结束后恢复，避免诊断帧污染回显测试，也避免调试结构体控制的 DO 与正式测试抢资源。
 
 ## 4. RGB 状态表
 
@@ -87,7 +87,7 @@ operator_read_line
 
 1. 板级定义：先看 `board.h`，对照原理图，再看 `board.c` 和生成 pinmux。
 2. 启动与框架：`main.c`、`app_shell.c`、`cli.c`、`test_registry.c`、`test_runner.c`。
-3. 安全与状态：`safety_manager.*`、`status_led.*`、`periodic_tx.*`、`test_types.*`、`result_writer.*`。
+3. 安全与状态：`safety_manager.*`、`status_led.*`、`periodic_tx.*`、`debug_monitor.*`、`test_types.*`、`result_writer.*`。
 4. 纯算法：`adc_math.*`、`comm_pattern.*`、`memory_patterns.*`、`sbus_decoder.*`。
 5. 目标侧自测：按 `selftest.c` 的注册顺序阅读其余自测文件。
 6. 硬件用例：先无破坏性项目，再看 DO/DIO、通信和内存破坏性测试。
@@ -130,6 +130,8 @@ operator_read_line
 | `ecu/apps/ecu_board_test/include/periodic_tx.h` | 500 ms 周期发送配置、后端和快照 API | 三组功能独立编译控制；suspend/resume 不清除通道计数 |
 | `ecu/apps/ecu_board_test/src/periodic_tx.c` | 硬件无关调度和 CAN/ASCII 帧格式 | CAN ID `0x601..0x604`；所有通道独立计数；跨 32 位毫秒回绕 |
 | `ecu/apps/ecu_board_test/src/periodic_tx_board.c` | HPM6750 CAN/UART/MCHTMR 后端 | CAN 非阻塞发送；RS485 使用硬件 DE；默认三个宏均关闭 |
+| `ecu/apps/ecu_board_test/include/debug_monitor.h` | SEGGER 调试器可直接修改的监控结构体 | `g_ecu_debug_monitor` 选择 SBUS/ADC/DI/DO 打印和 DO mask 控制 |
+| `ecu/apps/ecu_board_test/src/debug_monitor.c` | 轮询式调试监控服务和 HPM6750 后端 | ADC 打印 mV，DI/DO 打印 0/1，SBUS 打印 16 通道；`do_enable=1` 时 DO 跟随 `do_mask` 保持输出 |
 | `ecu/apps/ecu_board_test/include/result_writer.h` | 单项结果和 JSON API | 输出缓冲区固定上限 384 字节 |
 | `ecu/apps/ecu_board_test/src/result_writer.c` | 文本和单行 JSON 输出 | 引号、反斜杠转义；控制字符替换为空格；容量不足返回 `0x0104` |
 | `ecu/apps/ecu_board_test/include/adc_math.h` | ADC 分压换算接口 | 单位全部是微伏 |
@@ -155,6 +157,7 @@ operator_read_line
 | `ecu/apps/ecu_board_test/selftest/selftest_algorithms.c` | ADC、RAM、通信、SBUS、注册表 | 非法枚举、空查询和 CRC 边界 |
 | `ecu/apps/ecu_board_test/selftest/selftest_status_led.c` | 灯态周期和 override | 使用假时间，不真实等待 500 ms |
 | `ecu/apps/ecu_board_test/selftest/selftest_periodic_tx.c` | 周期、帧格式、暂停恢复、失败隔离 | 假时钟和假通信后端；验证 499/500 ms 边界及时间回绕 |
+| `ecu/apps/ecu_board_test/selftest/selftest_debug_monitor.c` | 调试监控结构体、格式化、周期和暂停恢复 | 假后端验证 SBUS/ADC/DI/DO 输出、通道选择和 DO mask 裁剪 |
 
 ## 9. 硬件测试文件
 

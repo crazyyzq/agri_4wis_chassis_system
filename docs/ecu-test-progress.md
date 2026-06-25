@@ -1,6 +1,6 @@
 # ECU 板级全功能测试：上下文与进度
 
-最后更新：2026-06-24
+最后更新：2026-06-25
 
 ## 项目与硬件
 
@@ -85,6 +85,11 @@
 - 2026-06-24：三组全开的 SEGGER Embedded Studio 8.28 工程重新生成，并由 `emBuild -config Debug -rebuild` 构建通过。CAN 仍为 500 kbit/s Classic CAN，未启用 CAN-FD。
 - 2026-06-24：三组全开的 GNU 固件由 J-Link V9.16 下载并校验成功，VTref=3.277 V、TAP ID `0x1000563D`，Flash download 涉及 98,304 字节。
 - 2026-06-24：下载后经 COM9 执行 `SELFTEST.ALL`，结果为 `pass=6 fail=0`；新增 `periodic_tx` 自测 PASS。周期发送在 CLI 等待路径运行，注册测试执行期间暂停并在结束后重新初始化恢复。
+- 2026-06-25：新增 SEGGER 调试结构体 `g_ecu_debug_monitor`。调试器可改 `enable/view/channel/period_ms/do_enable/do_mask` 选择打印 SBUS、ADC、DI、DO；ADC 以 mV 输出，DI/DO 以 0/1 输出，DO 由 `do_enable` 和 12-bit `do_mask` 保持控制，不自动脉冲。
+- 2026-06-25：`debug_monitor` 按 TDD 实现；新增自测首先因缺少 `src/debug_monitor.c` 正确构建失败，最小核心加入后 GNU 构建转绿。自测覆盖首次打印、周期限速、SBUS 16 通道格式、ADC mV 格式、DI 0/1、DO mask 裁剪、通道选择和 suspend/resume。
+- 2026-06-25：首次下载后板卡红灯快闪，COM9 复测定位为 `SELFTEST debug_monitor FAIL`。根因是 suspended 状态下 `ecu_debug_monitor_poll()` 仍先按 `do_mask` 写 DO，再返回；修复为 suspended 时只写 0 并立即返回。
+- 2026-06-25：修复后默认 GNU 构建通过，XPI0 使用 101,776 B，`ECU_TEST_FLASH` image 使用 0 B；J-Link V9.16 下载校验成功，J-Link V13，VTref=3.277 V，TAP ID `0x1000563D`，Flash download 涉及 102,400 字节。
+- 2026-06-25：修复后经 COM9 执行 `SELFTEST.ALL`，结果为 `pass=7 fail=0`，新增 `debug_monitor` 自测 PASS。使用 J-Link 写 `g_ecu_debug_monitor` 地址 `0x01080020` 为 DI view 后，COM9 实测周期输出 `DI EX_IN1=0 ... EX_IN12=0`；随后已将 `enable/do_enable/do_mask` 清零。
 
 ## 尚未取得的硬件证据
 
@@ -94,6 +99,7 @@
 - 软件复位、看门狗复位、外部复位需要分别实测并核对 `RESET flags`。
 - EEPROM 当前实现同次运行的备份、写读和恢复；断电保持/跨启动恢复仍需在 HIL 阶段验证并补强。
 - 尚未由外部分析仪保存本次周期发送帧：CAN1..4 的 `0x601..0x604`、RS485 1..3 和 RS232 1..4 当前仍为 UNVERIFIED；固件构建、自测和下载成功不能替代接口观测。
+- 尚未由现场夹具确认 `debug_monitor` 的 SBUS 16 通道、ADC mV、DI 0/1 和 DO mask 实际电气结果；当前只有 COM9 软件路径与 DI 空载读数证据。
 
 ## 下一检查点
 
