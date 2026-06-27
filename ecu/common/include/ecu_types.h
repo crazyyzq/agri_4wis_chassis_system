@@ -57,6 +57,13 @@ typedef enum {
     ECU_ESTOP_SOURCE_CREDIBILITY
 } ecu_estop_source_t;
 
+typedef enum {
+    ECU_DEVICE_APPLY_OK = 0,
+    ECU_DEVICE_APPLY_INVALID_ARGUMENT,
+    ECU_DEVICE_APPLY_BACKEND_OFFLINE,
+    ECU_DEVICE_APPLY_REJECTED
+} ecu_device_apply_result_t;
+
 typedef struct {
     uint32_t now_ms;
 } ecu_time_snapshot_t;

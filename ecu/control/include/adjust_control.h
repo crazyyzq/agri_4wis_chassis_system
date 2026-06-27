@@ -3,12 +3,7 @@
 
 #include <stdint.h>
 
-typedef struct {
-    float steer_target_deg[4];
-    float assist_torque_sign[4];
-    float assist_torque_limit_nm[4];
-    float assist_wheel_speed_limit_rpm[4];
-} track_adjust_config_t;
+#include "ecu_config.h"
 
 typedef struct {
     float min_height_mm;

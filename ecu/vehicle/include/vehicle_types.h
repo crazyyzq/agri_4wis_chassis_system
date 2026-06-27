@@ -51,6 +51,11 @@ typedef struct {
 typedef struct {
     uint32_t applied_sequence;
     vehicle_actuator_command_t last_command;
+    ecu_device_apply_result_t power_result;
+    ecu_device_apply_result_t motion_result;
+    ecu_device_apply_result_t lift_hydraulic_result;
+    ecu_device_apply_result_t local_io_result;
+    ecu_device_apply_result_t warning_light_result;
 } vehicle_executor_state_t;
 
 #endif /* VEHICLE_TYPES_H */

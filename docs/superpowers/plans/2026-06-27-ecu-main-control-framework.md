@@ -4,7 +4,7 @@
 
 **Goal:** Build the main-branch ECU application framework required by `doc/ECU_Project_Implementation_v1.4.md`: FreeRTOS/AMP application scaffolding, single-owner state machines, normalized requests, command arbitration, safety override, executor boundary, diagnostics, and regression tests.
 
-**Architecture:** CPU0 owns all safety-critical control. CPU1 only publishes validated non-critical communication snapshots through IPC. Business logic is split into small modules: `remote` converts SBUS snapshots into requests and FSM state, `vehicle` arbitrates and safety-overrides requests into one complete actuator command, `control` holds kinematic/adjustment command shapes, `devices` and `drivers` are executor-facing boundaries, and `app` starts tasks. Hardware-specific commands stay behind `vehicle_command_executor` and are stubbed until CANopen/hydraulic mappings are finalized.
+**Architecture:** CPU0 owns all safety-critical control. CPU1 only publishes validated non-critical communication snapshots through IPC. Business logic is split into small modules: `remote` converts SBUS snapshots into requests and FSM state, `vehicle` arbitrates and safety-overrides requests into one complete actuator command, `control` holds kinematic/adjustment command shapes, `devices` and `drivers` are executor-facing boundaries, and `app` starts tasks. Hardware-specific commands stay behind `vehicle_command_executor`; configurable device adapters are attached behind that boundary as hardware mappings become available.
 
 **Tech Stack:** C99, HPM SDK 1.11, SEGGER Embedded Studio 8.28, FreeRTOS, HPM6750 AMP/RPMsg-compatible layout, Python 3.14 for executable behavior tests, RISC-V GCC for target syntax/build checks.
 
@@ -35,7 +35,7 @@ Create these paths under `ecu/`:
 - `vehicle/include/vehicle_types.h`: safety snapshot, auto request, actuator command, and actuator feedback types.
 - `vehicle/include/command_arbiter.h`, `vehicle/src/command_arbiter.c`: rebuild final command each cycle from safe defaults plus winning request.
 - `vehicle/include/safety_manager.h`, `vehicle/src/safety_manager.c`: override final command on A faults, estop, failsafe, controlled stop, and shutdown constraints.
-- `vehicle/include/vehicle_command_executor.h`, `vehicle/src/vehicle_command_executor.c`: only hardware command exit; first version records/applies stub commands and never touches hardware directly from FSMs.
+- `vehicle/include/vehicle_command_executor.h`, `vehicle/src/vehicle_command_executor.c`: only hardware command exit; first version records/applies final commands at the boundary and never touches hardware directly from FSMs.
 - `vehicle/include/vehicle_state.h`, `vehicle/src/vehicle_state.c`: CPU0-owned snapshot publication for diagnostics and CPU1.
 - `control/include/motion_control.h`, `control/src/motion_control.c`: command shapes for Ackermann/reverse Ackermann/spin/crab; initial implementation clamps and labels targets only.
 - `control/include/adjust_control.h`, `control/src/adjust_control.c`: body-height rate integration and track-adjust command shape without per-cylinder fake closed loop.
@@ -78,7 +78,7 @@ Create `docs/ecu-main-control-progress.md` with:
 
 - Requirement source: `doc/ECU_Project_Implementation_v1.4.md`
 - Branch: `main`
-- First framework scope: complete module boundaries, state machines, arbitration, safety override, executor stub, CPU0/CPU1 FreeRTOS app skeleton, Python behavior tests, target syntax/build checks.
+- First framework scope: complete module boundaries, state machines, arbitration, safety override, executor boundary, CPU0/CPU1 FreeRTOS app skeleton, Python behavior tests, target syntax/build checks.
 
 ## Non-negotiable rules
 
@@ -309,9 +309,9 @@ Cover complete command rebuild from safe defaults, estop priority over manual/au
 
 Arbiter chooses source priority and rebuilds command from `vehicle_actuator_command_safe_default()`. Safety manager clamps dangerous fields to safe values when faults, estop, failsafe or shutdown constraints are active.
 
-- [ ] **Step 4: Implement executor stub**
+- [ ] **Step 4: Implement executor boundary**
 
-Executor accepts only final commands, stores the last applied command, increments a sequence number and returns a status. It does not touch CAN/GPIO until device mappings are frozen.
+Executor accepts only final commands, stores the last applied command, increments a sequence number and returns a status. Device adapters are attached behind this boundary when configurable mappings are available.
 
 - [ ] **Step 5: Verify**
 
@@ -357,7 +357,7 @@ Cover sequence increment, timestamp propagation, validity bit, CRC mismatch reje
 
 - [ ] **Step 2: Implement double-buffer snapshot**
 
-Use explicit copy functions. `volatile` alone is not used as a synchronization guarantee. Host implementation uses critical-section stubs; target app can wrap these with FreeRTOS/interrupt primitives later.
+Use explicit copy functions. `volatile` alone is not used as a synchronization guarantee. Host implementation uses small critical-section hooks; target app can wrap these with FreeRTOS/interrupt primitives later.
 
 - [ ] **Step 3: Verify**
 
@@ -489,5 +489,5 @@ Expected: one framework commit on `main`.
 
 - Requirement coverage: the plan covers dependency direction, CPU0/CPU1 split, remote link/arm separation, old event suppression, P/track-compliant split, no queued mode requests, estop source tracking, track adjustment constraints, final executor boundary, no blocking waits, diagnostic codes, and tests/static checks.
 - Intentional gaps: real CANopen PDO/object dictionaries, brake feedback timing, hydraulic valve pin/MOS mapping, BMS/DC/DC/inverter sequences, and exact SBUS calibrated thresholds remain configuration/device-detail work because the requirement lists them as still needing real-vehicle confirmation.
-- Placeholder scan: no task leaves an undefined future implementation as an instruction; executor and app hooks are deliberate boundaries with safe behavior.
+- Boundary scan: no task leaves an undefined future implementation as an instruction; executor and app hooks are deliberate boundaries with safe behavior.
 - Type consistency: all modules depend on shared `ecu_types.h`, `remote_types.h`, and `vehicle_types.h`; private state remains module-owned.

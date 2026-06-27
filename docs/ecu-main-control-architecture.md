@@ -1,63 +1,58 @@
 # ECU Main Control Framework Reading Guide
 
-This document explains how to read the main control framework from `main()` outward. It is intentionally code-oriented: use it beside the source tree while reviewing each file.
+This document explains how to read the ECU control code from `main()` outward. Keep it open while reviewing the source tree.
+
+## Current architecture
+
+CPU0 owns all safety-critical decisions and all final actuator output. CPU1 is reserved for non-critical sensing, communication snapshots and diagnostics publication.
+
+The intended dependency direction is:
+
+```text
+apps/os
+  -> remote/control/vehicle
+  -> vehicle_command_executor
+  -> devices
+  -> drivers
+  -> protocol
+  -> board/HPM SDK binding later
+```
+
+Business logic must not write CAN, GPIO, UART, hydraulic outputs or warning lights directly. It produces structured requests and final actuator commands. The executor fans the final command out through device adapters.
 
 ## Top-level layout
 
 ```text
 ecu/
-  apps/
-    agri_chassis_control_cpu0/   CPU0 FreeRTOS application entry point.
-    agri_chassis_control_cpu1/   CPU1 FreeRTOS application entry point.
-  common/                        Shared primitive types and time aliases.
-  config/                        Central timing, threshold and priority constants.
-  diag/                          Diagnostic code definitions and text.
-  protocol/sbus/                 Pure SBUS frame decoding.
-  drivers/sbus/                  SBUS UART-facing service state.
-  remote/                        Remote-control interpretation FSMs.
-  vehicle/                       Command arbitration, safety and execution boundary.
-  control/                       Motion and chassis adjustment planning.
-  ipc/                           CPU0/CPU1 snapshot contracts.
-  os/                            FreeRTOS task orchestration helpers.
+  apps/                         CPU0/CPU1 application entry points.
+  common/                       Shared primitive types and time aliases.
+  config/                       Central timing, thresholds, priorities and guessed hardware mappings.
+  control/                      Motion and chassis-adjustment command shaping.
+  devices/                      BMS, DC/DC, drive, steer, lift, hydraulic, local IO and warning-light adapters.
+  diag/                         Diagnostic code definitions and text.
+  drivers/                      CAN, DIO, ADC, UART and SBUS service boundaries.
+  ipc/                          CPU0/CPU1 snapshot contracts.
+  os/                           FreeRTOS task orchestration helpers.
+  protocol/                     Pure protocol helpers: SBUS, CANopen and Modbus RTU.
+  remote/                       Remote-control interpretation FSMs.
+  vehicle/                      Command arbitration, safety clamping, executor and vehicle state.
 ```
 
-## Start reading here: CPU0 main
+## 1. Start from CPU0 main
 
 File: `ecu/apps/agri_chassis_control_cpu0/src/main_cpu0.c`
 
-CPU0 is the safety-owning side of the system. It performs board initialization, creates the core FreeRTOS tasks in `main_cpu0.c`, then starts the scheduler.
+CPU0 performs board-level startup, creates FreeRTOS tasks, then starts the scheduler. Do not put control policy here. If a future edit adds real behavior inside `main()`, move it into `os`, `remote`, `vehicle`, `control`, `devices` or `drivers`.
 
-The rule for CPU0 is simple:
-
-- It may arbitrate commands.
-- It may apply safety clamps.
-- It may issue actuator commands through the executor boundary.
-- It should not hide business logic inside `main()`.
-
-After `main_cpu0.c`, read `ecu/os/src/ecu_tasks_cpu0.c`.
-
-## Task orchestration
-
-Files:
+Then read:
 
 - `ecu/os/include/ecu_tasks.h`
 - `ecu/os/src/ecu_tasks_cpu0.c`
 - `ecu/os/src/ecu_tasks_cpu1.c`
 
-This layer is the scheduler-facing boundary. The task code wires modules together in deterministic periodic loops:
+The CPU0 task file is the wiring layer. It samples inputs, updates state machines, arbitrates commands, applies safety, calls the executor and refreshes snapshots. CPU1 must not include executor, safety manager or hardware command headers.
 
-- Remote input is sampled and converted to a structured request.
-- Available command sources are rebuilt every cycle.
-- The arbiter selects exactly one active command.
-- The safety manager clamps unsafe outputs.
-- The executor publishes the final actuator command boundary.
-- CPU snapshots are refreshed for debug and inter-core exchange.
-
-Keep this file thin. If logic grows here, it should usually be moved into a named module under `remote/`, `vehicle/`, `control/` or `ipc/`.
-
-CPU0 and CPU1 are intentionally split into separate source files. CPU1 must not include command arbitration, safety manager or executor headers.
-
-## Shared definitions and configuration
+## 2. Read shared types and configuration
 
 Files:
 
@@ -68,16 +63,15 @@ Files:
 - `ecu/diag/include/diag_codes.h`
 - `ecu/diag/src/diag_codes.c`
 
-These files define project-wide language:
+`ecu_types.h` defines small shared result and count types. `ecu_config.h` owns all project-level constants and all guessed hardware values.
 
-- `ecu_status_t` is the common success/failure result.
-- `ecu_millis_t` is the monotonic millisecond timestamp type.
-- `ecu_config.h` owns constants such as debounce times, SBUS thresholds, failsafe timeouts and arbitration priorities.
-- `diag_codes.h` owns fault and warning identities.
+Important rule for this project:
 
-The important rule is that thresholds and timings belong in `config`, not scattered through individual algorithms.
+- If a value is a timing threshold, SBUS threshold, priority, limit, node ID, CAN bitrate, Modbus address, DIO mask, relay polarity, ADC scale or valve bit, put it in `ecu/config`.
+- If the value is guessed or likely to change on the real machine, name it with `ECU_GUESS_` or place it inside the default hardware config returned by `ecu_hardware_config_default()`.
+- Do not write guessed raw hardware numbers inside `remote`, `control`, `vehicle`, `devices` or task logic.
 
-## SBUS input path
+## 3. Read the SBUS input path
 
 Files:
 
@@ -86,59 +80,38 @@ Files:
 - `ecu/drivers/sbus/include/sbus_service.h`
 - `ecu/drivers/sbus/src/sbus_service.c`
 
-The decoder is pure protocol code. It accepts one 25-byte SBUS frame and returns channel values plus frame flags.
+The decoder is pure protocol code. It decodes one SBUS frame into 16 channels plus flags.
 
-The service is the UART-facing state holder. The intended hardware path is:
+The service is the UART-facing holder. The intended target path is:
 
 1. UART receives bytes.
-2. UART idle interrupt passes the received block into `sbus_service_feed_bytes()`.
-3. The service accepts valid 25-byte frames and updates its snapshot.
-4. Other modules read `sbus_service_get_snapshot()`.
+2. UART idle interrupt passes the received block into the SBUS service.
+3. The service validates 25-byte frames and updates a snapshot.
+4. Foreground tasks read the snapshot and never parse UART buffers directly.
 
-This separation keeps interrupt-facing code and protocol decoding testable.
+## 4. Read remote-control interpretation
 
-## Remote-control interpretation
-
-Files:
+Start with:
 
 - `ecu/remote/include/remote_types.h`
-- `ecu/remote/src/remote_discrete.c`
-- `ecu/remote/src/remote_link_fsm.c`
-- `ecu/remote/src/remote_arm_fsm.c`
-- `ecu/remote/src/remote_estop_fsm.c`
-- `ecu/remote/src/remote_gear_fsm.c`
-- `ecu/remote/src/remote_mode_fsm.c`
-- `ecu/remote/src/remote_adjust_fsm.c`
-- `ecu/remote/src/remote_power_fsm.c`
-- `ecu/remote/src/remote_authority_fsm.c`
-- `ecu/remote/src/remote_event_lifecycle.c`
-- `ecu/remote/src/remote_lights_fsm.c`
 - `ecu/remote/src/remote_manager.c`
 
-Read `remote_types.h` first. It defines the vocabulary for remote input, remote states and the final `remote_request_t`.
+Then read the individual FSM files:
 
-Then read each FSM:
+- `remote_link_fsm.c`: SBUS online, qualifying, failsafe and timeout state.
+- `remote_arm_fsm.c`: neutral-qualified arm readiness.
+- `remote_estop_fsm.c`: latched remote emergency stop and reset.
+- `remote_gear_fsm.c`: requested gear and active gear separation.
+- `remote_mode_fsm.c`: motion-domain guard and mode request filtering.
+- `remote_adjust_fsm.c`: clearance/track-width adjustment ownership.
+- `remote_power_fsm.c`: high-voltage and shutdown request interpretation.
+- `remote_authority_fsm.c`: manual/automatic authority.
+- `remote_event_lifecycle.c`: expiry of operator action events.
+- `remote_lights_fsm.c`: horn, headlight and indicator requests.
 
-- Link FSM: qualifies SBUS connection and enters failsafe on timeout.
-- Arm FSM: only enters ready state through a neutral qualification path.
-- E-stop FSM: latches emergency stop source and requires reset plus normal input before clear.
-- Gear FSM: tracks requested gear and active gear separately.
-- Mode FSM: prevents rapid domain changes through a guard window.
-- Adjust FSM: tracks chassis adjustment ownership and commands.
-- Power FSM: turns CH4 long-hold actions into high-voltage or orderly shutdown requests.
-- Authority FSM: controls manual/automatic authority from CH7 and safety preconditions.
-- Event lifecycle: gives operator actions an explicit expiry window so rejected requests are not queued.
-- Lights FSM: converts remote light switches into indicator requests.
+Remote code must never include board headers, device headers or executor headers. It only produces a `remote_control_request_t`.
 
-Finally read `remote_manager.c`. It coordinates those FSMs and rebuilds a complete remote request every update cycle. This is the boundary that the vehicle layer consumes.
-
-CH2 and CH14 are intentionally separate:
-
-- CH2 maps to clearance adjustment.
-- CH14 maps to track-width adjustment.
-- If both request adjustment at the same time before an owner exists, the request is rejected instead of guessed.
-
-## Vehicle command path
+## 5. Read vehicle arbitration and safety
 
 Files:
 
@@ -148,23 +121,17 @@ Files:
 - `ecu/vehicle/src/vehicle_command_executor.c`
 - `ecu/vehicle/src/vehicle_state.c`
 
-Read order:
+Read in that order.
 
-1. `vehicle_types.h`
-2. `command_arbiter.c`
-3. `safety_manager.c`
-4. `vehicle_command_executor.c`
-5. `vehicle_state.c`
+The arbiter rebuilds a complete command from safe defaults every cycle. The safety manager clamps unsafe outputs based on estop, fault severity, remote state and platform state. The executor is the only hardware-command exit from the vehicle layer.
 
-The arbiter rebuilds command candidates each cycle and selects the highest-priority valid source. The safety manager then clamps the selected command based on remote state, diagnostic severity and platform state. The executor is intentionally a boundary: real CANopen, hydraulic, relay and warning-light drivers attach behind it later.
+Conservative safety behavior:
 
-The current safety rule is conservative:
-
-- Emergency stop latching forces zero speed, brake release disabled, hydraulic disabled and high voltage disabled.
+- Emergency stop forces zero speed, brake release off, hydraulic off and high voltage off.
 - A-class faults force the same safe command.
-- Missing command sources fall back to a safe default.
+- Missing command source falls back to a safe default command.
 
-## Control planning
+## 6. Read control command-shape modules
 
 Files:
 
@@ -173,9 +140,44 @@ Files:
 - `ecu/control/include/adjust_control.h`
 - `ecu/control/src/adjust_control.c`
 
-These modules convert high-level requests into normalized command structures. They should not talk to hardware and should not know SBUS channel numbers.
+These modules convert high-level requests into normalized command structures. They do not know SBUS channel numbers and do not talk to hardware.
 
-## CPU0/CPU1 data exchange
+## 7. Read protocol, driver and device layers
+
+Protocol helpers:
+
+- `ecu/protocol/canopen/include/canopen_frame.h`
+- `ecu/protocol/canopen/src/canopen_frame.c`
+- `ecu/protocol/modbus/include/modbus_rtu.h`
+- `ecu/protocol/modbus/src/modbus_rtu.c`
+
+Driver/service boundaries:
+
+- `ecu/drivers/can/include/can_bus_service.h`
+- `ecu/drivers/can/src/can_bus_service.c`
+- `ecu/drivers/dio/include/dio_service.h`
+- `ecu/drivers/dio/src/dio_service.c`
+- `ecu/drivers/adc/include/analog_input_service.h`
+- `ecu/drivers/adc/src/analog_input_service.c`
+- `ecu/drivers/uart/include/uart_comm_service.h`
+- `ecu/drivers/uart/src/uart_comm_service.c`
+
+Device adapters:
+
+- `ecu/devices/include/power_device.h`
+- `ecu/devices/src/power_device.c`
+- `ecu/devices/include/motion_device.h`
+- `ecu/devices/src/motion_device.c`
+- `ecu/devices/include/lift_hydraulic_device.h`
+- `ecu/devices/src/lift_hydraulic_device.c`
+- `ecu/devices/include/local_io_device.h`
+- `ecu/devices/src/local_io_device.c`
+- `ecu/devices/include/warning_light_device.h`
+- `ecu/devices/src/warning_light_device.c`
+
+This layer is where current guessed hardware mapping lives. The services are stateful software boundaries now; later, the HPM SDK CAN/UART/GPIO/ADC calls should be connected behind these interfaces without changing remote/control/vehicle policy code.
+
+## 8. Read CPU0/CPU1 data exchange
 
 Files:
 
@@ -183,34 +185,34 @@ Files:
 - `ecu/ipc/src/ipc_snapshot.c`
 - `ecu/apps/agri_chassis_control_cpu1/src/main_cpu1.c`
 
-CPU1 is the sensing/data aggregation side. It publishes sensor and health snapshots. CPU0 consumes snapshots and owns safety/output decisions.
+CPU1 publishes non-critical sensor and communication snapshots. CPU0 consumes snapshots and remains the only side allowed to decide final outputs.
 
-Do not put actuator commands on CPU1. That is an explicit architecture rule and is guarded by static checks.
-
-## Test and static-check files
+## 9. Tests and static checks
 
 Files:
 
 - `tests/python/run_tests.py`
 - `tests/python/test_remote_fsm.py`
 - `tests/python/test_vehicle_arbiter.py`
+- `tests/python/test_hardware_framework.py`
 - `tools/check_no_forbidden_patterns.py`
 
-These tests are not full embedded integration tests. They are framework-contract checks intended to catch bad architecture early:
+These are framework-contract checks. They protect:
 
-- Missing FSM modules.
+- Missing FSM and adapter modules.
 - Unsafe CPU1 dependencies.
-- Scattered magic thresholds.
-- Remote logic depending directly on board drivers.
-- Generic catch-all files that turn into unmaintainable code.
+- Scattered SBUS and CANopen magic values.
+- Remote/control logic depending directly on hardware.
+- Generic catch-all files that usually become unmaintainable.
 
-## How to review changes safely
+## Future hardware binding rule
 
-For each future feature, use this path:
+When adding a real device driver:
 
-1. Add or update the relevant data structure in `remote_types.h`, `vehicle_types.h` or the specific module header.
-2. Put thresholds and timings in `ecu_config.h`.
-3. Implement pure logic in the smallest named module.
-4. Keep hardware access behind driver/executor boundaries.
-5. Add a test or static rule if the behavior is important enough to protect.
-6. Run the Python tests and syntax checks before pushing.
+1. Put configurable hardware values in `ecu/config`.
+2. Keep protocol packing/parsing in `ecu/protocol`.
+3. Put HPM peripheral interaction behind `ecu/drivers`.
+4. Put equipment-specific command translation in `ecu/devices`.
+5. Call devices only from `vehicle_command_executor`.
+6. Add a Python static/contract test if the boundary is important.
+7. Run Python tests, static checks and CPU0/CPU1 builds before committing.

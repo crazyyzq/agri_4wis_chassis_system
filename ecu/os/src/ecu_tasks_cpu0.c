@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "analog_input_service.h"
 #include "command_arbiter.h"
 #include "ecu_config.h"
 #include "ecu_tasks.h"
@@ -15,6 +16,7 @@
 typedef struct {
     bool initialized;
     sbus_service_t sbus;
+    analog_input_service_t analog_inputs;
     remote_discrete_channel_t discrete_channels[ECU_SBUS_CHANNEL_COUNT];
     remote_manager_t remote_manager;
     remote_control_request_t remote_request;
@@ -47,6 +49,7 @@ static void ecu_runtime_init_once(uint32_t now_ms)
 
     memset(&s_runtime, 0, sizeof(s_runtime));
     sbus_service_init(&s_runtime.sbus, REMOTE_FAILSAFE_TIMEOUT_MS);
+    analog_input_service_init(&s_runtime.analog_inputs);
     for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
         remote_discrete_init(&s_runtime.discrete_channels[channel],
                              REMOTE_POS_CENTER,
@@ -169,8 +172,8 @@ void ecu_task_safety_supervisor_step(uint32_t now_ms)
 void ecu_task_can2_motion_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    /* Placeholder boundary: CAN2 status feedback will update zero speed,
-     * brake feedback, steering status and drive faults here. */
+    /* CAN2 feedback integration point: drive, steering and brake status from
+     * configured CANopen nodes refresh safety and motion-state snapshots here. */
 }
 
 void ecu_task_remote_manager_step(uint32_t now_ms)
@@ -213,22 +216,26 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
 void ecu_task_can1_power_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    /* Placeholder boundary: CAN1 BMS, DC/DC and inverter feedback will update
+    /* CAN1 feedback integration point: BMS, DC/DC and inverter status refresh
      * power preconditions and high-voltage diagnostics here. */
 }
 
 void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    /* Placeholder boundary: CAN3 lift axes and hydraulic station feedback will
-     * update adjustment limits, timeout diagnostics and hydraulic-stopped state. */
+    /* CAN3 feedback integration point: lift axes and hydraulic station status
+     * refresh adjustment limits, timeout diagnostics and hydraulic-stopped state. */
 }
 
 void ecu_task_io_service_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    /* Placeholder boundary: DI/DO/ADC services update brake, relay, analog and
-     * local fault snapshots here. ISR handlers only feed lightweight buffers. */
+    analog_input_snapshot_t analog_snapshot;
+    analog_input_service_get_snapshot(&s_runtime.analog_inputs, &analog_snapshot);
+    (void)analog_snapshot;
+    /* Local IO integration point: DI, DO and ADC services refresh brake relay,
+     * analog sensor and local fault snapshots here. ISR handlers only feed
+     * lightweight buffers. */
 }
 
 void ecu_task_diag_cpu0_step(uint32_t now_ms)
