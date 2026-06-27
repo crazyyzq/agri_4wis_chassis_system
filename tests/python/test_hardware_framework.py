@@ -140,3 +140,35 @@ def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> N
         hydraulic_mask |= bit_value(name)
 
     assert (dio_mask & hydraulic_mask) == 0
+
+
+def test_cpu0_runtime_monitor_is_configurable_and_task_owned(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "ECU_ENABLE_DEBUG_MONITOR",
+        "ECU_DEBUG_MONITOR_PERIOD_MS",
+        "ECU_DEBUG_MONITOR_VERBOSE",
+    ]:
+        assert token in config_h, token
+
+    assert "runtime_monitor_snapshot_t" in monitor_h
+    assert "runtime_monitor_print_cpu0" in monitor_h
+    assert "printf(" in monitor_c
+    assert "runtime_monitor_print_cpu0" in tasks_c
+    assert "ECU_ENABLE_DEBUG_MONITOR" in tasks_c
+    assert "runtime_monitor.c" in cmake
+
+
+def test_cpu0_startup_and_fatal_hooks_are_visible_on_debug_console(root: pathlib.Path) -> None:
+    main_c = read(root, "ecu/apps/agri_chassis_control_cpu0/src/main_cpu0.c")
+
+    assert "ECU CPU0 boot" in main_c
+    assert "create_task_or_report" in main_c
+    assert "FATAL malloc failed" in main_c
+    assert "FATAL stack overflow" in main_c
+    assert "\\r\\n" in main_c

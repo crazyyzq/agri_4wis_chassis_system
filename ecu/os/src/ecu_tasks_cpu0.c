@@ -8,6 +8,7 @@
 #include "ipc_snapshot.h"
 #include "remote_discrete.h"
 #include "remote_manager.h"
+#include "runtime_monitor.h"
 #include "safety_manager.h"
 #include "sbus_service.h"
 #include "vehicle_command_executor.h"
@@ -16,7 +17,9 @@
 typedef struct {
     bool initialized;
     sbus_service_t sbus;
+    sbus_service_snapshot_t sbus_snapshot;
     analog_input_service_t analog_inputs;
+    analog_input_snapshot_t analog_snapshot;
     remote_discrete_channel_t discrete_channels[ECU_SBUS_CHANNEL_COUNT];
     remote_manager_t remote_manager;
     remote_control_request_t remote_request;
@@ -26,6 +29,7 @@ typedef struct {
     vehicle_executor_state_t executor;
     vehicle_state_snapshot_t vehicle_state;
     ipc_snapshot_t cpu0_snapshot;
+    uint32_t last_debug_monitor_ms;
 } ecu_runtime_context_t;
 
 static ecu_runtime_context_t s_runtime;
@@ -145,6 +149,51 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
     out->active_gear = s_runtime.remote_request.active_gear;
 }
 
+static int32_t float_to_centi(float value)
+{
+    float scaled = value * 100.0f;
+    if (scaled > 2147483000.0f) {
+        return 2147483000;
+    }
+    if (scaled < -2147483000.0f) {
+        return -2147483000;
+    }
+    return (int32_t)scaled;
+}
+
+static void build_runtime_monitor_snapshot(uint32_t now_ms,
+                                           runtime_monitor_snapshot_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->now_ms = now_ms;
+    out->executor_sequence = s_runtime.executor.applied_sequence;
+    out->sbus_valid = s_runtime.sbus_snapshot.valid;
+    out->sbus_connected = s_runtime.sbus_snapshot.connected;
+    out->sbus_failsafe = s_runtime.sbus_snapshot.failsafe;
+    out->sbus_frame_count = s_runtime.sbus_snapshot.frame_count;
+    out->sbus_decode_error_count = s_runtime.sbus_snapshot.decode_error_count;
+    out->link_state = s_runtime.remote_request.link_state;
+    out->estop_state = s_runtime.remote_request.estop_state;
+    out->diagnostic = s_runtime.final_command.diagnostic;
+    out->source = s_runtime.final_command.source;
+    out->motion_mode = s_runtime.final_command.motion_mode;
+    out->active_gear = s_runtime.final_command.active_gear;
+    out->target_speed_centi_kph = float_to_centi(s_runtime.final_command.target_speed_kph);
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->target_steer_centi_deg[wheel] =
+            float_to_centi(s_runtime.final_command.target_steer_deg[wheel]);
+    }
+    out->brake_release = s_runtime.final_command.brake_release;
+    out->high_voltage_enable = s_runtime.final_command.high_voltage_enable;
+    out->hydraulic_enable = s_runtime.final_command.hydraulic_enable;
+    out->hydraulic_valve_mask = s_runtime.final_command.hydraulic_valve_mask;
+    out->power_result = s_runtime.executor.power_result;
+    out->motion_result = s_runtime.executor.motion_result;
+    out->lift_hydraulic_result = s_runtime.executor.lift_hydraulic_result;
+    out->local_io_result = s_runtime.executor.local_io_result;
+    out->warning_light_result = s_runtime.executor.warning_light_result;
+}
+
 const ecu_task_descriptor_t *ecu_cpu0_task_descriptor(ecu_cpu0_task_id_t task_id)
 {
     return task_id < ECU_TASK_CPU0_COUNT ? &s_cpu0_tasks[task_id] : 0;
@@ -181,13 +230,12 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
     ecu_runtime_init_once(now_ms);
 
     const ecu_config_t *config = ecu_config_default();
-    sbus_service_snapshot_t sbus_snapshot;
     remote_input_snapshot_t remote_input;
     remote_preconditions_t preconditions;
 
     sbus_service_poll(&s_runtime.sbus, now_ms);
-    sbus_service_get_snapshot(&s_runtime.sbus, &sbus_snapshot);
-    build_remote_input_snapshot(&sbus_snapshot, config, now_ms, &remote_input);
+    sbus_service_get_snapshot(&s_runtime.sbus, &s_runtime.sbus_snapshot);
+    build_remote_input_snapshot(&s_runtime.sbus_snapshot, config, now_ms, &remote_input);
     build_remote_preconditions(&remote_input, &preconditions);
     remote_manager_update(&s_runtime.remote_manager,
                           &remote_input,
@@ -230,9 +278,7 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 void ecu_task_io_service_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    analog_input_snapshot_t analog_snapshot;
-    analog_input_service_get_snapshot(&s_runtime.analog_inputs, &analog_snapshot);
-    (void)analog_snapshot;
+    analog_input_service_get_snapshot(&s_runtime.analog_inputs, &s_runtime.analog_snapshot);
     /* Local IO integration point: DI, DO and ADC services refresh brake relay,
      * analog sensor and local fault snapshots here. ISR handlers only feed
      * lightweight buffers. */
@@ -245,6 +291,14 @@ void ecu_task_diag_cpu0_step(uint32_t now_ms)
                                &s_runtime.vehicle_state,
                                sizeof(s_runtime.vehicle_state),
                                now_ms);
+#if ECU_ENABLE_DEBUG_MONITOR
+    if ((now_ms - s_runtime.last_debug_monitor_ms) >= ECU_DEBUG_MONITOR_PERIOD_MS) {
+        runtime_monitor_snapshot_t monitor_snapshot;
+        s_runtime.last_debug_monitor_ms = now_ms;
+        build_runtime_monitor_snapshot(now_ms, &monitor_snapshot);
+        runtime_monitor_print_cpu0(&monitor_snapshot);
+    }
+#endif
 }
 
 void ecu_task_cpu1_service_step(uint32_t now_ms)

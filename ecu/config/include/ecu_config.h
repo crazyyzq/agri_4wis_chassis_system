@@ -35,6 +35,18 @@
 #define ECU_CPU0_DIAG_PERIOD_MS          (100U)
 #define ECU_CPU1_SERVICE_PERIOD_MS       (20U)
 
+#ifndef ECU_ENABLE_DEBUG_MONITOR
+#define ECU_ENABLE_DEBUG_MONITOR         (1)
+#endif
+
+#ifndef ECU_DEBUG_MONITOR_PERIOD_MS
+#define ECU_DEBUG_MONITOR_PERIOD_MS      (500U)
+#endif
+
+#ifndef ECU_DEBUG_MONITOR_VERBOSE
+#define ECU_DEBUG_MONITOR_VERBOSE        (1)
+#endif
+
 #define ECU_GUESS_CAN1_BITRATE           (500000UL)
 #define ECU_GUESS_CAN2_BITRATE           (500000UL)
 #define ECU_GUESS_CAN3_BITRATE           (500000UL)

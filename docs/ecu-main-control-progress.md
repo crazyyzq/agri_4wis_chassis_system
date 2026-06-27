@@ -65,6 +65,10 @@ This file records the durable implementation state for the main-branch control f
   - Power, motion, lift/hydraulic, local IO and warning-light device adapters are available under `ecu/devices`.
   - `vehicle_command_executor_apply()` now fans out the final command through device adapters instead of keeping the output boundary as state-only.
   - DIO active-low conversion is limited to the configured managed output mask; hydraulic valve outputs are cleared as a group before a new valve target is written.
+- CPU0 debug observability:
+  - `ecu/diag/runtime_monitor` prints periodic CPU0 runtime status through the debug console when `ECU_ENABLE_DEBUG_MONITOR` is enabled.
+  - Debug monitor period and verbosity are controlled by `ECU_DEBUG_MONITOR_PERIOD_MS` and `ECU_DEBUG_MONITOR_VERBOSE`.
+  - CPU0 startup logs task creation results; malloc failure, stack overflow and unexpected scheduler return are visible on the debug console.
 
 ## Design constraints already encoded in tests
 
@@ -97,6 +101,13 @@ Verified on 2026-06-27:
 - RISC-V GCC `-fsyntax-only`: passed for framework, protocol, driver and device modules.
 - CPU0 CMake/SES generation and Ninja build: passed, `tmp/cmake_cpu0_full/output/demo.elf` produced.
 - CPU1 CMake/SES generation and Ninja build: passed, `tmp/cmake_cpu1_full/output/demo.elf` produced.
+
+Verified on 2026-06-28:
+
+- J-Link connection: detected J-Link V13, target reference voltage `VTref=3.277V`, one RV32 core in the HPM6750 JTAG chain.
+- CPU0 firmware download: `loadfile tmp/cmake_cpu0_full/output/demo.elf` completed with flash erase/program/verify success.
+- Debug UART: `COM9` at 115200 baud printed board clock summary, CPU0 boot banner, all CPU0 task creation lines and periodic `[ECU MON]` / `[ECU CMD]` status lines every 500 ms.
+- Runtime state with no SBUS connected is safe: source `safety`, gear `P`, speed `0.00 kph`, brake release `0`, high voltage `0`, hydraulic `0`, and all software device adapters reported `ok`.
 
 ## Known open items
 
