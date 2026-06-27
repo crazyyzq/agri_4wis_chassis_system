@@ -23,6 +23,8 @@
 # Test output (keep only documentation and ignore rules)
 /test/reports/*
 !/test/reports/.gitignore
+__pycache__/
+*.pyc
 
 # IDE and operating-system state
 *.emSession
@@ -32,4 +34,3 @@
 Thumbs.db
 Desktop.ini
 .DS_Store
-

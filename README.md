@@ -1,14 +1,24 @@
 # agri_4wis_chassis_system
 
-旱田四轮驱动、四轮转向农业机械的 ECU 与底盘控制系统项目。
+旱田四轮驱动、四轮转向农业机械 ECU 与底盘控制系统项目。
 
 ## 当前阶段
 
-当前优先完成自研 ECU 的板级全功能测试。测试范围和实施步骤见：
+板级功能测试已经完成，主分支开始进入主控软件框架实现阶段。
 
-- `docs/superpowers/specs/2026-06-23-ecu-board-functional-test-design.md`
-- `docs/superpowers/plans/2026-06-23-ecu-board-functional-test-implementation.md`
-- `docs/ecu-test-progress.md`
+已完成验证的板级功能包括：
+
+- RS485
+- RS232
+- CAN1-CAN4
+- SBUS
+- 数字输入/输出
+- 模拟量输入
+
+暂不纳入当前阶段的软件验证范围：
+
+- Ethernet
+- CAN-FD
 
 ## 硬件与工具链
 
@@ -18,24 +28,97 @@
 - IDE：SEGGER Embedded Studio 8.28
 - 下载调试：J-Link
 
-## 本地 SDK
-
-厂商 SDK、GNU 工具链和辅助工具约 2.9 GiB，不纳入 Git 仓库。开发机应单独准备：
+本地厂商 SDK、工具链和辅助工具不纳入 Git 仓库，应单独准备：
 
 ```text
 ecu/sdk_env_v1.11.0/
 ```
 
-SDK 参考地址记录在 `doc/先楫半导体/HPMsdk的参考资料网址.txt`。
-
-## 目录
+## 主要目录
 
 ```text
-doc/                         硬件手册、协议和原理图
-docs/                        设计、计划和项目进度
+doc/                         硬件资料、需求文档、外设资料和原理图相关资料
+docs/                        设计说明、实施计划、项目进度和代码阅读指南
+ecu/apps/                    CPU0/CPU1 应用入口
+ecu/common/                  通用类型和时间定义
+ecu/config/                  全局配置、阈值、周期和优先级
+ecu/control/                 运动控制和底盘调整控制逻辑
+ecu/diag/                    诊断码定义
+ecu/drivers/                 面向外设/中断的驱动服务层
+ecu/ipc/                     CPU0/CPU1 快照和通信契约
+ecu/os/                      FreeRTOS 任务编排
+ecu/protocol/                协议解析层，例如 SBUS
+ecu/remote/                  遥控器输入解释和状态机
+ecu/vehicle/                 指令仲裁、安全钳制、执行边界和车辆状态
 ecu/ecu_isolation/           当前 ECU 自定义板级文件
-ecu/sdk_env_v1.11.0/         本地厂商 SDK（Git 忽略）
-tmp/                         构建及预览文件（Git 忽略）
+tests/                       框架约束测试
+tools/                       静态检查工具
 ```
 
-实施测试固件时，板级文件和应用将按设计迁移至 `ecu/boards/` 与 `ecu/apps/`。
+## 从哪里开始读代码
+
+建议按下面顺序通读：
+
+1. `docs/ecu-main-control-architecture.md`
+2. `ecu/apps/agri_chassis_control_cpu0/src/main_cpu0.c`
+3. `ecu/os/src/ecu_tasks_cpu0.c`
+4. `ecu/remote/include/remote_types.h`
+5. `ecu/remote/src/remote_manager.c`
+6. `ecu/vehicle/include/vehicle_types.h`
+7. `ecu/vehicle/src/command_arbiter.c`
+8. `ecu/vehicle/src/safety_manager.c`
+9. `ecu/vehicle/src/vehicle_command_executor.c`
+10. `ecu/ipc/include/ipc_snapshot.h`
+
+## 当前框架文档
+
+- 主控框架阅读指南：`docs/ecu-main-control-architecture.md`
+- 当前进度记录：`docs/ecu-main-control-progress.md`
+- 实施计划：`docs/superpowers/plans/2026-06-27-ecu-main-control-framework.md`
+- 需求来源：`doc/ECU_Project_Implementation_v1.4.md`
+
+## 本地检查
+
+运行框架约束测试：
+
+```powershell
+python tests\python\run_tests.py
+```
+
+运行静态架构检查：
+
+```powershell
+python tools\check_no_forbidden_patterns.py
+```
+
+这些检查主要保护分层边界、安全边界、SBUS 阈值集中管理和 CPU0/CPU1 职责划分。
+
+## SEGGER Embedded Studio 工程
+
+当前 CPU0/CPU1 应用可以通过 HPM SDK CMake 生成 SES 工程：
+
+```powershell
+$env:HPM_SDK_BASE = (Resolve-Path 'ecu\sdk_env_v1.11.0\hpm_sdk').Path
+$env:GNURISCV_TOOLCHAIN_PATH = (Resolve-Path 'ecu\sdk_env_v1.11.0\toolchains\rv32imac_zicsr_zifencei_multilib_b_ext-win').Path
+$cmake = (Resolve-Path 'ecu\sdk_env_v1.11.0\tools\cmake\bin\cmake.exe').Path
+$ninja = (Resolve-Path 'ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe').Path
+$py = (Resolve-Path 'ecu\sdk_env_v1.11.0\tools\python3\python.exe').Path
+
+& $cmake -S ecu\apps\agri_chassis_control_cpu0 -B tmp\cmake_cpu0 `
+  -G Ninja -DCMAKE_MAKE_PROGRAM="$ninja" -Dpython_exec="$py" `
+  -DBOARD=ecu_isolation -DBOARD_SEARCH_PATH="$((Resolve-Path 'ecu').Path)"
+
+& $cmake -S ecu\apps\agri_chassis_control_cpu1 -B tmp\cmake_cpu1 `
+  -G Ninja -DCMAKE_MAKE_PROGRAM="$ninja" -Dpython_exec="$py" `
+  -DBOARD=ecu_isolation -DBOARD_SEARCH_PATH="$((Resolve-Path 'ecu').Path)" `
+  -DBUILD_FOR_SECONDARY_CORE=1
+```
+
+生成后的 SES 工程位于：
+
+```text
+tmp/cmake_cpu0/segger_embedded_studio/agri_chassis_control_cpu0.emProject
+tmp/cmake_cpu1/segger_embedded_studio/agri_chassis_control_cpu1.emProject
+```
+
+如果 CMake 提示缺少 `yaml`，必须显式传入 SDK 自带 Python，也就是上面命令中的 `-Dpython_exec="$py"`。
