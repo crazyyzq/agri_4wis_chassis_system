@@ -12,7 +12,15 @@ typedef struct {
     uint8_t data[CANOPEN_FRAME_MAX_DATA_BYTES];
 } canopen_frame_t;
 
-/* Build a CANopen PDO frame from a configured COB-ID.
+/* Raw CANopen frame helper used by device adapters that have an explicitly
+ * configured PDO backend.
+ *
+ * This file is not a CANopen protocol stack. Do not add SDO, heartbeat, node
+ * guarding, PDO mapping, NMT state handling or EMCY handling here. Those belong
+ * to HPM SDK CANopenNode and the project-specific object dictionary.
+ */
+
+/* Build a raw PDO CAN frame from a configured COB-ID.
  *
  * Units: COB-ID is the 11-bit CAN identifier stored in ECU hardware config.
  * Owner: device adapters call this from CPU0 task context.

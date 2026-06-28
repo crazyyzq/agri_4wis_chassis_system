@@ -25,7 +25,10 @@ void power_device_init(power_device_state_t *state);
 /* Apply high-voltage intent to CAN1 power devices.
  *
  * Units: high_voltage_enable is a logical request after safety clamping.
- * Dependencies: CAN1 service and guessed CANopen node mappings from config.
+ * Dependencies: CAN1 service and the explicit power protocol selected in
+ * ecu_hardware_config_t. The default configuration is disabled, so an ON
+ * request is rejected as unconfigured instead of sending supplier-unknown
+ * frames.
  * Failure behavior: returns a device result and records it in state; no retry or
  * delayed execution is hidden inside this function.
  */

@@ -11,8 +11,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "canopen_master_service.h"
+#include "analog_modbus_device.h"
+#include "ecu_config.h"
 #include "diag_codes.h"
 #include "ecu_types.h"
+#include "modbus_master_service.h"
 #include "remote_types.h"
 
 typedef struct {
@@ -22,8 +26,34 @@ typedef struct {
     bool sbus_valid;
     bool sbus_connected;
     bool sbus_failsafe;
+    bool sbus_frame_lost;
+    bool sbus_channel17;
+    bool sbus_channel18;
+    uint16_t sbus_channels[ECU_SBUS_CHANNEL_COUNT];
     uint32_t sbus_frame_count;
     uint32_t sbus_decode_error_count;
+    uint32_t sbus_uart_error_count;
+    uint32_t sbus_last_frame_ms;
+
+    uint32_t can2_rx_count;
+    uint32_t can2_error_count;
+    uint8_t can2_rx_buffer_status;
+    uint8_t can2_tx_rx_flags;
+    uint8_t can2_error_flags;
+    uint8_t can2_receive_error_count;
+    uint8_t can2_transmit_error_count;
+    uint8_t can2_last_error_kind;
+    uint32_t can2_last_rx_id;
+    uint8_t can2_last_rx_size;
+    bool can2_last_rx_extended;
+    bool can2_last_rx_remote;
+    uint8_t can2_last_rx_data[8];
+    bool can2_canopen_initialized;
+    canopen_master_snapshot_t can2_canopen_snapshot;
+    canopen_master_debug_command_t canopen_command;
+    modbus_master_snapshot_t modbus_adc_master;
+    analog_modbus_device_state_t analog_modbus_adc;
+    ecu_hardware_feedback_snapshot_t hardware_feedback;
 
     remote_link_state_t link_state;
     remote_estop_state_t estop_state;

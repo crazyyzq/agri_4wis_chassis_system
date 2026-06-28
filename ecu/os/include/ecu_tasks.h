@@ -24,6 +24,7 @@ typedef struct {
 
 const ecu_task_descriptor_t *ecu_cpu0_task_descriptor(ecu_cpu0_task_id_t task_id);
 
+void ecu_task_runtime_init(uint32_t now_ms);
 void ecu_task_safety_supervisor_step(uint32_t now_ms);
 void ecu_task_can2_motion_step(uint32_t now_ms);
 void ecu_task_remote_manager_step(uint32_t now_ms);

@@ -1,24 +1,40 @@
 #include <string.h>
+#include <stdint.h>
 
-#include "canopen_frame.h"
 #include "lift_hydraulic_device.h"
+#include "servo_drive_canopen.h"
+
+static int32_t scaled_float_to_i32(float value, float scale)
+{
+    float scaled = value * scale;
+    if (scaled > 2147483647.0f) {
+        return 2147483647;
+    }
+    if (scaled < -2147483648.0f) {
+        return INT32_MIN;
+    }
+    return (int32_t)scaled;
+}
 
 static bool send_lift_command(can_bus_service_t *can3,
                               const ecu_canopen_node_config_t *node,
                               float height_mm,
-                              float height_rate_mm_s)
+                              float height_rate_mm_s,
+                              float lift_scale)
 {
-    int16_t height_cmd = (int16_t)height_mm;
-    int16_t rate_cmd = (int16_t)height_rate_mm_s;
-    uint8_t payload[4] = {
-        (uint8_t)height_cmd,
-        (uint8_t)((uint16_t)height_cmd >> 8U),
-        (uint8_t)rate_cmd,
-        (uint8_t)((uint16_t)rate_cmd >> 8U)
-    };
-    canopen_frame_t frame;
-    return canopen_frame_build_pdo(node->rpdo1_cob_id, payload, sizeof(payload), &frame) &&
-           can_bus_service_send_canopen(can3, &frame);
+    uint16_t control_word = (height_rate_mm_s == 0.0f) ?
+                            SERVO_DRIVE_CONTROL_QUICK_STOP :
+                            SERVO_DRIVE_CONTROL_ENABLE_OPERATION;
+    int32_t height_counts = scaled_float_to_i32(height_mm, lift_scale);
+
+    return servo_drive_canopen_select_mode(can3,
+                                           node,
+                                           control_word,
+                                           SERVO_DRIVE_MODE_PROFILE_POSITION) &&
+           servo_drive_canopen_set_target_position(can3,
+                                                   node,
+                                                   control_word,
+                                                   height_counts);
 }
 
 static uint32_t valve_mask_from_track_rate(const ecu_hardware_config_t *config,
@@ -60,7 +76,8 @@ ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_stat
         ok = send_lift_command(can3,
                                &config->lift_nodes[wheel],
                                command->target_height_mm,
-                               command->height_rate_mm_s) && ok;
+                               command->height_rate_mm_s,
+                               config->lift_mm_to_counts) && ok;
     }
 
     uint32_t valve_mask = command->hydraulic_valve_mask |
