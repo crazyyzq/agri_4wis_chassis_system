@@ -24,7 +24,7 @@ void motion_device_init(motion_device_state_t *state);
 /* Apply final drive, steering and brake intent to CAN2 motion nodes.
  *
  * Units: speed is kph, steering is degrees, brake_release is logical.
- * Dependencies: CAN2 service and guessed drive/steer CANopen mappings.
+ * Dependencies: CAN2 service and project drive/steer CANopen mappings.
  * Failure behavior: returns one aggregate result after attempting configured
  * wheel commands; safety decisions are not made here.
  */

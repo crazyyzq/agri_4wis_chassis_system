@@ -1,48 +1,57 @@
 #include <string.h>
+#include <stdint.h>
 
-#include "canopen_frame.h"
 #include "motion_device.h"
+#include "servo_drive_canopen.h"
 
-static void pack_i16_le(int16_t value, uint8_t *out)
-{
-    out[0] = (uint8_t)value;
-    out[1] = (uint8_t)((uint16_t)value >> 8U);
-}
-
-static int16_t scaled_float_to_i16(float value, float scale)
+static int32_t scaled_float_to_i32(float value, float scale)
 {
     float scaled = value * scale;
-    if (scaled > 32767.0f) {
-        return 32767;
+    if (scaled > 2147483647.0f) {
+        return 2147483647;
     }
-    if (scaled < -32768.0f) {
-        return -32768;
+    if (scaled < -2147483648.0f) {
+        return INT32_MIN;
     }
-    return (int16_t)scaled;
+    return (int32_t)scaled;
 }
 
 static bool send_drive_command(can_bus_service_t *can2,
                                const ecu_canopen_node_config_t *node,
                                float speed_kph,
+                               float speed_scale,
                                bool brake_release)
 {
-    uint8_t payload[4] = { 0U };
-    pack_i16_le(scaled_float_to_i16(speed_kph, 100.0f), &payload[0]);
-    payload[2] = brake_release ? 1U : 0U;
-    canopen_frame_t frame;
-    return canopen_frame_build_pdo(node->rpdo1_cob_id, payload, sizeof(payload), &frame) &&
-           can_bus_service_send_canopen(can2, &frame);
+    uint16_t control_word = brake_release ?
+                            SERVO_DRIVE_CONTROL_ENABLE_OPERATION :
+                            SERVO_DRIVE_CONTROL_QUICK_STOP;
+    int32_t velocity_counts = scaled_float_to_i32(speed_kph, speed_scale);
+
+    return servo_drive_canopen_select_mode(can2,
+                                           node,
+                                           control_word,
+                                           SERVO_DRIVE_MODE_PROFILE_VELOCITY) &&
+           servo_drive_canopen_set_target_velocity(can2,
+                                                   node,
+                                                   control_word,
+                                                   velocity_counts);
 }
 
 static bool send_steer_command(can_bus_service_t *can2,
                                const ecu_canopen_node_config_t *node,
-                               float steer_deg)
+                               float steer_deg,
+                               float steer_scale)
 {
-    uint8_t payload[4] = { 0U };
-    pack_i16_le(scaled_float_to_i16(steer_deg, 100.0f), &payload[0]);
-    canopen_frame_t frame;
-    return canopen_frame_build_pdo(node->rpdo1_cob_id, payload, sizeof(payload), &frame) &&
-           can_bus_service_send_canopen(can2, &frame);
+    int32_t position_counts = scaled_float_to_i32(steer_deg, steer_scale);
+
+    return servo_drive_canopen_select_mode(can2,
+                                           node,
+                                           SERVO_DRIVE_CONTROL_ENABLE_OPERATION,
+                                           SERVO_DRIVE_MODE_PROFILE_POSITION) &&
+           servo_drive_canopen_set_target_position(can2,
+                                                   node,
+                                                   SERVO_DRIVE_CONTROL_ENABLE_OPERATION,
+                                                   position_counts);
 }
 
 void motion_device_init(motion_device_state_t *state)
@@ -71,10 +80,12 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
         ok = send_drive_command(can2,
                                 &config->drive_nodes[wheel],
                                 command->target_speed_kph,
+                                config->drive_speed_kph_to_counts_per_sec,
                                 command->brake_release) && ok;
         ok = send_steer_command(can2,
                                 &config->steer_nodes[wheel],
-                                command->target_steer_deg[wheel]) && ok;
+                                command->target_steer_deg[wheel],
+                                config->steer_deg_to_counts) && ok;
     }
     state->last_motion_command = *command;
     state->apply_count++;

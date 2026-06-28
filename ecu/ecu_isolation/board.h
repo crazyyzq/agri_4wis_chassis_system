@@ -150,8 +150,9 @@
 
 /* -------------------------------------------------------------------------- */
 /* RS485                                                                       */
-/* Current pinmux uses UART hardware DE pins. If you later change DE to GPIO,  */
-/* set BOARD_RS485_DE_USING_GPIO to 1 and update pinmux accordingly.           */
+/* HPM6750 SDK 1.11 does not expose automatic UART DE direction control for   */
+/* this UART IP. Keep RS485 direction under GPIO control so firmware can       */
+/* explicitly return the transceiver to receive after each frame.              */
 /* -------------------------------------------------------------------------- */
 #define BOARD_RS485_1_UART_BASE     HPM_UART11
 #define BOARD_RS485_1_UART_IRQ      IRQn_UART11
@@ -164,19 +165,22 @@
 #define BOARD_RS485_3_UART_CLK_NAME clock_uart10
 
 #ifndef BOARD_RS485_DE_USING_GPIO
-#define BOARD_RS485_DE_USING_GPIO 0
+#define BOARD_RS485_DE_USING_GPIO 1
 #endif
 #define BOARD_RS485_TX_ENABLE_LEVEL 1U
 #define BOARD_RS485_RX_ENABLE_LEVEL 0U
 
 /* GPIO definition only used when BOARD_RS485_DE_USING_GPIO == 1 */
 #define BOARD_RS485_1_DE_GPIO_CTRL  HPM_GPIO0
+#define BOARD_RS485_1_DE_GPIO_OE_INDEX GPIO_OE_GPIOD
 #define BOARD_RS485_1_DE_GPIO_INDEX GPIO_DO_GPIOD
 #define BOARD_RS485_1_DE_GPIO_PIN   (18U)
 #define BOARD_RS485_2_DE_GPIO_CTRL  HPM_GPIO0
+#define BOARD_RS485_2_DE_GPIO_OE_INDEX GPIO_OE_GPIOB
 #define BOARD_RS485_2_DE_GPIO_INDEX GPIO_DO_GPIOB
 #define BOARD_RS485_2_DE_GPIO_PIN   (11U)
 #define BOARD_RS485_3_DE_GPIO_CTRL  HPM_GPIO0
+#define BOARD_RS485_3_DE_GPIO_OE_INDEX GPIO_OE_GPIOA
 #define BOARD_RS485_3_DE_GPIO_INDEX GPIO_DO_GPIOA
 #define BOARD_RS485_3_DE_GPIO_PIN   (17U)
 

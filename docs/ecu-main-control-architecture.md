@@ -26,7 +26,7 @@ Business logic must not write CAN, GPIO, UART, hydraulic outputs or warning ligh
 ecu/
   apps/                         CPU0/CPU1 application entry points.
   common/                       Shared primitive types and time aliases.
-  config/                       Central timing, thresholds, priorities and guessed hardware mappings.
+  config/                       Central timing, thresholds, priorities and calibration-open hardware mappings.
   control/                      Motion and chassis-adjustment command shaping.
   devices/                      BMS, DC/DC, drive, steer, lift, hydraulic, local IO and warning-light adapters.
   diag/                         Diagnostic code definitions and text.
@@ -63,13 +63,13 @@ Files:
 - `ecu/diag/include/diag_codes.h`
 - `ecu/diag/src/diag_codes.c`
 
-`ecu_types.h` defines small shared result and count types. `ecu_config.h` owns all project-level constants and all guessed hardware values.
+`ecu_types.h` defines small shared result and count types. `ecu_config.h` owns all project-level constants and calibration-open hardware values.
 
 Important rule for this project:
 
 - If a value is a timing threshold, SBUS threshold, priority, limit, node ID, CAN bitrate, Modbus address, DIO mask, relay polarity, ADC scale or valve bit, put it in `ecu/config`.
-- If the value is guessed or likely to change on the real machine, name it with `ECU_GUESS_` or place it inside the default hardware config returned by `ecu_hardware_config_default()`.
-- Do not write guessed raw hardware numbers inside `remote`, `control`, `vehicle`, `devices` or task logic.
+- If the value is likely to change on the real machine, name it with `ECU_` or place it inside the default hardware config returned by `ecu_hardware_config_default()`.
+- Do not write raw hardware numbers inside `remote`, `control`, `vehicle`, `devices` or task logic.
 
 ## 3. Read the SBUS input path
 
@@ -85,7 +85,7 @@ The decoder is pure protocol code. It decodes one SBUS frame into 16 channels pl
 The service is the UART-facing holder. The intended target path is:
 
 1. UART receives bytes.
-2. UART idle interrupt passes the received block into the SBUS service.
+2. `ecu/drivers/sbus/src/sbus_uart_hw.c` configures UART1 as 100000 baud 8E2 and feeds bytes from RX data/timeout plus RX line idle interrupts.
 3. The service validates 25-byte frames and updates a snapshot.
 4. Foreground tasks read the snapshot and never parse UART buffers directly.
 
@@ -151,6 +151,8 @@ Protocol helpers:
 - `ecu/protocol/modbus/include/modbus_rtu.h`
 - `ecu/protocol/modbus/src/modbus_rtu.c`
 
+CANopen and Modbus must use proven middleware instead of growing a project-local protocol stack. CPU0 enables HPM SDK `agile_modbus` RTU, and the local `modbus_rtu` wrapper is only a thin adapter around Agile Modbus request serialization and response extraction. CANopenNode is available behind the `ECU_ENABLE_CANOPENNODE` build option and now has a debugger-triggered command path for BC/BC2 bring-up. Project code should focus on object dictionaries, register maps, scaling and high-level control functions.
+
 Driver/service boundaries:
 
 - `ecu/drivers/can/include/can_bus_service.h`
@@ -161,11 +163,21 @@ Driver/service boundaries:
 - `ecu/drivers/adc/src/analog_input_service.c`
 - `ecu/drivers/uart/include/uart_comm_service.h`
 - `ecu/drivers/uart/src/uart_comm_service.c`
+- `ecu/drivers/uart/include/uart_rs485_hw.h`
+- `ecu/drivers/uart/src/uart_rs485_hw.c`
+- `ecu/drivers/uart/include/modbus_master_service.h`
+- `ecu/drivers/uart/src/modbus_master_service.c`
+- `ecu/drivers/canopen/include/canopen_master_service.h`
+- `ecu/drivers/canopen/src/canopen_master_service.c`
 
 Device adapters:
 
 - `ecu/devices/include/power_device.h`
 - `ecu/devices/src/power_device.c`
+- `ecu/devices/include/analog_modbus_device.h`
+- `ecu/devices/src/analog_modbus_device.c`
+- `ecu/devices/include/servo_drive_canopen.h`
+- `ecu/devices/src/servo_drive_canopen.c`
 - `ecu/devices/include/motion_device.h`
 - `ecu/devices/src/motion_device.c`
 - `ecu/devices/include/lift_hydraulic_device.h`
@@ -175,7 +187,7 @@ Device adapters:
 - `ecu/devices/include/warning_light_device.h`
 - `ecu/devices/src/warning_light_device.c`
 
-This layer is where current guessed hardware mapping lives. The services are stateful software boundaries now; later, the HPM SDK CAN/UART/GPIO/ADC calls should be connected behind these interfaces without changing remote/control/vehicle policy code.
+This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. RS485_1/UART11 is bound to a Modbus master service for the 8-channel analog acquisition module; RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. CANopenNode is staged behind an OD-dependent build switch and has a debugger-triggered command path that writes NMT/SDO commands only when `g_canopen_master_debug_control.command_sequence` changes. `servo_drive_canopen` remains the current device-level CiA 402 boundary for normal vehicle command fan-out; the CANopenNode command path is a bench/debug path for validating BC/BC2 objects before moving normal motion output onto the stack. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
 
 ## 8. Read CPU0/CPU1 data exchange
 

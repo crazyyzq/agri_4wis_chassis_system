@@ -30,6 +30,7 @@ typedef struct {
 
 void sbus_service_init(sbus_service_t *service, uint32_t timeout_ms);
 void sbus_service_feed_byte_from_isr(sbus_service_t *service, uint8_t byte, uint32_t now_ms);
+void sbus_service_note_rx_idle_from_isr(sbus_service_t *service);
 void sbus_service_note_uart_error_from_isr(sbus_service_t *service);
 void sbus_service_poll(sbus_service_t *service, uint32_t now_ms);
 void sbus_service_get_snapshot(const sbus_service_t *service, sbus_service_snapshot_t *out);

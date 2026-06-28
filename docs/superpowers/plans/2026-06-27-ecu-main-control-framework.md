@@ -389,7 +389,7 @@ Add static check that CPU1 app source does not include executor, CAN2 motion, br
 Create task names/periods/priorities matching the requirement:
 
 - `task_safety_supervisor`: 1 ms
-- `task_can2_motion`: 1-5 ms placeholder period set to 2 ms
+- `task_can2_motion`: 1-5 ms initial period set to 2 ms
 - `task_remote_manager`: 5 ms
 - `task_vehicle_control`: 5 ms
 - `task_can1_power`: 10 ms
@@ -397,11 +397,11 @@ Create task names/periods/priorities matching the requirement:
 - `task_io_service`: 10 ms
 - `task_diag_cpu0`: 100 ms
 
-Each task calls a small step function or placeholder hook and uses `vTaskDelayUntil`, never busy waits.
+Each task calls a small step function or named service hook and uses `vTaskDelayUntil`, never busy waits.
 
 - [ ] **Step 3: Implement CPU1 tasks**
 
-Create non-critical communication and logging task placeholders. CPU1 publishes only IPC snapshots and refuses direct safety-critical command APIs by dependency absence.
+Create non-critical communication and logging task shells. CPU1 publishes only IPC snapshots and refuses direct safety-critical command APIs by dependency absence.
 
 - [ ] **Step 4: Verify**
 

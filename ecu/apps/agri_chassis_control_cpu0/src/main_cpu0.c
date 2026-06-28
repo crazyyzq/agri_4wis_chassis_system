@@ -113,6 +113,7 @@ int main(void)
 {
     board_init();
     printf("\r\n[ECU] ECU CPU0 boot: agri_chassis_control_cpu0\r\n");
+    ecu_task_runtime_init(0U);
 
     bool tasks_ok = true;
     for (uint32_t index = 0U;

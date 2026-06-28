@@ -7,16 +7,14 @@ static uint16_t warning_light_value(indicator_mode_t mode)
 {
     switch (mode) {
     case INDICATOR_LEFT:
-        return 1U;
     case INDICATOR_RIGHT:
-        return 2U;
     case INDICATOR_HAZARD_USER:
-        return 3U;
+        return ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH;
     case INDICATOR_HAZARD_SAFETY:
-        return 4U;
+        return ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER;
     case INDICATOR_OFF:
     default:
-        return 0U;
+        return ECU_WARNING_LIGHT_VALUE_OFF;
     }
 }
 
@@ -43,7 +41,7 @@ ecu_device_apply_result_t warning_light_device_apply(warning_light_device_state_
 
     modbus_rtu_frame_t frame;
     bool ok = modbus_rtu_build_write_single_register(config->modbus_warning_light_slave_id,
-                                                     0U,
+                                                     config->modbus_warning_light_register,
                                                      warning_light_value(indicator_mode),
                                                      &frame) &&
               uart_comm_service_send(rs485, frame.data, frame.size);

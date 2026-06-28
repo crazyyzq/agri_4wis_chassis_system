@@ -22,7 +22,7 @@ void warning_light_device_init(warning_light_device_state_t *state);
 /* Send final indicator mode to the RS485 warning-light device.
  *
  * Units: indicator_mode is the final logical lamp state.
- * Dependencies: RS485 UART service and guessed Modbus slave ID from config.
+ * Dependencies: RS485 UART service and project Modbus slave ID from config.
  * Failure behavior: returns backend-offline when RS485 is unavailable; no
  * blocking retry is performed in this foreground call.
  */
