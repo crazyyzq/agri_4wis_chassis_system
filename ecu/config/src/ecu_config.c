@@ -57,11 +57,7 @@ static const ecu_hardware_config_t s_hardware_config = {
     .can2_bitrate = ECU_CAN2_MOTION_BITRATE,
     .can3_bitrate = ECU_CAN3_LIFT_HYDRAULIC_BITRATE,
     .can4_bitrate = ECU_CAN4_AUXILIARY_BITRATE,
-    .power_protocol = ECU_POWER_PROTOCOL_DISABLED,
-    .bms_node = CANOPEN_NODE_CONFIG(ECU_CANOPEN_BMS_NODE_ID),
-    .dcdc_48v_node = CANOPEN_NODE_CONFIG(ECU_CANOPEN_DCDC_48V_NODE_ID),
-    .dcdc_12v_node = CANOPEN_NODE_CONFIG(ECU_CANOPEN_DCDC_12V_NODE_ID),
-    .inverter_node = CANOPEN_NODE_CONFIG(ECU_CANOPEN_INVERTER_NODE_ID),
+    .power_protocol = ECU_POWER_PROTOCOL_SUPPLIER_CAN,
     .drive_nodes = {
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_DRIVE_FL_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_DRIVE_FR_NODE_ID),

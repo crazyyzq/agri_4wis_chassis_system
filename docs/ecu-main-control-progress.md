@@ -198,7 +198,8 @@ Hardware debug result on 2026-06-28:
 Engineering closure result on 2026-06-28:
 
 - CPU0 remote preconditions now come from `ecu_hardware_feedback_snapshot_t`; power-ready, low-voltage-ok and CAN1-online are no longer hardcoded true.
-- CAN1 power output defaults to `ECU_POWER_PROTOCOL_DISABLED`; an ON request returns `ECU_DEVICE_APPLY_UNCONFIGURED` until a supplier-backed protocol is selected and tested.
+- CAN1 power output now uses `ECU_POWER_PROTOCOL_SUPPLIER_CAN` by default. BMS, DCDC48, DCDC12 and DCAC use their documented 29-bit extended supplier CAN frames at 250 kbit/s.
+- `task_can1_power` owns CAN1 TX/RX, drains a CAN RX queue, decodes supplier feedback through `power_can_protocol`, and sends safe-off commands unless `final_command.high_voltage_enable` is true.
 - CPU0 runtime monitor now prints `[ECU HW]` with power, low-voltage, CAN1/CAN2/CAN3, brake, hydraulic and zero-speed feedback.
 - Active `ecu`, `docs` and `tests` files were scanned for informal uncertainty and transitional engineering wording; no matches remain outside historical Git context.
 - Local verification for this checkpoint:
@@ -213,10 +214,10 @@ Engineering closure result on 2026-06-28:
 ## Known open items
 
 - Replace or extend the DS301 minimum OD with the actual BC/BC2 servo-drive EDS/object dictionary if future PDO mapping or vendor-specific objects require local OD entries.
-- CAN1 power/BMS communication defaults to a disabled protocol backend until the BMS/DCDC/DCAC supplier protocol is selected. Current CANopen diagnostic work is bound to external CAN2 for BC/BC2 drive bring-up.
+- CAN1 BMS/DCDC/DCAC communication is implemented through the supplier CAN protocol. Final DCDC/DCAC voltage-current setpoints remain calibration values recorded in `docs/ecu-configuration-open-items.md`.
 - CAN3/CAN4 service boundaries still need to be connected to real HPM CAN controller TX/RX/ISR paths and their intended device protocols.
 - RS485_1 is now connected to a hardware Modbus master path for the 8AI ADC module. RS485_2/RS485_3 and RS232 service boundaries still need hardware protocol owners when their devices are selected.
-- Device-level control functions still need more supplier-specific detail from the real manuals: BC/BC2 scaling and enable sequence validation under main power, BMS/DCDC/DCAC CAN control words/status words and hydraulic relay mapping.
+- Device-level control functions still need more supplier-specific detail from the real manuals: BC/BC2 scaling and enable sequence validation under main power, final DCDC/DCAC setpoints and hydraulic relay mapping.
 - CPU0/CPU1 IPC transport still needs binding to the selected SDK multicore/RPMsg mechanism.
 - CANopen PDO/object mapping, relay polarity, hydraulic valve bits and analog channel order are currently project defaults and should be calibrated on the real vehicle.
 - Generated SES projects currently report that OpenOCD was not located, so debugger configuration must be set manually in SEGGER Embedded Studio unless OpenOCD is added to the SDK/tool PATH.

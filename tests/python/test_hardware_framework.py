@@ -20,7 +20,10 @@ def test_hardware_project_defaults_are_centralized(root: pathlib.Path) -> None:
         "ECU_CAN2_MOTION_BITRATE",
         "ECU_CAN3_LIFT_HYDRAULIC_BITRATE",
         "ECU_CAN4_AUXILIARY_BITRATE",
-        "ECU_CANOPEN_BMS_NODE_ID",
+        "ECU_POWER_BMS_COMMAND_PERIOD_MS",
+        "ECU_POWER_DCDC48_COMMAND_PERIOD_MS",
+        "ECU_POWER_DCDC12_COMMAND_PERIOD_MS",
+        "ECU_POWER_DCAC_COMMAND_PERIOD_MS",
         "ECU_CANOPEN_DRIVE_FL_NODE_ID",
         "ECU_CANOPEN_STEER_FL_NODE_ID",
         "ECU_DIO_BRAKE_RELEASE_MASK",
@@ -341,7 +344,6 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
 def test_executor_fans_out_only_through_device_adapters(root: pathlib.Path) -> None:
     executor = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
     required_calls = [
-        "power_device_apply",
         "motion_device_apply",
         "lift_hydraulic_device_apply",
         "local_io_device_apply",
@@ -349,6 +351,7 @@ def test_executor_fans_out_only_through_device_adapters(root: pathlib.Path) -> N
     ]
     for token in required_calls:
         assert token in executor, token
+    assert "executor->power_result" in executor
     for forbidden in ["hpm_can", "hpm_gpio", "board_", "HPM_CAN", "HPM_GPIO"]:
         assert forbidden not in executor, forbidden
 
@@ -506,7 +509,8 @@ def test_can2_bc_drive_debug_is_rx_only_hardware_bound(root: pathlib.Path) -> No
     assert "can_get_transmit_error_count" in can_hw_c
     assert "can_get_last_error_kind" in can_hw_c
     assert "SDK_DECLARE_EXT_ISR_M" in can_hw_c
-    assert "can_send_message" not in can_hw_c
+    assert "can_bus_hw_init_can2_rx_only" in can_hw_c
+    assert "can_bus_service_set_tx_backend(service, 0)" in can_hw_c
     assert "can_bus_service_note_rx_from_isr" in can_service_h
     assert "can_bus_service_note_error_from_isr" in can_service_h
     assert "can2_drive_debug" in tasks_c

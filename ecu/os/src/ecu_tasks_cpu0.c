@@ -11,6 +11,7 @@
 #include "ecu_tasks.h"
 #include "ipc_snapshot.h"
 #include "modbus_master_service.h"
+#include "power_device.h"
 #include "remote_discrete.h"
 #include "remote_manager.h"
 #include "runtime_monitor.h"
@@ -25,6 +26,9 @@ typedef struct {
     bool initialized;
     sbus_service_t sbus;
     sbus_service_snapshot_t sbus_snapshot;
+    can_bus_service_t can1_power;
+    power_device_state_t power_device;
+    power_device_snapshot_t power_snapshot;
     can_bus_service_t can2_drive_debug;
 #if ECU_ENABLE_CANOPENNODE
     canopen_master_service_t can2_canopen_diag;
@@ -72,6 +76,13 @@ void ecu_task_runtime_init(uint32_t now_ms)
         s_runtime.sbus.snapshot.uart_error_count++;
     }
     const ecu_hardware_config_t *hardware_config = ecu_hardware_config_default();
+    can_bus_service_init(&s_runtime.can1_power, hardware_config->can1_bitrate);
+    power_device_init(&s_runtime.power_device);
+    if (hardware_config->power_protocol == ECU_POWER_PROTOCOL_SUPPLIER_CAN &&
+        !can_bus_hw_init_can1_power(&s_runtime.can1_power,
+                                    hardware_config->can1_bitrate)) {
+        can_bus_service_note_error_from_isr(&s_runtime.can1_power);
+    }
 #if ECU_ENABLE_CANOPENNODE
     if (!canopen_master_service_init(&s_runtime.can2_canopen_diag,
                                      hardware_config->can2_bitrate,
@@ -216,6 +227,7 @@ static void refresh_can2_feedback(void)
 static void refresh_power_feedback(void)
 {
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
+    power_device_get_snapshot(&s_runtime.power_device, &s_runtime.power_snapshot);
 
     if (config->power_protocol == ECU_POWER_PROTOCOL_DISABLED) {
         s_runtime.hardware_feedback.power_ready = false;
@@ -224,9 +236,14 @@ static void refresh_power_feedback(void)
         return;
     }
 
-    s_runtime.hardware_feedback.power_ready = false;
-    s_runtime.hardware_feedback.low_voltage_ok = false;
-    s_runtime.hardware_feedback.can1_power_online = false;
+    s_runtime.hardware_feedback.power_ready = s_runtime.power_snapshot.power_ready;
+    s_runtime.hardware_feedback.low_voltage_ok = s_runtime.power_snapshot.low_voltage_ok;
+    s_runtime.hardware_feedback.can1_power_online =
+        s_runtime.power_snapshot.can1_online &&
+        (s_runtime.power_snapshot.bms_online ||
+         s_runtime.power_snapshot.dcdc48_online ||
+         s_runtime.power_snapshot.dcdc12_online ||
+         s_runtime.power_snapshot.dcac_online);
 }
 
 static void refresh_lift_hydraulic_feedback(void)
@@ -300,6 +317,21 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
            can2_snapshot.last_rx_data,
            sizeof(out->can2_last_rx_data));
 #endif
+    can_bus_service_t can1_snapshot;
+    can_bus_service_get_snapshot(&s_runtime.can1_power, &can1_snapshot);
+    out->can1_tx_count = can1_snapshot.tx_count;
+    out->can1_rx_count = can1_snapshot.rx_count;
+    out->can1_error_count = can1_snapshot.error_count;
+    out->can1_last_tx_id = can1_snapshot.last_tx_frame.id;
+    out->can1_last_tx_size = can1_snapshot.last_tx_frame.size;
+    out->can1_last_tx_extended = can1_snapshot.last_tx_frame.extended;
+    out->can1_last_rx_id = can1_snapshot.last_rx_frame.id;
+    out->can1_last_rx_size = can1_snapshot.last_rx_frame.size;
+    out->can1_last_rx_extended = can1_snapshot.last_rx_frame.extended;
+    memcpy(out->can1_last_rx_data,
+           can1_snapshot.last_rx_frame.data,
+           sizeof(out->can1_last_rx_data));
+    power_device_get_snapshot(&s_runtime.power_device, &out->power_snapshot);
     modbus_master_service_get_snapshot(&s_runtime.adc_modbus_master,
                                        &out->modbus_adc_master);
     out->analog_modbus_adc = s_runtime.analog_modbus_adc;
@@ -400,6 +432,18 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
 void ecu_task_can1_power_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
+    const ecu_hardware_config_t *hardware_config = ecu_hardware_config_default();
+    can_bus_hw_poll_can1_rx(&s_runtime.can1_power);
+    power_device_process_rx(&s_runtime.power_device,
+                            &s_runtime.can1_power,
+                            hardware_config,
+                            now_ms);
+    s_runtime.executor.power_result =
+        power_device_apply(&s_runtime.power_device,
+                           &s_runtime.can1_power,
+                           hardware_config,
+                           s_runtime.final_command.high_voltage_enable,
+                           now_ms);
     refresh_power_feedback();
 }
 

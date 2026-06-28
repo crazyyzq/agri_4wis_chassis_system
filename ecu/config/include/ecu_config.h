@@ -58,10 +58,27 @@
 #define ECU_CAN1_TERMINATION_ENABLE      (0)
 #define ECU_CAN2_TERMINATION_ENABLE      (0)
 
-#define ECU_CANOPEN_BMS_NODE_ID        (0x10U)
-#define ECU_CANOPEN_DCDC_48V_NODE_ID   (0x11U)
-#define ECU_CANOPEN_DCDC_12V_NODE_ID   (0x12U)
-#define ECU_CANOPEN_INVERTER_NODE_ID   (0x13U)
+#ifndef ECU_POWER_CAN_TX_ENABLE
+#define ECU_POWER_CAN_TX_ENABLE              (1)
+#endif
+#define ECU_POWER_ENABLE_BMS                 (1)
+#define ECU_POWER_ENABLE_DCDC48              (1)
+#define ECU_POWER_ENABLE_DCDC12              (1)
+#define ECU_POWER_ENABLE_DCAC                (1)
+#define ECU_POWER_BMS_COMMAND_PERIOD_MS      (20U)
+#define ECU_POWER_DCDC48_COMMAND_PERIOD_MS   (100U)
+#define ECU_POWER_DCDC12_COMMAND_PERIOD_MS   (200U)
+#define ECU_POWER_DCAC_COMMAND_PERIOD_MS     (500U)
+#define ECU_POWER_BMS_STATUS_TIMEOUT_MS      (250U)
+#define ECU_POWER_DCDC48_STATUS_TIMEOUT_MS   (500U)
+#define ECU_POWER_DCDC12_STATUS_TIMEOUT_MS   (1500U)
+#define ECU_POWER_DCAC_STATUS_TIMEOUT_MS     (1500U)
+#define ECU_DCDC48_DEFAULT_TERMINAL_VOLTAGE_DV (140U)
+#define ECU_DCDC48_DEFAULT_CURRENT_DA        (200U)
+#define ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV (275U)
+#define ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA (100U)
+#define ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV   (2200U)
+
 #define ECU_CANOPEN_DRIVE_FL_NODE_ID   (0x01U)
 #define ECU_CANOPEN_DRIVE_FR_NODE_ID   (0x02U)
 #define ECU_CANOPEN_DRIVE_RL_NODE_ID   (0x03U)
@@ -233,10 +250,6 @@ typedef struct {
     uint32_t can3_bitrate;
     uint32_t can4_bitrate;
     ecu_power_protocol_t power_protocol;
-    ecu_canopen_node_config_t bms_node;
-    ecu_canopen_node_config_t dcdc_48v_node;
-    ecu_canopen_node_config_t dcdc_12v_node;
-    ecu_canopen_node_config_t inverter_node;
     ecu_canopen_node_config_t drive_nodes[ECU_WHEEL_COUNT];
     ecu_canopen_node_config_t steer_nodes[ECU_WHEEL_COUNT];
     ecu_canopen_node_config_t lift_nodes[ECU_WHEEL_COUNT];
