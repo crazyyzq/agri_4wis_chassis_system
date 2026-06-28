@@ -184,6 +184,52 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can2_canopen_snapshot.command_error_count,
            (long)snapshot->can2_canopen_snapshot.last_error);
 
+    printf("[ECU CAN1] tx=%lu rx=%lu err=%lu last_tx_id=0x%08lx ext=%s dlc=%u "
+           "last_rx_id=0x%08lx ext=%s dlc=%u data=[",
+           (unsigned long)snapshot->can1_tx_count,
+           (unsigned long)snapshot->can1_rx_count,
+           (unsigned long)snapshot->can1_error_count,
+           (unsigned long)snapshot->can1_last_tx_id,
+           bool_text(snapshot->can1_last_tx_extended),
+           (unsigned int)snapshot->can1_last_tx_size,
+           (unsigned long)snapshot->can1_last_rx_id,
+           bool_text(snapshot->can1_last_rx_extended),
+           (unsigned int)snapshot->can1_last_rx_size);
+    for (uint32_t byte = 0U; byte < snapshot->can1_last_rx_size && byte < 8U; ++byte) {
+        if (byte > 0U) {
+            printf(" ");
+        }
+        printf("%02x", snapshot->can1_last_rx_data[byte]);
+    }
+    printf("]\r\n");
+
+    printf("[ECU POWER] hv_req=%s ready=%s lv_ok=%s online[bms=%s dcdc48=%s dcdc12=%s dcac=%s] "
+           "bms_soc=%u.%u%% bms_v=%lumV bms_i=%lddA bms_err=%u "
+           "dcdc48_v=%lumV dcdc48_i=%lumA dcdc48_err=%u "
+           "dcdc12_v=%lumV dcdc12_i=%lumA dcdc12_fault=%s "
+           "dcac_out=%lumV dcac_in=%lumV tx_cmd=%lu\r\n",
+           bool_text(snapshot->power_snapshot.high_voltage_requested),
+           bool_text(snapshot->power_snapshot.power_ready),
+           bool_text(snapshot->power_snapshot.low_voltage_ok),
+           bool_text(snapshot->power_snapshot.bms_online),
+           bool_text(snapshot->power_snapshot.dcdc48_online),
+           bool_text(snapshot->power_snapshot.dcdc12_online),
+           bool_text(snapshot->power_snapshot.dcac_online),
+           (unsigned int)(snapshot->power_snapshot.bms.soc_half_percent / 2U),
+           (unsigned int)((snapshot->power_snapshot.bms.soc_half_percent & 1U) ? 5U : 0U),
+           (unsigned long)snapshot->power_snapshot.bms.pack_voltage_dv * 100UL,
+           (long)snapshot->power_snapshot.bms.pack_current_da,
+           (unsigned int)snapshot->power_snapshot.bms_error.level,
+           (unsigned long)snapshot->power_snapshot.dcdc48.output_voltage_mv,
+           (unsigned long)snapshot->power_snapshot.dcdc48.output_current_ma,
+           (unsigned int)snapshot->power_snapshot.dcdc48.error_code,
+           (unsigned long)snapshot->power_snapshot.dcdc12.output_voltage_mv,
+           (unsigned long)snapshot->power_snapshot.dcdc12.output_current_ma,
+           bool_text(snapshot->power_snapshot.dcdc12.total_fault),
+           (unsigned long)snapshot->power_snapshot.dcac.output_voltage_mv,
+           (unsigned long)snapshot->power_snapshot.dcac_input.input_voltage_mv,
+           (unsigned long)snapshot->power_snapshot.command_tx_count);
+
     printf("[ECU MODBUS ADC] init=%s state=%u tx=%lu rx=%lu timeout=%lu err=%lu "
            "online=%s last=%lums raw=[",
            bool_text(snapshot->modbus_adc_master.initialized),

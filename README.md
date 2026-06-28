@@ -89,7 +89,7 @@ tools/                       静态检查工具
 
 所有当前需要现场确认的硬件值都应集中在 `ecu/config/include/ecu_config.h` 和 `ecu/config/src/ecu_config.c`：
 
-- `ECU_GUESS_*` 宏：CAN 波特率、CANopen 节点号、PDO 基准 COB-ID、Modbus 从站号、DIO 掩码、液压阀掩码、ADC 量程等。
+- `ECU_*` 配置宏：CAN 波特率、CANopen 节点号、PDO 基准 COB-ID、Modbus 从站号、DIO 掩码、液压阀掩码、ADC 量程、电源设备 CAN setpoint 等。
 - `ecu_hardware_config_default()`：把这些宏整理成默认硬件配置结构，供设备适配层使用。
 
 后续如果发现节点号、线束定义、继电器极性、ADC 量程或阀组位号不对，优先改这里，不要在 `remote`、`control`、`vehicle` 业务逻辑里写硬件魔法值。

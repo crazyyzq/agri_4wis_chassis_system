@@ -13,27 +13,29 @@ The project is a complete staged ECU control framework for the current bench-val
 - SBUS decoding, UART idle-interrupt reception, 16-channel runtime reporting and failsafe timing are present.
 - RS485_1 Modbus master support for the 8-channel analog module is present and reports raw values plus millivolts.
 - CAN2 CANopenNode diagnostic support for BC/BC2 is present, including gated NMT and SDO command-debug control through `g_canopen_master_debug_control`.
+- CAN1 supplier power-bus support for BMS, DCDC48, DCDC12 and DCAC is present with 29-bit extended frames at 250 kbit/s.
 - Device adapters are separated from remote/control logic. The vehicle executor is the only final command exit.
 - Hardware-dependent values are centralized in `ecu/config` and open calibration items are tracked in `docs/ecu-configuration-open-items.md`.
 - CPU0 debug UART reporting includes SBUS, CAN2/CANopen, Modbus ADC, hardware feedback and final command state.
 
 ## Safety boundary
 
-Unknown supplier protocols are not treated as implemented.
+Unconfigured supplier protocols are not treated as active.
 
-- CAN1 power/BMS/DCDC/DCAC defaults to `ECU_POWER_PROTOCOL_DISABLED`.
-- A high-voltage ON request through the power adapter returns `ECU_DEVICE_APPLY_UNCONFIGURED` until an explicit supplier protocol backend is selected and tested.
+- CAN1 power/BMS/DCDC/DCAC defaults to `ECU_POWER_PROTOCOL_SUPPLIER_CAN`.
+- A high-voltage ON request sends BMS contactor connect plus DCDC/DCAC enable commands only after safety clamping sets `final_command.high_voltage_enable`.
+- Without high-voltage request, the CAN1 power task continues sending documented disconnect/stop commands.
 - CPU0 remote preconditions read from `ecu_hardware_feedback_snapshot_t`; power-ready, low-voltage-ok and CAN1-online are no longer hardcoded true.
 - Unknown feedback starts safe-false, except static safe observations such as initial zero-speed and hydraulic-stopped.
 
 ## Remaining work before real vehicle operation
 
-- Select and implement the actual CAN1 power protocol for BMS, DCDC and DCAC/inverter.
+- Calibrate final DCDC48, DCDC12 and DCAC setpoints on the real vehicle.
 - Move normal motion output from raw-PDO backend usage to the selected CANopenNode/PDO design after final BC/BC2 EDS and PDO mapping are confirmed.
 - Connect CAN3/CAN4 hardware TX/RX/ISR paths and their target device protocols.
 - Bind CPU0/CPU1 IPC to the final SDK multicore transport.
 - Calibrate BC/BC2 scaling, steering zero offsets, wheel directions, lift scaling, hydraulic valve bits, relay polarity and analog channel order on the real machine.
-- Add supplier-backed tests for each confirmed power, hydraulic and lift protocol before enabling those outputs by default.
+- Add live-hardware validation records for each confirmed power, hydraulic and lift protocol before vehicle operation.
 
 ## Verification expected before commit
 

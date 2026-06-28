@@ -17,6 +17,7 @@
 #include "diag_codes.h"
 #include "ecu_types.h"
 #include "modbus_master_service.h"
+#include "power_device.h"
 #include "remote_types.h"
 
 typedef struct {
@@ -51,6 +52,17 @@ typedef struct {
     bool can2_canopen_initialized;
     canopen_master_snapshot_t can2_canopen_snapshot;
     canopen_master_debug_command_t canopen_command;
+    uint32_t can1_tx_count;
+    uint32_t can1_rx_count;
+    uint32_t can1_error_count;
+    uint32_t can1_last_tx_id;
+    uint8_t can1_last_tx_size;
+    bool can1_last_tx_extended;
+    uint32_t can1_last_rx_id;
+    uint8_t can1_last_rx_size;
+    bool can1_last_rx_extended;
+    uint8_t can1_last_rx_data[8];
+    power_device_snapshot_t power_snapshot;
     modbus_master_snapshot_t modbus_adc_master;
     analog_modbus_device_state_t analog_modbus_adc;
     ecu_hardware_feedback_snapshot_t hardware_feedback;

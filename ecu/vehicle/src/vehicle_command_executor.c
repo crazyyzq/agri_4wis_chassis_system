@@ -7,19 +7,16 @@
 #include "lift_hydraulic_device.h"
 #include "local_io_device.h"
 #include "motion_device.h"
-#include "power_device.h"
 #include "uart_comm_service.h"
 #include "vehicle_command_executor.h"
 #include "warning_light_device.h"
 
 typedef struct {
     bool initialized;
-    can_bus_service_t can1_power;
     can_bus_service_t can2_motion;
     can_bus_service_t can3_lift_hydraulic;
     dio_service_t dio;
     uart_comm_service_t rs485;
-    power_device_state_t power;
     motion_device_state_t motion;
     lift_hydraulic_device_state_t lift_hydraulic;
     local_io_device_state_t local_io;
@@ -34,14 +31,12 @@ static void vehicle_executor_runtime_init_once(void)
         return;
     }
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
-    can_bus_service_init(&s_runtime.can1_power, config->can1_bitrate);
     can_bus_service_init(&s_runtime.can2_motion, config->can2_bitrate);
     can_bus_service_init(&s_runtime.can3_lift_hydraulic, config->can3_bitrate);
     dio_service_init(&s_runtime.dio,
                      config->dio_active_high,
                      config->dio_managed_output_mask);
     uart_comm_service_init(&s_runtime.rs485, config->rs485_baudrate);
-    power_device_init(&s_runtime.power);
     motion_device_init(&s_runtime.motion);
     lift_hydraulic_device_init(&s_runtime.lift_hydraulic);
     local_io_device_init(&s_runtime.local_io);
@@ -73,10 +68,6 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
     }
     vehicle_executor_runtime_init_once();
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
-    executor->power_result = power_device_apply(&s_runtime.power,
-                                                &s_runtime.can1_power,
-                                                config,
-                                                command->high_voltage_enable);
     executor->motion_result = motion_device_apply(&s_runtime.motion,
                                                   &s_runtime.can2_motion,
                                                   config,
