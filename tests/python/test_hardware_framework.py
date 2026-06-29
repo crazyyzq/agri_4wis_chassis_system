@@ -178,7 +178,6 @@ def test_canopennode_can2_diagnostic_service_is_safe(root: pathlib.Path) -> None
     assert "#if ECU_ENABLE_CANOPENNODE" in tasks_c
     assert "canopen_master_service_init(&s_runtime.can2_canopen_diag" in tasks_c
     assert "canopen_master_service_process(&s_runtime.can2_canopen_diag" in tasks_c
-    assert "can_bus_hw_init_can2_rx_only" in tasks_c
     assert "can2_canopen_initialized" in monitor_h
     assert "ECU CANopen CAN2" in monitor_c
 
@@ -482,7 +481,7 @@ def test_sbus_uart1_idle_interrupt_is_bound_to_service(root: pathlib.Path) -> No
     assert "ECU SBUS" in monitor_c
 
 
-def test_can2_bc_drive_debug_is_rx_only_hardware_bound(root: pathlib.Path) -> None:
+def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> None:
     can_hw_h = read(root, "ecu/drivers/can/include/can_bus_hw.h")
     can_hw_c = read(root, "ecu/drivers/can/src/can_bus_hw.c")
     can_service_h = read(root, "ecu/drivers/can/include/can_bus_service.h")
@@ -495,10 +494,18 @@ def test_can2_bc_drive_debug_is_rx_only_hardware_bound(root: pathlib.Path) -> No
 
     assert re.search(r"#define\s+ECU_CAN1_POWER_BITRATE\s+\(250000UL\)", config_h)
     assert re.search(r"#define\s+ECU_CAN2_MOTION_BITRATE\s+\(1000000UL\)", config_h)
+    assert "ECU_CAN3_LIFT_HYDRAULIC_BITRATE" in config_h
     assert "can_bus_hw_init_can2_rx_only" in can_hw_h
+    assert "can_bus_hw_init_can2_motion" in can_hw_h
+    assert "can_bus_hw_init_can3_lift_hydraulic" in can_hw_h
     assert "can_bus_hw_poll_can2_rx" in can_hw_h
+    assert "can_bus_hw_poll_can3_rx" in can_hw_h
+    assert "can_bus_hw_send_can2_frame" in can_hw_h
+    assert "can_bus_hw_send_can3_frame" in can_hw_h
     assert "BOARD_CAN2_BASE" in can_hw_c
     assert "BOARD_CAN2_IRQn" in can_hw_c
+    assert "BOARD_CAN3_BASE" in can_hw_c
+    assert "BOARD_CAN3_IRQn" in can_hw_c
     assert "can_get_default_config" in can_hw_c
     assert "can_config.baudrate = bitrate" in can_hw_c
     assert "CAN_EVENT_RECEIVE" in can_hw_c
@@ -511,11 +518,16 @@ def test_can2_bc_drive_debug_is_rx_only_hardware_bound(root: pathlib.Path) -> No
     assert "SDK_DECLARE_EXT_ISR_M" in can_hw_c
     assert "can_bus_hw_init_can2_rx_only" in can_hw_c
     assert "can_bus_service_set_tx_backend(service, 0)" in can_hw_c
+    assert "can_bus_service_set_tx_backend(service, can_bus_hw_send_can2_frame)" in can_hw_c
+    assert "can_bus_service_set_tx_backend(service, can_bus_hw_send_can3_frame)" in can_hw_c
     assert "can_bus_service_note_rx_from_isr" in can_service_h
     assert "can_bus_service_note_error_from_isr" in can_service_h
-    assert "can2_drive_debug" in tasks_c
-    assert "can_bus_hw_init_can2_rx_only" in tasks_c
-    assert "can_bus_hw_poll_can2_rx(&s_runtime.can2_drive_debug)" in tasks_c
+    assert "can2_motion" in tasks_c
+    assert "can3_lift_hydraulic" in tasks_c
+    assert "can_bus_hw_init_can2_motion(&s_runtime.can2_motion" in tasks_c
+    assert "can_bus_hw_init_can3_lift_hydraulic(&s_runtime.can3_lift_hydraulic" in tasks_c
+    assert "can_bus_hw_poll_can2_rx(&s_runtime.can2_motion)" in tasks_c
+    assert "can_bus_hw_poll_can3_rx(&s_runtime.can3_lift_hydraulic)" in tasks_c
     assert "can2_rx_count" in monitor_h
     assert "can2_rx_buffer_status" in monitor_h
     assert "can2_receive_error_count" in monitor_h
@@ -534,7 +546,131 @@ def test_can_and_sbus_isr_snapshots_are_copied_atomically(root: pathlib.Path) ->
     assert "can_bus_service_get_snapshot" in can_service_h
     assert "taskENTER_CRITICAL" in can_service_c
     assert "taskEXIT_CRITICAL" in can_service_c
-    assert "can_bus_service_get_snapshot(&s_runtime.can2_drive_debug" in tasks_c
+    assert "can_bus_service_get_snapshot(&s_runtime.can2_motion" in tasks_c
+
+
+def test_rs4852_warning_light_protocol_is_hardware_bound(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    rs485_h = read(root, "ecu/drivers/uart/include/uart_rs485_hw.h")
+    rs485_c = read(root, "ecu/drivers/uart/src/uart_rs485_hw.c")
+    modbus_c = read(root, "ecu/drivers/uart/src/modbus_master_service.c")
+    warning_h = read(root, "ecu/devices/include/warning_light_device.h")
+    warning_c = read(root, "ecu/devices/src/warning_light_device.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    for token in [
+        "ECU_MODBUS_WARNING_LIGHT_BAUDRATE",
+        "ECU_MODBUS_WARNING_LIGHT_REQUEST_PERIOD_MS",
+        "ECU_MODBUS_WARNING_LIGHT_RESPONSE_TIMEOUT_MS",
+        "ECU_WARNING_LIGHT_VALUE_OFF",
+        "ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH",
+        "ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER",
+    ]:
+        assert token in config_h or token in config_c, token
+
+    for token in [
+        "uart_rs485_hw_send",
+        "uart_rs485_hw_read",
+        "uart_rs485_hw_clear_rx",
+        "uart_rs485_2_hw_init",
+        "uart_rs485_2_hw_isr",
+        "BOARD_RS485_2_UART_BASE",
+        "BOARD_RS485_2_UART_IRQ",
+        "BOARD_RS485_2_DE_GPIO_CTRL",
+    ]:
+        assert token in rs485_h or token in rs485_c, token
+
+    assert "uart_rs485_hw_send(uart" in modbus_c
+    assert "uart_rs485_hw_read(uart" in modbus_c
+    assert "uart_rs485_hw_clear_rx(uart" in modbus_c
+    assert "modbus_master_service_t *master" in warning_h
+    assert "modbus_master_service_process" in warning_c
+    assert "modbus_rtu_build_write_single_register" in warning_c
+    assert "config->modbus_warning_light_register" in warning_c
+    assert "rs485_2_hw" in tasks_c
+    assert "warning_light_modbus_master" in tasks_c
+    assert "uart_rs485_2_hw_init(&s_runtime.rs485_2_hw" in tasks_c
+
+
+def test_executor_uses_cpu0_owned_hardware_services(root: pathlib.Path) -> None:
+    executor_h = read(root, "ecu/vehicle/include/vehicle_command_executor.h")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    for token in [
+        "vehicle_executor_io_t",
+        "can_bus_service_t *can2_motion",
+        "can_bus_service_t *can3_lift_hydraulic",
+        "dio_service_t *dio",
+        "uart_rs485_hw_t *warning_light_uart",
+        "modbus_master_service_t *warning_light_modbus",
+    ]:
+        assert token in executor_h, token
+
+    for forbidden in [
+        "can_bus_service_init(&s_runtime.can2_motion",
+        "can_bus_service_init(&s_runtime.can3_lift_hydraulic",
+        "dio_service_init(&s_runtime.dio",
+        "uart_comm_service_init(&s_runtime.rs485",
+    ]:
+        assert forbidden not in executor_c, forbidden
+
+    assert "vehicle_executor_io_t executor_io" in tasks_c
+    assert ".can2_motion = &s_runtime.can2_motion" in tasks_c
+    assert ".can3_lift_hydraulic = &s_runtime.can3_lift_hydraulic" in tasks_c
+    assert ".dio = &s_runtime.dio" in tasks_c
+    assert ".warning_light_uart = &s_runtime.rs485_2_hw" in tasks_c
+    assert "vehicle_command_executor_apply(&s_runtime.executor, &executor_io" in tasks_c
+
+
+def test_dio_outputs_drive_board_gpio(root: pathlib.Path) -> None:
+    dio_h = read(root, "ecu/drivers/dio/include/dio_service.h")
+    dio_c = read(root, "ecu/drivers/dio/src/dio_service.c")
+    dio_hw_h = read(root, "ecu/drivers/dio/include/dio_hw.h")
+    dio_hw_c = read(root, "ecu/drivers/dio/src/dio_hw.c")
+    board_c = read(root, "ecu/ecu_isolation/board.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    assert "dio_service_apply_backend_t" in dio_h
+    assert "dio_service_set_apply_backend" in dio_h
+    assert "service->apply_backend" in dio_c
+    assert "dio_hw_attach_outputs" in dio_hw_h
+    assert "board_ecu_output_write" in dio_hw_c
+    assert "BOARD_ECU_OUTPUT_COUNT" in dio_hw_c
+    assert "board_ecu_output_write" in board_c
+    assert "dio_hw.c" in cmake
+    assert "dio_hw_attach_outputs(&s_runtime.dio)" in tasks_c
+
+
+def test_remote_command_generation_uses_sbus_analog_channels(root: pathlib.Path) -> None:
+    remote_h = read(root, "ecu/remote/include/remote_types.h")
+    manager_c = read(root, "ecu/remote/src/remote_manager.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "steer_per_mille",
+        "throttle_per_mille",
+        "clearance_per_mille",
+        "track_per_mille",
+        "r1_changed",
+        "r2_changed",
+    ]:
+        assert token in remote_h, token
+
+    assert "manager->request.steer_per_mille = input->steer_per_mille" in manager_c
+    assert "manager->request.throttle_per_mille = input->throttle_per_mille" in manager_c
+    assert "sbus_per_mille_from_raw" in tasks_c
+    assert "decode_error_limit =" in tasks_c
+    assert "credibility_error =" in tasks_c
+    assert "motion_control_build_candidate" in arbiter_c
+    assert "ECU_REMOTE_MAX_SPEED_KPH" in config_h
+    assert "ECU_REMOTE_MAX_STEER_DEG" in config_h
+    assert "ECU_REMOTE_MAX_HEIGHT_RATE_MM_S" in config_h
+    assert "ECU_REMOTE_MAX_TRACK_RATE_MM_S" in config_h
 
 
 def test_cpu0_runtime_initialization_is_explicit_and_keeps_hardware_init_out_of_critical(root: pathlib.Path) -> None:

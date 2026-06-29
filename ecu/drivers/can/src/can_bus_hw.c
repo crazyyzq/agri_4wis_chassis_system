@@ -14,6 +14,7 @@
 
 static can_bus_service_t *s_can1_service;
 static can_bus_service_t *s_can2_service;
+static can_bus_service_t *s_can3_service;
 
 static uint8_t can_bus_hw_size_from_dlc(uint8_t dlc)
 {
@@ -67,6 +68,10 @@ static bool can_bus_hw_init_classic_bus(CAN_Type *base,
         board_set_can_termination(1U, ECU_CAN1_TERMINATION_ENABLE != 0);
     } else if (bus_index == 2U) {
         board_set_can_termination(2U, ECU_CAN2_TERMINATION_ENABLE != 0);
+    } else if (bus_index == 3U) {
+        board_set_can_termination(3U, false);
+    } else if (bus_index == 4U) {
+        board_set_can_termination(4U, false);
     }
 
     can_config.baudrate = bitrate;
@@ -96,6 +101,7 @@ bool can_bus_hw_init_can1_power(can_bus_service_t *service, uint32_t bitrate)
 {
     if (!can_bus_hw_init_classic_bus(BOARD_CAN1_BASE, 1U, true, service, bitrate)) {
         s_can1_service = 0;
+        can_bus_service_set_online(service, false);
         return false;
     }
 
@@ -109,11 +115,41 @@ bool can_bus_hw_init_can2_rx_only(can_bus_service_t *service, uint32_t bitrate)
 {
     if (!can_bus_hw_init_classic_bus(BOARD_CAN2_BASE, 2U, false, service, bitrate)) {
         s_can2_service = 0;
+        can_bus_service_set_online(service, false);
         return false;
     }
 
     s_can2_service = service;
     intc_m_enable_irq_with_priority(BOARD_CAN2_IRQn, 2);
+    return true;
+}
+
+bool can_bus_hw_init_can2_motion(can_bus_service_t *service, uint32_t bitrate)
+{
+    if (!can_bus_hw_init_classic_bus(BOARD_CAN2_BASE, 2U, true, service, bitrate)) {
+        s_can2_service = 0;
+        can_bus_service_set_online(service, false);
+        return false;
+    }
+
+    s_can2_service = service;
+    can_bus_service_set_tx_backend(service, can_bus_hw_send_can2_frame);
+    intc_m_enable_irq_with_priority(BOARD_CAN2_IRQn, 2);
+    return true;
+}
+
+bool can_bus_hw_init_can3_lift_hydraulic(can_bus_service_t *service,
+                                         uint32_t bitrate)
+{
+    if (!can_bus_hw_init_classic_bus(BOARD_CAN3_BASE, 3U, true, service, bitrate)) {
+        s_can3_service = 0;
+        can_bus_service_set_online(service, false);
+        return false;
+    }
+
+    s_can3_service = service;
+    can_bus_service_set_tx_backend(service, can_bus_hw_send_can3_frame);
+    intc_m_enable_irq_with_priority(BOARD_CAN3_IRQn, 2);
     return true;
 }
 
@@ -151,7 +187,14 @@ void can_bus_hw_poll_can2_rx(can_bus_service_t *service)
     can_bus_hw_poll_rx(BOARD_CAN2_BASE, service);
 }
 
-bool can_bus_hw_send_can1_frame(const ecu_can_frame_t *frame)
+void can_bus_hw_poll_can3_rx(can_bus_service_t *service)
+{
+    can_bus_hw_poll_rx(BOARD_CAN3_BASE, service);
+}
+
+static bool can_bus_hw_send_frame(CAN_Type *base,
+                                  can_bus_service_t *service,
+                                  const ecu_can_frame_t *frame)
 {
     if (frame == 0 || frame->size > CAN_BUS_FRAME_MAX_DATA_BYTES) {
         return false;
@@ -170,17 +213,32 @@ bool can_bus_hw_send_can1_frame(const ecu_can_frame_t *frame)
     }
 
     hpm_stat_t status;
-    if (!can_is_primary_transmit_buffer_full(BOARD_CAN1_BASE)) {
-        status = can_send_high_priority_message_nonblocking(BOARD_CAN1_BASE, &tx_message);
+    if (!can_is_primary_transmit_buffer_full(base)) {
+        status = can_send_high_priority_message_nonblocking(base, &tx_message);
     } else {
-        status = can_send_message_nonblocking(BOARD_CAN1_BASE, &tx_message);
+        status = can_send_message_nonblocking(base, &tx_message);
     }
 
     if (status != status_success) {
-        can_bus_service_note_error_from_isr(s_can1_service);
+        can_bus_service_note_error_from_isr(service);
     }
-    can_bus_hw_update_status(s_can1_service, BOARD_CAN1_BASE);
+    can_bus_hw_update_status(service, base);
     return status == status_success;
+}
+
+bool can_bus_hw_send_can1_frame(const ecu_can_frame_t *frame)
+{
+    return can_bus_hw_send_frame(BOARD_CAN1_BASE, s_can1_service, frame);
+}
+
+bool can_bus_hw_send_can2_frame(const ecu_can_frame_t *frame)
+{
+    return can_bus_hw_send_frame(BOARD_CAN2_BASE, s_can2_service, frame);
+}
+
+bool can_bus_hw_send_can3_frame(const ecu_can_frame_t *frame)
+{
+    return can_bus_hw_send_frame(BOARD_CAN3_BASE, s_can3_service, frame);
 }
 
 static void can_bus_hw_handle_isr(CAN_Type *base, can_bus_service_t *service)
@@ -224,4 +282,10 @@ SDK_DECLARE_EXT_ISR_M(BOARD_CAN2_IRQn, can_bus_hw_can2_isr)
 void can_bus_hw_can2_isr(void)
 {
     can_bus_hw_handle_isr(BOARD_CAN2_BASE, s_can2_service);
+}
+
+SDK_DECLARE_EXT_ISR_M(BOARD_CAN3_IRQn, can_bus_hw_can3_isr)
+void can_bus_hw_can3_isr(void)
+{
+    can_bus_hw_handle_isr(BOARD_CAN3_BASE, s_can3_service);
 }

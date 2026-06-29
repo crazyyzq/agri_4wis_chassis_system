@@ -141,6 +141,12 @@ typedef struct {
     remote_position_t track;
     remote_position_t r1;
     remote_position_t r2;
+    int16_t steer_per_mille;
+    int16_t throttle_per_mille;
+    int16_t clearance_per_mille;
+    int16_t track_per_mille;
+    bool r1_changed;
+    bool r2_changed;
     remote_position_t left_indicator;
     remote_position_t right_indicator;
     remote_position_t hazard;
@@ -167,6 +173,10 @@ typedef struct {
     bool high_voltage_enable_request;
     bool orderly_shutdown_request;
     bool auto_control_allowed;
+    int16_t steer_per_mille;
+    int16_t throttle_per_mille;
+    int16_t clearance_per_mille;
+    int16_t track_per_mille;
     indicator_mode_t indicator_mode;
     bool horn_on;
     bool headlight_on;

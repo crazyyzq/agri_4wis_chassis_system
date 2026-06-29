@@ -31,72 +31,136 @@
 #define UART_RS485_DE_HOLD_US (2U)
 #endif
 
-static uart_rs485_hw_t *s_rs485_1;
+typedef struct {
+    UART_Type *base;
+    int32_t irq;
+    GPIO_Type *de_gpio_ctrl;
+    uint32_t de_gpio_index;
+    uint32_t de_gpio_pin;
+} uart_rs485_port_desc_t;
 
-static void uart_rs485_1_set_receive_direction(void)
+static const uart_rs485_port_desc_t s_rs485_ports[UART_RS485_HW_PORT_COUNT] = {
+    {
+        .base = BOARD_RS485_1_UART_BASE,
+        .irq = BOARD_RS485_1_UART_IRQ,
+        .de_gpio_ctrl = BOARD_RS485_1_DE_GPIO_CTRL,
+        .de_gpio_index = BOARD_RS485_1_DE_GPIO_INDEX,
+        .de_gpio_pin = BOARD_RS485_1_DE_GPIO_PIN,
+    },
+    {
+        .base = BOARD_RS485_2_UART_BASE,
+        .irq = BOARD_RS485_2_UART_IRQ,
+        .de_gpio_ctrl = BOARD_RS485_2_DE_GPIO_CTRL,
+        .de_gpio_index = BOARD_RS485_2_DE_GPIO_INDEX,
+        .de_gpio_pin = BOARD_RS485_2_DE_GPIO_PIN,
+    },
+};
+
+static uart_rs485_hw_t *s_rs485_services[UART_RS485_HW_PORT_COUNT];
+
+static const uart_rs485_port_desc_t *uart_rs485_get_desc(uint8_t port_index)
 {
+    if (port_index >= (uint8_t)UART_RS485_HW_PORT_COUNT) {
+        return 0;
+    }
+    return &s_rs485_ports[port_index];
+}
+
+static void uart_rs485_set_receive_direction(const uart_rs485_port_desc_t *desc)
+{
+    if (desc == 0) {
+        return;
+    }
 #if BOARD_RS485_DE_USING_GPIO
-    gpio_write_pin(BOARD_RS485_1_DE_GPIO_CTRL,
-                   BOARD_RS485_1_DE_GPIO_INDEX,
-                   BOARD_RS485_1_DE_GPIO_PIN,
+    gpio_write_pin(desc->de_gpio_ctrl,
+                   desc->de_gpio_index,
+                   desc->de_gpio_pin,
                    BOARD_RS485_RX_ENABLE_LEVEL);
 #endif
 }
 
-static void uart_rs485_1_set_transmit_direction(void)
+static void uart_rs485_set_transmit_direction(const uart_rs485_port_desc_t *desc)
 {
+    if (desc == 0) {
+        return;
+    }
 #if BOARD_RS485_DE_USING_GPIO
-    gpio_write_pin(BOARD_RS485_1_DE_GPIO_CTRL,
-                   BOARD_RS485_1_DE_GPIO_INDEX,
-                   BOARD_RS485_1_DE_GPIO_PIN,
+    gpio_write_pin(desc->de_gpio_ctrl,
+                   desc->de_gpio_index,
+                   desc->de_gpio_pin,
                    BOARD_RS485_TX_ENABLE_LEVEL);
 #endif
 }
 
-static void uart_rs485_note_line_status_errors(void)
+static void uart_rs485_1_set_receive_direction(void)
 {
-    uint32_t status = uart_get_status(BOARD_RS485_1_UART_BASE);
+    uart_rs485_set_receive_direction(&s_rs485_ports[UART_RS485_HW_PORT_1]);
+}
+
+static void uart_rs485_1_set_transmit_direction(void)
+{
+    uart_rs485_set_transmit_direction(&s_rs485_ports[UART_RS485_HW_PORT_1]);
+}
+
+static void uart_rs485_note_line_status_errors(uint8_t port_index)
+{
+    const uart_rs485_port_desc_t *desc = uart_rs485_get_desc(port_index);
+    uart_rs485_hw_t *service = port_index < (uint8_t)UART_RS485_HW_PORT_COUNT ?
+                               s_rs485_services[port_index] : 0;
+    if (desc == 0) {
+        return;
+    }
+
+    uint32_t status = uart_get_status(desc->base);
     const uint32_t error_mask = (uint32_t)uart_stat_overrun_error |
                                 (uint32_t)uart_stat_parity_error |
                                 (uint32_t)uart_stat_framing_error |
                                 (uint32_t)uart_stat_line_break |
                                 (uint32_t)uart_stat_rx_fifo_error;
 
-    if ((status & error_mask) != 0U && s_rs485_1 != 0) {
-        s_rs485_1->line_error_count++;
+    if ((status & error_mask) != 0U && service != 0) {
+        service->line_error_count++;
     }
 }
 
-static void uart_rs485_push_rx_byte(uint8_t byte)
+static void uart_rs485_push_rx_byte(uint8_t port_index, uint8_t byte)
 {
-    if (s_rs485_1 == 0) {
+    uart_rs485_hw_t *service = port_index < (uint8_t)UART_RS485_HW_PORT_COUNT ?
+                               s_rs485_services[port_index] : 0;
+    if (service == 0) {
         return;
     }
 
-    if (s_rs485_1->rx_size >= sizeof(s_rs485_1->rx_buffer)) {
-        s_rs485_1->rx_overflow_count++;
+    if (service->rx_size >= sizeof(service->rx_buffer)) {
+        service->rx_overflow_count++;
         return;
     }
 
-    s_rs485_1->rx_buffer[s_rs485_1->rx_head] = byte;
-    s_rs485_1->rx_head++;
-    if (s_rs485_1->rx_head >= sizeof(s_rs485_1->rx_buffer)) {
-        s_rs485_1->rx_head = 0U;
+    service->rx_buffer[service->rx_head] = byte;
+    service->rx_head++;
+    if (service->rx_head >= sizeof(service->rx_buffer)) {
+        service->rx_head = 0U;
     }
-    s_rs485_1->rx_size++;
-    s_rs485_1->rx_count++;
+    service->rx_size++;
+    service->rx_count++;
 }
 
-static void uart_rs485_drain_rx_fifo(void)
+static void uart_rs485_drain_rx_fifo(uint8_t port_index)
 {
+    const uart_rs485_port_desc_t *desc = uart_rs485_get_desc(port_index);
+    uart_rs485_hw_t *service = port_index < (uint8_t)UART_RS485_HW_PORT_COUNT ?
+                               s_rs485_services[port_index] : 0;
+    if (desc == 0) {
+        return;
+    }
+
     uint32_t drained = 0U;
-
-    while (uart_check_status(BOARD_RS485_1_UART_BASE, uart_stat_data_ready)) {
-        uart_rs485_push_rx_byte(uart_read_byte(BOARD_RS485_1_UART_BASE));
+    while (uart_check_status(desc->base, uart_stat_data_ready)) {
+        uart_rs485_push_rx_byte(port_index, uart_read_byte(desc->base));
         drained++;
         if (drained >= UART_RS485_MAX_BYTES_PER_ISR) {
-            if (s_rs485_1 != 0) {
-                s_rs485_1->line_error_count++;
+            if (service != 0) {
+                service->line_error_count++;
             }
             break;
         }
@@ -113,11 +177,13 @@ static uint32_t uart_rs485_char_time_us(uint32_t baudrate)
            baudrate;
 }
 
-static bool uart_rs485_wait_status(uart_stat_t status, uint32_t timeout_us)
+static bool uart_rs485_wait_status(UART_Type *base,
+                                   uart_stat_t status,
+                                   uint32_t timeout_us)
 {
     uint32_t elapsed_us = 0U;
 
-    while (!uart_check_status(BOARD_RS485_1_UART_BASE, status)) {
+    while (!uart_check_status(base, status)) {
         if (elapsed_us >= timeout_us) {
             return false;
         }
@@ -128,20 +194,24 @@ static bool uart_rs485_wait_status(uart_stat_t status, uint32_t timeout_us)
     return true;
 }
 
-bool uart_rs485_1_hw_init(uart_rs485_hw_t *service, uint32_t baudrate)
+static bool uart_rs485_hw_init_port(uart_rs485_hw_t *service,
+                                    uart_rs485_hw_port_t port,
+                                    uint32_t baudrate)
 {
+    const uart_rs485_port_desc_t *desc = uart_rs485_get_desc((uint8_t)port);
     uart_config_t config = {0};
 
-    if (service == 0 || baudrate == 0U) {
+    if (service == 0 || desc == 0 || baudrate == 0U) {
         return false;
     }
 
     memset(service, 0, sizeof(*service));
     service->baudrate = baudrate;
-    board_init_uart(BOARD_RS485_1_UART_BASE);
-    uart_default_config(BOARD_RS485_1_UART_BASE, &config);
+    service->port_index = (uint8_t)port;
+    board_init_uart(desc->base);
+    uart_default_config(desc->base, &config);
 
-    config.src_freq_in_hz = board_init_uart_clock(BOARD_RS485_1_UART_BASE);
+    config.src_freq_in_hz = board_init_uart_clock(desc->base);
     config.baudrate = baudrate;
     config.word_length = word_length_8_bits;
     config.parity = parity_none;
@@ -158,88 +228,119 @@ bool uart_rs485_1_hw_init(uart_rs485_hw_t *service, uint32_t baudrate)
     config.rxidle_config.threshold = 24U;
 #endif
 
-    hpm_stat_t stat = uart_init(BOARD_RS485_1_UART_BASE, &config);
+    hpm_stat_t stat = uart_init(desc->base, &config);
     if (stat != status_success) {
-        s_rs485_1 = 0;
+        s_rs485_services[(uint8_t)port] = 0;
         return false;
     }
 
 #if defined(HPM_IP_FEATURE_UART_DE_DELAY) && (HPM_IP_FEATURE_UART_DE_DELAY == 1)
-    uart_set_de_delay_before_start_bit(BOARD_RS485_1_UART_BASE, 1U);
-    uart_set_de_delay_after_stop_bit(BOARD_RS485_1_UART_BASE, 1U);
+    uart_set_de_delay_before_start_bit(desc->base, 1U);
+    uart_set_de_delay_after_stop_bit(desc->base, 1U);
 #endif
 
-    s_rs485_1 = service;
+    s_rs485_services[(uint8_t)port] = service;
     service->initialized = true;
-    uart_rs485_1_set_receive_direction();
-    uart_reset_rx_fifo(BOARD_RS485_1_UART_BASE);
-    uart_reset_tx_fifo(BOARD_RS485_1_UART_BASE);
-    uart_enable_irq(BOARD_RS485_1_UART_BASE,
+    if (port == UART_RS485_HW_PORT_1) {
+        uart_rs485_1_set_receive_direction();
+    } else {
+        uart_rs485_set_receive_direction(desc);
+    }
+    uart_reset_rx_fifo(desc->base);
+    uart_reset_tx_fifo(desc->base);
+    uart_enable_irq(desc->base,
                     uart_intr_rx_data_avail_or_timeout | uart_intr_rx_line_stat);
 
 #if defined(HPM_IP_FEATURE_UART_RX_IDLE_DETECT) && (HPM_IP_FEATURE_UART_RX_IDLE_DETECT == 1)
-    uart_clear_rxline_idle_flag(BOARD_RS485_1_UART_BASE);
-    uart_enable_irq(BOARD_RS485_1_UART_BASE, uart_intr_rx_line_idle);
+    uart_clear_rxline_idle_flag(desc->base);
+    uart_enable_irq(desc->base, uart_intr_rx_line_idle);
 #endif
 
-    intc_m_enable_irq_with_priority(BOARD_RS485_1_UART_IRQ,
+    intc_m_enable_irq_with_priority((uint32_t)desc->irq,
                                     ECU_RS485_UART_IRQ_PRIORITY);
     return true;
 }
 
-bool uart_rs485_1_hw_send(uart_rs485_hw_t *service,
-                          const uint8_t *data,
-                          size_t size)
+bool uart_rs485_1_hw_init(uart_rs485_hw_t *service, uint32_t baudrate)
 {
-    uint32_t char_time_us;
-    uint32_t slot_timeout_us;
-    uint32_t empty_timeout_us;
+    return uart_rs485_hw_init_port(service, UART_RS485_HW_PORT_1, baudrate);
+}
 
+bool uart_rs485_2_hw_init(uart_rs485_hw_t *service, uint32_t baudrate)
+{
+    return uart_rs485_hw_init_port(service, UART_RS485_HW_PORT_2, baudrate);
+}
+
+bool uart_rs485_hw_send(uart_rs485_hw_t *service,
+                        const uint8_t *data,
+                        size_t size)
+{
     if (service == 0 || !service->initialized || data == 0 || size == 0U) {
         return false;
     }
 
-    char_time_us = uart_rs485_char_time_us(service->baudrate);
-    slot_timeout_us = (char_time_us * 2U) + UART_RS485_TX_WAIT_MARGIN_US;
-    empty_timeout_us = ((uint32_t)size + 2U) * char_time_us +
-                       UART_RS485_TX_WAIT_MARGIN_US;
+    const uart_rs485_port_desc_t *desc = uart_rs485_get_desc(service->port_index);
+    if (desc == 0) {
+        return false;
+    }
 
-    /* HPM SDK uart_send_byte()/uart_flush() use a fixed short polling count.
-     * That is fine at high baud rates but can time out at 9600 baud before the
-     * next character slot opens.  RS485 Modbus uses low baud rates, so wait in
-     * real time and then write the hardware TX register. RS485_1 direction is
-     * controlled explicitly because HPM6750 SDK 1.11 does not expose automatic
-     * UART DE direction switching for this UART IP.
+    uint32_t char_time_us = uart_rs485_char_time_us(service->baudrate);
+    uint32_t slot_timeout_us = (char_time_us * 2U) + UART_RS485_TX_WAIT_MARGIN_US;
+    uint32_t empty_timeout_us = ((uint32_t)size + 2U) * char_time_us +
+                                UART_RS485_TX_WAIT_MARGIN_US;
+
+    /* HPM SDK uart_send_byte()/uart_flush() use a short polling count that can
+     * expire at 9600 baud.  Modbus RTU frames are small, so this driver waits
+     * in real time for each character slot and returns the transceiver to RX
+     * immediately after the final stop bit has left the shifter.
      */
-    uart_rs485_1_set_transmit_direction();
+    if (service->port_index == (uint8_t)UART_RS485_HW_PORT_1) {
+        uart_rs485_1_set_transmit_direction();
+    } else {
+        uart_rs485_set_transmit_direction(desc);
+    }
     board_delay_us(UART_RS485_DE_SETUP_US);
 
     for (size_t i = 0U; i < size; ++i) {
-        if (!uart_rs485_wait_status(uart_stat_tx_slot_avail,
+        if (!uart_rs485_wait_status(desc->base,
+                                    uart_stat_tx_slot_avail,
                                     slot_timeout_us)) {
             service->line_error_count++;
-            uart_rs485_1_set_receive_direction();
+            if (service->port_index == (uint8_t)UART_RS485_HW_PORT_1) {
+                uart_rs485_1_set_receive_direction();
+            } else {
+                uart_rs485_set_receive_direction(desc);
+            }
             return false;
         }
-        uart_write_byte(BOARD_RS485_1_UART_BASE, data[i]);
+        uart_write_byte(desc->base, data[i]);
     }
 
-    if (!uart_rs485_wait_status(uart_stat_transmitter_empty,
+    if (!uart_rs485_wait_status(desc->base,
+                                uart_stat_transmitter_empty,
                                 empty_timeout_us)) {
         service->line_error_count++;
-        uart_rs485_1_set_receive_direction();
+        if (service->port_index == (uint8_t)UART_RS485_HW_PORT_1) {
+            uart_rs485_1_set_receive_direction();
+        } else {
+            uart_rs485_set_receive_direction(desc);
+        }
         return false;
     }
 
     board_delay_us(UART_RS485_DE_HOLD_US);
-    uart_rs485_1_set_receive_direction();
+    if (service->port_index == (uint8_t)UART_RS485_HW_PORT_1) {
+        uart_rs485_1_set_receive_direction();
+    } else {
+        uart_rs485_set_receive_direction(desc);
+    }
     service->tx_count += (uint32_t)size;
     return true;
 }
 
-size_t uart_rs485_1_hw_read(uart_rs485_hw_t *service,
-                            uint8_t *out,
-                            size_t max_size)
+size_t uart_rs485_hw_read(uart_rs485_hw_t *service,
+                          uint8_t *out,
+                          size_t max_size)
 {
     size_t copied = 0U;
 
@@ -262,37 +363,75 @@ size_t uart_rs485_1_hw_read(uart_rs485_hw_t *service,
     return copied;
 }
 
-void uart_rs485_1_hw_clear_rx(uart_rs485_hw_t *service)
+void uart_rs485_hw_clear_rx(uart_rs485_hw_t *service)
 {
     if (service == 0) {
         return;
     }
 
+    const uart_rs485_port_desc_t *desc = uart_rs485_get_desc(service->port_index);
     taskENTER_CRITICAL();
     service->rx_size = 0U;
     service->rx_head = 0U;
     service->rx_tail = 0U;
-    uart_reset_rx_fifo(BOARD_RS485_1_UART_BASE);
+    if (desc != 0) {
+        uart_reset_rx_fifo(desc->base);
+    }
     taskEXIT_CRITICAL();
+}
+
+bool uart_rs485_1_hw_send(uart_rs485_hw_t *service,
+                          const uint8_t *data,
+                          size_t size)
+{
+    return uart_rs485_hw_send(service, data, size);
+}
+
+size_t uart_rs485_1_hw_read(uart_rs485_hw_t *service,
+                            uint8_t *out,
+                            size_t max_size)
+{
+    return uart_rs485_hw_read(service, out, max_size);
+}
+
+void uart_rs485_1_hw_clear_rx(uart_rs485_hw_t *service)
+{
+    uart_rs485_hw_clear_rx(service);
+}
+
+static void uart_rs485_hw_handle_isr(uint8_t port_index)
+{
+    const uart_rs485_port_desc_t *desc = uart_rs485_get_desc(port_index);
+    if (desc == 0) {
+        return;
+    }
+
+    uint8_t irq_id = uart_get_irq_id(desc->base);
+
+    uart_rs485_note_line_status_errors(port_index);
+
+    if ((irq_id == uart_intr_id_rx_data_avail) ||
+        (irq_id == uart_intr_id_rx_timeout) ||
+        uart_check_status(desc->base, uart_stat_data_ready)) {
+        uart_rs485_drain_rx_fifo(port_index);
+    }
+
+#if defined(HPM_IP_FEATURE_UART_RX_IDLE_DETECT) && (HPM_IP_FEATURE_UART_RX_IDLE_DETECT == 1)
+    if (uart_is_rxline_idle(desc->base)) {
+        uart_rs485_drain_rx_fifo(port_index);
+        uart_clear_rxline_idle_flag(desc->base);
+    }
+#endif
 }
 
 SDK_DECLARE_EXT_ISR_M(BOARD_RS485_1_UART_IRQ, uart_rs485_1_hw_isr)
 void uart_rs485_1_hw_isr(void)
 {
-    uint8_t irq_id = uart_get_irq_id(BOARD_RS485_1_UART_BASE);
+    uart_rs485_hw_handle_isr((uint8_t)UART_RS485_HW_PORT_1);
+}
 
-    uart_rs485_note_line_status_errors();
-
-    if ((irq_id == uart_intr_id_rx_data_avail) ||
-        (irq_id == uart_intr_id_rx_timeout) ||
-        uart_check_status(BOARD_RS485_1_UART_BASE, uart_stat_data_ready)) {
-        uart_rs485_drain_rx_fifo();
-    }
-
-#if defined(HPM_IP_FEATURE_UART_RX_IDLE_DETECT) && (HPM_IP_FEATURE_UART_RX_IDLE_DETECT == 1)
-    if (uart_is_rxline_idle(BOARD_RS485_1_UART_BASE)) {
-        uart_rs485_drain_rx_fifo();
-        uart_clear_rxline_idle_flag(BOARD_RS485_1_UART_BASE);
-    }
-#endif
+SDK_DECLARE_EXT_ISR_M(BOARD_RS485_2_UART_IRQ, uart_rs485_2_hw_isr)
+void uart_rs485_2_hw_isr(void)
+{
+    uart_rs485_hw_handle_isr((uint8_t)UART_RS485_HW_PORT_2);
 }

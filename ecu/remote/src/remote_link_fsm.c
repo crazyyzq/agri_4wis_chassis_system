@@ -28,6 +28,18 @@ void remote_link_fsm_update(remote_link_fsm_t *fsm, const remote_input_snapshot_
         fsm->diagnostic = DIAG_REMOTE_ESTOP_FAILSAFE;
         return;
     }
+    if (input->decode_error_limit) {
+        fsm->state = REMOTE_LINK_FAILSAFE;
+        fsm->qualify_since_ms = input->now_ms;
+        fsm->diagnostic = DIAG_REMOTE_ESTOP_DECODE_ERRORS;
+        return;
+    }
+    if (input->credibility_error) {
+        fsm->state = REMOTE_LINK_FAILSAFE;
+        fsm->qualify_since_ms = input->now_ms;
+        fsm->diagnostic = DIAG_REMOTE_ESTOP_CREDIBILITY;
+        return;
+    }
     if (!input->sbus_valid) {
         fsm->state = REMOTE_LINK_OFFLINE;
         fsm->qualify_since_ms = input->now_ms;

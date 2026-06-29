@@ -40,7 +40,13 @@ bool can_bus_service_send_frame(can_bus_service_t *service,
         return false;
     }
 
-    if (service->tx_backend != 0 && !service->tx_backend(frame)) {
+    if (service->tx_backend == 0) {
+        service->error_count++;
+        service->diagnostic = DIAG_UNKNOWN;
+        return false;
+    }
+
+    if (!service->tx_backend(frame)) {
         service->error_count++;
         service->diagnostic = DIAG_UNKNOWN;
         return false;

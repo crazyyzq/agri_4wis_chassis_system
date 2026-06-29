@@ -1,22 +1,17 @@
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "command_arbiter.h"
-#include "can_bus_service.h"
-#include "dio_service.h"
 #include "ecu_config.h"
 #include "lift_hydraulic_device.h"
 #include "local_io_device.h"
 #include "motion_device.h"
-#include "uart_comm_service.h"
 #include "vehicle_command_executor.h"
 #include "warning_light_device.h"
 
 typedef struct {
     bool initialized;
-    can_bus_service_t can2_motion;
-    can_bus_service_t can3_lift_hydraulic;
-    dio_service_t dio;
-    uart_comm_service_t rs485;
     motion_device_state_t motion;
     lift_hydraulic_device_state_t lift_hydraulic;
     local_io_device_state_t local_io;
@@ -30,13 +25,6 @@ static void vehicle_executor_runtime_init_once(void)
     if (s_runtime.initialized) {
         return;
     }
-    const ecu_hardware_config_t *config = ecu_hardware_config_default();
-    can_bus_service_init(&s_runtime.can2_motion, config->can2_bitrate);
-    can_bus_service_init(&s_runtime.can3_lift_hydraulic, config->can3_bitrate);
-    dio_service_init(&s_runtime.dio,
-                     config->dio_active_high,
-                     config->dio_managed_output_mask);
-    uart_comm_service_init(&s_runtime.rs485, config->rs485_baudrate);
     motion_device_init(&s_runtime.motion);
     lift_hydraulic_device_init(&s_runtime.lift_hydraulic);
     local_io_device_init(&s_runtime.local_io);
@@ -61,32 +49,41 @@ void vehicle_command_executor_init(vehicle_executor_state_t *executor)
 }
 
 bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
-                                    const vehicle_actuator_command_t *command)
+                                    const vehicle_executor_io_t *io,
+                                    const vehicle_actuator_command_t *command,
+                                    uint32_t now_ms)
 {
-    if (executor == 0 || command == 0) {
+    const ecu_hardware_config_t *config = ecu_hardware_config_default();
+
+    if (executor == 0 || io == 0 || command == 0 ||
+        io->can2_motion == 0 || io->can3_lift_hydraulic == 0 ||
+        io->dio == 0 || io->warning_light_uart == 0 ||
+        io->warning_light_modbus == 0) {
         return false;
     }
+
     vehicle_executor_runtime_init_once();
-    const ecu_hardware_config_t *config = ecu_hardware_config_default();
     executor->motion_result = motion_device_apply(&s_runtime.motion,
-                                                  &s_runtime.can2_motion,
+                                                  io->can2_motion,
                                                   config,
                                                   command);
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
-                                    &s_runtime.can3_lift_hydraulic,
-                                    &s_runtime.dio,
+                                    io->can3_lift_hydraulic,
+                                    io->dio,
                                     config,
                                     command);
     executor->local_io_result = local_io_device_apply(&s_runtime.local_io,
-                                                      &s_runtime.dio,
+                                                      io->dio,
                                                       config,
                                                       command);
     executor->warning_light_result =
         warning_light_device_apply(&s_runtime.warning_light,
-                                   &s_runtime.rs485,
+                                   io->warning_light_modbus,
+                                   io->warning_light_uart,
                                    config,
-                                   command->indicator_mode);
+                                   command->indicator_mode,
+                                   now_ms);
     executor->last_command = *command;
     executor->applied_sequence++;
     return executor->power_result == ECU_DEVICE_APPLY_OK &&

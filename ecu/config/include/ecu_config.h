@@ -24,6 +24,9 @@
 #define ECU_SBUS_RAW_HIGH_MIN            (1950U)
 #define ECU_SBUS_RAW_NEUTRAL             (1500U)
 #define ECU_SBUS_RAW_THROTTLE_START      (1900U)
+#define ECU_SBUS_RAW_CREDIBLE_MIN        (100U)
+#define ECU_SBUS_RAW_CREDIBLE_MAX        (2200U)
+#define ECU_SBUS_DECODE_ERROR_LIMIT      (10U)
 
 #define ECU_CPU0_SAFETY_PERIOD_MS        (1U)
 #define ECU_CPU0_CAN2_MOTION_PERIOD_MS   (2U)
@@ -155,9 +158,18 @@
 #define ECU_MODBUS_ADC_RESPONSE_TIMEOUT_MS (100U)
 #define ECU_MODBUS_WARNING_LIGHT_SLAVE_ID (0xFFU)
 #define ECU_MODBUS_WARNING_LIGHT_REGISTER (0x00C2U)
+#define ECU_MODBUS_WARNING_LIGHT_BAUDRATE (9600UL)
+#define ECU_MODBUS_WARNING_LIGHT_REQUEST_PERIOD_MS (100U)
+#define ECU_MODBUS_WARNING_LIGHT_RESPONSE_TIMEOUT_MS (100U)
 #define ECU_WARNING_LIGHT_VALUE_OFF (0x0060U)
 #define ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH (0x0022U)
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
+#define ECU_REMOTE_MAX_SPEED_KPH          (6.0f)
+#define ECU_REMOTE_MAX_STEER_DEG          (35.0f)
+#define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
+#define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (400.0f)
+#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
+#define ECU_REMOTE_MAX_TRACK_RATE_MM_S    (20.0f)
 #define ECU_RS485_BAUDRATE          (115200UL)
 #define ECU_RS232_BAUDRATE          (115200UL)
 #define ECU_SBUS_UART_RX_IDLE_BITS  (24U)
@@ -278,6 +290,9 @@ typedef struct {
     uint32_t modbus_adc_response_timeout_ms;
     uint8_t modbus_warning_light_slave_id;
     uint16_t modbus_warning_light_register;
+    uint32_t modbus_warning_light_baudrate;
+    uint32_t modbus_warning_light_request_period_ms;
+    uint32_t modbus_warning_light_response_timeout_ms;
     uint32_t rs485_baudrate;
     uint32_t rs232_baudrate;
     float drive_speed_kph_to_counts_per_sec;

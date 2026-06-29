@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #include "ecu_time.h"
 #include "remote_mode_fsm.h"
 
@@ -49,9 +51,11 @@ void remote_mode_fsm_update(remote_mode_fsm_t *fsm,
         return;
     }
     if (!ecu_time_elapsed(input->now_ms, fsm->domain_guard_until_ms, 0U)) {
-        return; /* HOME domain guard suppresses old R1/R2 events. */
+        return; /* HOME domain guard requires a new R1/R2 edge after settling. */
     }
-    if (input->r1 != REMOTE_POS_HIGH && input->r2 != REMOTE_POS_HIGH) {
+    bool fresh_r1_event = input->r1 == REMOTE_POS_HIGH && input->r1_changed;
+    bool fresh_r2_event = input->r2 == REMOTE_POS_HIGH && input->r2_changed;
+    if (!fresh_r1_event && !fresh_r2_event) {
         return;
     }
     if (!mode_preconditions_ok(preconditions)) {
@@ -61,10 +65,10 @@ void remote_mode_fsm_update(remote_mode_fsm_t *fsm,
     }
     fsm->active_domain = fsm->requested_domain;
     if (fsm->requested_domain == ECU_HOME_DOMAIN_SPECIAL) {
-        fsm->requested_motion_mode = input->r1 == REMOTE_POS_HIGH ?
+        fsm->requested_motion_mode = fresh_r1_event ?
                                      ECU_MOTION_MODE_SPIN : ECU_MOTION_MODE_CRAB;
     } else {
-        fsm->requested_motion_mode = input->r1 == REMOTE_POS_HIGH ?
+        fsm->requested_motion_mode = fresh_r1_event ?
                                      ECU_MOTION_MODE_POSITIVE_ACKERMANN :
                                      ECU_MOTION_MODE_REVERSE_ACKERMANN;
     }
