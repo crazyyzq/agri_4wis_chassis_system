@@ -16,25 +16,89 @@ static int32_t scaled_float_to_i32(float value, float scale)
     return (int32_t)scaled;
 }
 
-static bool send_lift_command(can_bus_service_t *can3,
+static bool send_lift_command(canopen_master_service_t *canopen,
                               const ecu_canopen_node_config_t *node,
                               float height_mm,
                               float height_rate_mm_s,
-                              float lift_scale)
+                              float lift_scale,
+                              uint16_t positive_limit_mask,
+                              uint16_t negative_limit_mask)
 {
     uint16_t control_word = (height_rate_mm_s == 0.0f) ?
                             SERVO_DRIVE_CONTROL_QUICK_STOP :
                             SERVO_DRIVE_CONTROL_ENABLE_OPERATION;
+    uint16_t input_states = 0U;
+    if (servo_drive_canopen_read_input_states(canopen, node, &input_states)) {
+        bool positive_limit = (input_states & positive_limit_mask) != 0U;
+        bool negative_limit = (input_states & negative_limit_mask) != 0U;
+        if ((height_rate_mm_s > 0.0f && positive_limit) ||
+            (height_rate_mm_s < 0.0f && negative_limit)) {
+            return servo_drive_canopen_send_control_word(canopen,
+                                                         node,
+                                                         SERVO_DRIVE_CONTROL_QUICK_STOP);
+        }
+    }
+
     int32_t height_counts = scaled_float_to_i32(height_mm, lift_scale);
 
-    return servo_drive_canopen_select_mode(can3,
+    return servo_drive_canopen_select_mode(canopen,
                                            node,
                                            control_word,
                                            SERVO_DRIVE_MODE_PROFILE_POSITION) &&
-           servo_drive_canopen_set_target_position(can3,
+           servo_drive_canopen_set_target_position(canopen,
                                                    node,
                                                    control_word,
                                                    height_counts);
+}
+
+static bool send_hydraulic_pump_command(canopen_master_service_t *canopen,
+                                        const ecu_canopen_node_config_t *node,
+                                        bool hydraulic_enable)
+{
+    uint16_t control_word = hydraulic_enable ?
+                            SERVO_DRIVE_CONTROL_ENABLE_OPERATION :
+                            SERVO_DRIVE_CONTROL_QUICK_STOP;
+    int32_t velocity_counts = hydraulic_enable ?
+                              ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_COUNTS_PER_SEC :
+                              0;
+
+    return servo_drive_canopen_select_mode(canopen,
+                                           node,
+                                           control_word,
+                                           SERVO_DRIVE_MODE_PROFILE_VELOCITY) &&
+           servo_drive_canopen_set_target_velocity(canopen,
+                                                   node,
+                                                   control_word,
+                                                   velocity_counts);
+}
+
+static uint16_t brake_active_mask(bool brake_release, uint16_t output_mask)
+{
+    bool canopen_active = brake_release ?
+                          (ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U) :
+                          (ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT == 0U);
+    return canopen_active ? output_mask : 0U;
+}
+
+static uint16_t lift_axis_brake_output_mask(uint32_t wheel)
+{
+    return (wheel % 2U) == 0U ?
+           SERVO_DRIVE_OUTPUT_OUT1_MASK :
+           SERVO_DRIVE_OUTPUT_OUT4_MASK;
+}
+
+static uint16_t lift_axis_positive_limit_mask(uint32_t wheel)
+{
+    return (wheel % 2U) == 0U ?
+           SERVO_DRIVE_INPUT_IN2_MASK :
+           SERVO_DRIVE_INPUT_IN7_MASK;
+}
+
+static uint16_t lift_axis_negative_limit_mask(uint32_t wheel)
+{
+    return (wheel % 2U) == 0U ?
+           SERVO_DRIVE_INPUT_IN3_MASK :
+           SERVO_DRIVE_INPUT_IN8_MASK;
 }
 
 static uint32_t valve_mask_from_track_rate(const ecu_hardware_config_t *config,
@@ -49,6 +113,24 @@ static uint32_t valve_mask_from_track_rate(const ecu_hardware_config_t *config,
     return 0U;
 }
 
+static bool command_source_allows_lift_output(ecu_command_source_t source)
+{
+    return source == COMMAND_SOURCE_REMOTE ||
+           source == COMMAND_SOURCE_AUTO ||
+           source == COMMAND_SOURCE_MAINTENANCE ||
+           source == COMMAND_SOURCE_CPU1 ||
+           source == COMMAND_SOURCE_SAFETY;
+}
+
+static bool lift_command_changed(const lift_hydraulic_device_state_t *state,
+                                 const vehicle_actuator_command_t *command)
+{
+    return !state->last_lift_command_valid ||
+           state->last_lift_command.target_height_mm != command->target_height_mm ||
+           state->last_lift_command.height_rate_mm_s != command->height_rate_mm_s ||
+           state->last_lift_command.source != command->source;
+}
+
 void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state)
 {
     if (state != 0) {
@@ -58,26 +140,61 @@ void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state)
 }
 
 ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_state_t *state,
-                                                      can_bus_service_t *can3,
+                                                      canopen_master_service_t *canopen,
                                                       dio_service_t *dio,
                                                       const ecu_hardware_config_t *config,
                                                       const vehicle_actuator_command_t *command)
 {
-    if (state == 0 || can3 == 0 || dio == 0 || config == 0 || command == 0) {
+    if (state == 0 || canopen == 0 || dio == 0 || config == 0 || command == 0) {
         return ECU_DEVICE_APPLY_INVALID_ARGUMENT;
     }
-    if (!can3->online) {
+    if (!canopen->snapshot.initialized || !canopen->snapshot.can_normal) {
         state->last_result = ECU_DEVICE_APPLY_BACKEND_OFFLINE;
         return state->last_result;
     }
 
     bool ok = true;
-    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        ok = send_lift_command(can3,
-                               &config->lift_nodes[wheel],
-                               command->target_height_mm,
-                               command->height_rate_mm_s,
-                               config->lift_mm_to_counts) && ok;
+    if (command_source_allows_lift_output(command->source) &&
+        lift_command_changed(state, command)) {
+        uint16_t front_output_mask = 0U;
+        uint16_t front_active_mask = 0U;
+        uint16_t rear_output_mask = 0U;
+        uint16_t rear_active_mask = 0U;
+        bool lift_brake_release = command->height_rate_mm_s != 0.0f;
+
+        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+            uint16_t output_mask = lift_axis_brake_output_mask(wheel);
+            if (wheel < 2U) {
+                front_output_mask |= output_mask;
+                front_active_mask |= brake_active_mask(lift_brake_release, output_mask);
+            } else {
+                rear_output_mask |= output_mask;
+                rear_active_mask |= brake_active_mask(lift_brake_release, output_mask);
+            }
+
+            ok = send_lift_command(canopen,
+                                   &config->lift_nodes[wheel],
+                                   command->target_height_mm,
+                                   command->height_rate_mm_s,
+                                   config->lift_mm_to_counts,
+                                   lift_axis_positive_limit_mask(wheel),
+                                   lift_axis_negative_limit_mask(wheel)) && ok;
+        }
+        ok = servo_drive_canopen_set_output_state(canopen,
+                                                  &config->lift_nodes[0],
+                                                  front_output_mask,
+                                                  front_active_mask) && ok;
+        ok = servo_drive_canopen_set_output_state(canopen,
+                                                  &config->lift_nodes[2],
+                                                  rear_output_mask,
+                                                  rear_active_mask) && ok;
+        ok = send_hydraulic_pump_command(canopen,
+                                         &config->hydraulic_pump_node,
+                                         command->hydraulic_enable) && ok;
+        state->last_lift_command = *command;
+        state->last_lift_command_valid = true;
+    } else {
+        state->skipped_lift_canopen_count++;
     }
 
     uint32_t valve_mask = command->hydraulic_valve_mask |

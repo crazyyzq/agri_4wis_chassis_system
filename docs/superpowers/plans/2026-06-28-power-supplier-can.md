@@ -178,7 +178,7 @@ Expected: at least one failure from `test_power_supplier_can.py` reporting missi
 
 - [ ] **Step 1: Add `ecu_can_frame_t` and `can_bus_service_send_frame`**
 
-The service records 11-bit and 29-bit classic CAN frames and calls an optional TX backend. `can_bus_service_send_canopen` converts the CANopen frame to a standard `ecu_can_frame_t`.
+The service records 11-bit and 29-bit classic CAN frames and calls an optional TX backend. CANopen traffic is owned by CANopenNode services, not by this generic CAN frame service.
 
 - [ ] **Step 2: Add CAN1 RX/TX hardware functions**
 

@@ -31,7 +31,7 @@ Unconfigured supplier protocols are not treated as active.
 ## Remaining work before real vehicle operation
 
 - Calibrate final DCDC48, DCDC12 and DCAC setpoints on the real vehicle.
-- Move normal motion output from raw-PDO backend usage to the selected CANopenNode/PDO design after final BC/BC2 EDS and PDO mapping are confirmed.
+- Validate normal motion output on CAN2 and lift output on CAN3 through the CANopenNode SDO command queue, then optimize selected high-rate objects with confirmed PDO mapping if the BC/BC2 EDS requires it.
 - Connect CAN3/CAN4 hardware TX/RX/ISR paths and their target device protocols.
 - Bind CPU0/CPU1 IPC to the final SDK multicore transport.
 - Calibrate BC/BC2 scaling, steering zero offsets, wheel directions, lift scaling, hydraulic valve bits, relay polarity and analog channel order on the real machine.
@@ -47,4 +47,4 @@ python tools\check_no_forbidden_patterns.py
 python -m py_compile tools\can\controlcan.py tools\can\can2_monitor.py tools\modbus\rtu_probe.py tools\modbus\rtu_codec.py tools\modbus\virtual_adc_module.py
 ```
 
-Build CPU0 in both default and CANopenNode modes, and build CPU1 if its project files are present. When hardware is connected, download the selected CPU0 image through J-Link and confirm COM9 boot/runtime output.
+Build CPU0 with the default CANopenNode-enabled configuration, and build CPU1 if its project files are present. When hardware is connected, download the selected CPU0 image through J-Link and confirm COM9 boot/runtime output.

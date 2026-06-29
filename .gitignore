@@ -4,6 +4,7 @@
 # Build and generated output
 /tmp/
 /build/
+**/build/
 **/*_build/
 **/CMakeFiles/
 **/CMakeCache.txt

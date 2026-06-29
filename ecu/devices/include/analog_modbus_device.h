@@ -8,7 +8,6 @@
 #include "analog_input_service.h"
 #include "ecu_config.h"
 #include "modbus_master_service.h"
-#include "modbus_rtu.h"
 #include "uart_rs485_hw.h"
 
 typedef struct {
@@ -24,7 +23,7 @@ typedef struct {
 void analog_modbus_device_init(analog_modbus_device_state_t *state);
 
 bool analog_modbus_device_build_request(const ecu_hardware_config_t *config,
-                                        modbus_rtu_frame_t *out);
+                                        modbus_master_request_t *out);
 
 bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
                                          analog_input_service_t *analog_inputs,

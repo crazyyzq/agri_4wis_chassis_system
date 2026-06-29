@@ -7,10 +7,10 @@
 #ifndef USER_CONFIG_H
 #define USER_CONFIG_H
 
-/* The current CANopenNode diagnostic build owns only CAN2. Additional CANopen
- * networks must be added deliberately, with separate runtime state and IRQ
- * ownership.
+/* CPU0 owns two independent CANopenNode networks:
+ * - CAN2: drive and steering BC/BC2 servo drives.
+ * - CAN3: lift servo drives and hydraulic-related CANopen devices.
  */
-#define MAX_CANOPEN_DEVICE (1U)
+#define MAX_CANOPEN_DEVICE (2U)
 
 #endif /* USER_CONFIG_H */

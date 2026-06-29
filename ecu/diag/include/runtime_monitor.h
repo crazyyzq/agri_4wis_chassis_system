@@ -51,6 +51,8 @@ typedef struct {
     uint8_t can2_last_rx_data[8];
     bool can2_canopen_initialized;
     canopen_master_snapshot_t can2_canopen_snapshot;
+    bool can3_canopen_initialized;
+    canopen_master_snapshot_t can3_canopen_snapshot;
     canopen_master_debug_command_t canopen_command;
     uint32_t can1_tx_count;
     uint32_t can1_rx_count;

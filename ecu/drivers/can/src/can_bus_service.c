@@ -58,29 +58,6 @@ bool can_bus_service_send_frame(can_bus_service_t *service,
     return true;
 }
 
-bool can_bus_service_send_canopen(can_bus_service_t *service,
-                                  const canopen_frame_t *frame)
-{
-    if (service == 0 || frame == 0 || frame->size > CANOPEN_FRAME_MAX_DATA_BYTES) {
-        return false;
-    }
-
-    ecu_can_frame_t service_frame;
-    memset(&service_frame, 0, sizeof(service_frame));
-    service_frame.id = frame->cob_id;
-    service_frame.size = frame->size;
-    service_frame.extended = false;
-    service_frame.remote = false;
-    memcpy(service_frame.data, frame->data, frame->size);
-
-    if (!can_bus_service_send_frame(service, &service_frame)) {
-        return false;
-    }
-
-    service->last_tx = *frame;
-    return true;
-}
-
 void can_bus_service_note_rx_from_isr(can_bus_service_t *service,
                                       uint32_t id,
                                       bool extended,

@@ -5,8 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "modbus_rtu.h"
+#include "agile_modbus.h"
+#include "agile_modbus_rtu.h"
 #include "uart_rs485_hw.h"
+
+#define MODBUS_MASTER_MAX_ADU_BYTES (AGILE_MODBUS_RTU_MAX_ADU_LENGTH)
 
 typedef enum {
     MODBUS_MASTER_STATE_IDLE = 0,
@@ -16,6 +19,11 @@ typedef enum {
 typedef bool (*modbus_master_response_handler_t)(void *context,
                                                  const uint8_t *adu,
                                                  size_t adu_size);
+
+typedef struct {
+    uint8_t data[MODBUS_MASTER_MAX_ADU_BYTES];
+    size_t size;
+} modbus_master_request_t;
 
 typedef struct {
     bool initialized;
@@ -34,7 +42,7 @@ typedef struct {
     uint32_t request_period_ms;
     uint32_t response_timeout_ms;
     uint32_t response_deadline_ms;
-    uint8_t rx_buffer[MODBUS_RTU_MAX_ADU_BYTES];
+    uint8_t rx_buffer[MODBUS_MASTER_MAX_ADU_BYTES];
     size_t rx_size;
     size_t expected_response_size;
 } modbus_master_service_t;
@@ -46,7 +54,7 @@ void modbus_master_service_init(modbus_master_service_t *service,
 void modbus_master_service_process(modbus_master_service_t *service,
                                    uart_rs485_hw_t *uart,
                                    uint32_t now_ms,
-                                   const modbus_rtu_frame_t *request,
+                                   const modbus_master_request_t *request,
                                    size_t expected_response_size,
                                    modbus_master_response_handler_t handler,
                                    void *handler_context);

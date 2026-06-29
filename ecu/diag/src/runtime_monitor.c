@@ -184,6 +184,28 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can2_canopen_snapshot.command_error_count,
            (long)snapshot->can2_canopen_snapshot.last_error);
 
+    printf("[ECU CANopen CAN3] init=%s state=%u normal=%s bitrate=%lu local=%u remote=%u "
+           "proc=%lu sdo_ok=%lu sdo_abort=%lu dl_ok=%lu dl_abort=%lu queued=%lu dropped=%lu "
+           "last=0x%04x:%u size=%u value=%ld last_err=%ld\r\n",
+           bool_text(snapshot->can3_canopen_initialized),
+           (unsigned int)snapshot->can3_canopen_snapshot.state,
+           bool_text(snapshot->can3_canopen_snapshot.can_normal),
+           (unsigned long)snapshot->can3_canopen_snapshot.bitrate,
+           (unsigned int)snapshot->can3_canopen_snapshot.local_node_id,
+           (unsigned int)snapshot->can3_canopen_snapshot.remote_node_id,
+           (unsigned long)snapshot->can3_canopen_snapshot.process_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.sdo_upload_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.sdo_abort_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.sdo_download_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.sdo_download_abort_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.queued_command_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.dropped_command_count,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_download_index,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_download_subindex,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_download_size,
+           (long)snapshot->can3_canopen_snapshot.last_download_value,
+           (long)snapshot->can3_canopen_snapshot.last_error);
+
     printf("[ECU CAN1] tx=%lu rx=%lu err=%lu last_tx_id=0x%08lx ext=%s dlc=%u "
            "last_rx_id=0x%08lx ext=%s dlc=%u data=[",
            (unsigned long)snapshot->can1_tx_count,

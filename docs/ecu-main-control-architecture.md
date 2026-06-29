@@ -148,12 +148,12 @@ These modules convert high-level requests into normalized command structures. Th
 
 Protocol helpers:
 
-- `ecu/protocol/canopen/include/canopen_frame.h`
-- `ecu/protocol/canopen/src/canopen_frame.c`
-- `ecu/protocol/modbus/include/modbus_rtu.h`
-- `ecu/protocol/modbus/src/modbus_rtu.c`
+- `ecu/drivers/canopen/include/canopen_master_service.h`
+- `ecu/drivers/canopen/src/canopen_master_service.c`
+- HPM SDK `CANopenNode`
+- HPM SDK `agile_modbus`
 
-CANopen and Modbus must use proven middleware instead of growing a project-local protocol stack. CPU0 enables HPM SDK `agile_modbus` RTU, and the local `modbus_rtu` wrapper is only a thin adapter around Agile Modbus request serialization and response extraction. CANopenNode is available behind the `ECU_ENABLE_CANOPENNODE` build option and now has a debugger-triggered command path for BC/BC2 bring-up. Project code should focus on object dictionaries, register maps, scaling and high-level control functions.
+CANopen and Modbus use proven middleware instead of a project-local protocol stack. CPU0 enables HPM SDK `CANopenNode` for both CAN2 and CAN3, and enables HPM SDK `agile_modbus` for RS485_1 analog acquisition and RS485_2 warning-light control. Project code focuses on object indexes, register maps, scaling and high-level control functions.
 
 Driver/service boundaries:
 
@@ -193,7 +193,7 @@ Device adapters:
 - `ecu/devices/include/warning_light_device.h`
 - `ecu/devices/src/warning_light_device.c`
 
-This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. CAN2 is the default TX/RX BC/BC2 motion bus, with the older RX-only CAN2 binding kept for passive analyzer bring-up. CAN3 is now TX/RX-capable for lift/hydraulic devices. DIO service polarity conversion is connected to the 12 isolated board outputs through `dio_hw`. RS485_1/UART11 is bound to a Modbus master service for the 8-channel analog acquisition module; RS485_2/UART12 is bound to the warning-light Modbus RTU direct-control protocol. RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. CANopenNode is staged behind an OD-dependent build switch and has a debugger-triggered command path that writes NMT/SDO commands only when `g_canopen_master_debug_control.command_sequence` changes. `servo_drive_canopen` remains the current device-level CiA 402 boundary for normal vehicle command fan-out; the CANopenNode command path is a bench/debug path for validating BC/BC2 objects before moving normal motion output onto the stack. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
+This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. CAN2 is the CANopenNode BC/BC2 motion network, and CAN3 is the CANopenNode lift/hydraulic network. DIO service polarity conversion is connected to the 12 isolated board outputs through `dio_hw`. RS485_1/UART11 is bound to a Modbus master transport service for the 8-channel analog acquisition module; RS485_2/UART12 is bound to the warning-light Agile Modbus direct-control protocol. RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. `servo_drive_canopen` remains the device-level CiA 402 boundary for normal vehicle command fan-out and delegates NMT/SDO requests to `canopen_master_service`. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
 
 ## 8. Read CPU0/CPU1 data exchange
 

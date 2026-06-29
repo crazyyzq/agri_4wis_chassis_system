@@ -56,7 +56,7 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
 
     if (executor == 0 || io == 0 || command == 0 ||
-        io->can2_motion == 0 || io->can3_lift_hydraulic == 0 ||
+        io->can2_motion_canopen == 0 || io->can3_lift_hydraulic_canopen == 0 ||
         io->dio == 0 || io->warning_light_uart == 0 ||
         io->warning_light_modbus == 0) {
         return false;
@@ -64,12 +64,12 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
 
     vehicle_executor_runtime_init_once();
     executor->motion_result = motion_device_apply(&s_runtime.motion,
-                                                  io->can2_motion,
+                                                  io->can2_motion_canopen,
                                                   config,
                                                   command);
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
-                                    io->can3_lift_hydraulic,
+                                    io->can3_lift_hydraulic_canopen,
                                     io->dio,
                                     config,
                                     command);
