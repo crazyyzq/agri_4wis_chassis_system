@@ -69,6 +69,10 @@ void remote_manager_update(remote_manager_t *manager,
     manager->request.high_voltage_enable_request = manager->power.high_voltage_enable_request;
     manager->request.orderly_shutdown_request = manager->power.orderly_shutdown_request;
     manager->request.auto_control_allowed = manager->authority.auto_control_allowed;
+    manager->request.steer_per_mille = input->steer_per_mille;
+    manager->request.throttle_per_mille = input->throttle_per_mille;
+    manager->request.clearance_per_mille = input->clearance_per_mille;
+    manager->request.track_per_mille = input->track_per_mille;
     manager->request.indicator_mode = manager->lights.indicator_mode;
     manager->request.horn_on = manager->lights.horn_on;
     manager->request.headlight_on = manager->lights.headlight_on;

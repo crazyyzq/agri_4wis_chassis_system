@@ -40,12 +40,12 @@ static void modbus_master_start_request(modbus_master_service_t *service,
         return;
     }
 
-    uart_rs485_1_hw_clear_rx(uart);
+    uart_rs485_hw_clear_rx(uart);
     memset(service->rx_buffer, 0, sizeof(service->rx_buffer));
     service->rx_size = 0U;
     service->expected_response_size = expected_response_size;
 
-    if (!uart_rs485_1_hw_send(uart, request->data, request->size)) {
+    if (!uart_rs485_hw_send(uart, request->data, request->size)) {
         service->snapshot.error_count++;
         return;
     }
@@ -114,10 +114,9 @@ void modbus_master_service_process(modbus_master_service_t *service,
         }
 
         if (service->rx_size < target_size) {
-            service->rx_size += uart_rs485_1_hw_read(
-                uart,
-                &service->rx_buffer[service->rx_size],
-                target_size - service->rx_size);
+            service->rx_size += uart_rs485_hw_read(uart,
+                                                   &service->rx_buffer[service->rx_size],
+                                                   target_size - service->rx_size);
         }
 
         if (service->expected_response_size > 0U &&

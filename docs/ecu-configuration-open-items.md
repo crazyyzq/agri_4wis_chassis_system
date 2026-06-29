@@ -16,6 +16,14 @@ This file records project defaults that need final confirmation from vehicle wir
 
 ## Items requiring vehicle calibration
 
+- Remote manual driving limits:
+  - `ECU_REMOTE_MAX_SPEED_KPH`
+  - `ECU_REMOTE_MAX_STEER_DEG`
+  - `ECU_REMOTE_MIN_HEIGHT_TARGET_MM`
+  - `ECU_REMOTE_MAX_HEIGHT_TARGET_MM`
+  - `ECU_REMOTE_MAX_HEIGHT_RATE_MM_S`
+  - `ECU_REMOTE_MAX_TRACK_RATE_MM_S`
+  - These defaults are safe software calibration values and should be matched to the chassis geometry, actuator limits and test-site safety plan.
 - DCDC48 command setpoints: current default follows the document example, `14.0 V` and `20.0 A`, controlled by `ECU_DCDC48_DEFAULT_TERMINAL_VOLTAGE_DV` and `ECU_DCDC48_DEFAULT_CURRENT_DA`.
 - DCDC12 command setpoints: current default follows the document example, `27.5 V` and `10.0 A`, controlled by `ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV` and `ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA`.
 - DCAC output voltage: current default is `220.0 V`, controlled by `ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV`.
@@ -24,4 +32,4 @@ This file records project defaults that need final confirmation from vehicle wir
 - Relay/MOS digital output polarity and final managed-output bit masks.
 - Hydraulic valve bit mapping and electrical interlock requirements.
 - ADC module channel order and final analog scaling per sensor. Current default follows the 8AI module: slave 1, 9600 baud, function 04, input registers 0..7, raw 0..65535 to 0..5000 mV.
-- Warning-light RS485 Modbus address and supported lamp modes for the exact installed model. Current default uses slave `0xFF`, direct-control register `0x00C2` and named values from the supplied manual.
+- Warning-light RS485 Modbus address and supported lamp modes for the exact installed model. Current default uses 9600 8N1, slave `0xFF`, function 06, direct-control register `0x00C2` and named values from the supplied manual.

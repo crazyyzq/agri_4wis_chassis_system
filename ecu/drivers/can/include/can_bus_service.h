@@ -61,8 +61,8 @@ void can_bus_service_set_tx_backend(can_bus_service_t *service,
 
 /* Send one classic CAN 2.0 frame through the service backend.
  *
- * The service owns validation and accounting. Hardware-specific transmission is
- * optional and is supplied by can_bus_hw for buses that can transmit.
+ * The service owns validation and accounting. Hardware-specific transmission
+ * must be supplied by can_bus_hw before the service can accept TX requests.
  */
 bool can_bus_service_send_frame(can_bus_service_t *service,
                                 const ecu_can_frame_t *frame);

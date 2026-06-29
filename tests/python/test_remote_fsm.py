@@ -87,13 +87,34 @@ def test_remote_source_has_required_safety_logic_names(root: pathlib.Path) -> No
 
 def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> None:
     types = read(root, "ecu/remote/include/remote_types.h")
-    for token in ["clearance", "power", "authority", "track", "ch13_estop"]:
+    for token in [
+        "clearance",
+        "power",
+        "authority",
+        "track",
+        "ch13_estop",
+        "r1_changed",
+        "r2_changed",
+    ]:
         assert token in types, token
 
     adjust = read(root, "ecu/remote/src/remote_adjust_fsm.c")
     assert "input->clearance" in adjust
     assert "input->track" in adjust
     assert "DIAG_REJECT_ADJUST_OWNER_CONFLICT" in adjust
+
+
+def test_mode_fsm_requires_fresh_r1_r2_event(root: pathlib.Path) -> None:
+    mode_c = read(root, "ecu/remote/src/remote_mode_fsm.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    assert "input->r1_changed" in mode_c
+    assert "input->r2_changed" in mode_c
+    assert "fresh_r1_event" in mode_c
+    assert "fresh_r2_event" in mode_c
+    assert "old R1/R2 events" not in mode_c
+    assert "out->r1_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R1].changed" in tasks_c
+    assert "out->r2_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R2].changed" in tasks_c
 
 
 def test_remote_event_lifetimes_are_configured(root: pathlib.Path) -> None:

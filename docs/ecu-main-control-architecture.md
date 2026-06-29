@@ -50,7 +50,7 @@ Then read:
 - `ecu/os/src/ecu_tasks_cpu0.c`
 - `ecu/os/src/ecu_tasks_cpu1.c`
 
-The CPU0 task file is the wiring layer. It samples inputs, updates state machines, arbitrates commands, applies safety, calls the executor and refreshes snapshots. CPU1 must not include executor, safety manager or hardware command headers.
+The CPU0 task file is the wiring layer. It samples inputs, updates state machines, arbitrates commands, applies safety, calls the executor and refreshes snapshots. CPU0 owns the real CAN2, CAN3, DIO, RS485_1 and RS485_2 service instances and passes them into the executor through `vehicle_executor_io_t`. CPU1 must not include executor, safety manager or hardware command headers.
 
 ## 2. Read shared types and configuration
 
@@ -111,6 +111,8 @@ Then read the individual FSM files:
 
 Remote code must never include board headers, device headers or executor headers. It only produces a `remote_control_request_t`.
 
+SBUS analog values are kept alongside the discrete channel states. `steer_per_mille`, `throttle_per_mille`, `clearance_per_mille` and `track_per_mille` flow from `ecu_tasks_cpu0.c` through `remote_manager.c` into the final arbiter. R1/R2 mode events require a fresh stable edge after HOME domain selection, so an old switch position cannot change the motion mode after the guard expires.
+
 ## 5. Read vehicle arbitration and safety
 
 Files:
@@ -157,6 +159,10 @@ Driver/service boundaries:
 
 - `ecu/drivers/can/include/can_bus_service.h`
 - `ecu/drivers/can/src/can_bus_service.c`
+- `ecu/drivers/can/include/can_bus_hw.h`
+- `ecu/drivers/can/src/can_bus_hw.c`
+- `ecu/drivers/dio/include/dio_hw.h`
+- `ecu/drivers/dio/src/dio_hw.c`
 - `ecu/drivers/dio/include/dio_service.h`
 - `ecu/drivers/dio/src/dio_service.c`
 - `ecu/drivers/adc/include/analog_input_service.h`
@@ -187,7 +193,7 @@ Device adapters:
 - `ecu/devices/include/warning_light_device.h`
 - `ecu/devices/src/warning_light_device.c`
 
-This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. RS485_1/UART11 is bound to a Modbus master service for the 8-channel analog acquisition module; RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. CANopenNode is staged behind an OD-dependent build switch and has a debugger-triggered command path that writes NMT/SDO commands only when `g_canopen_master_debug_control.command_sequence` changes. `servo_drive_canopen` remains the current device-level CiA 402 boundary for normal vehicle command fan-out; the CANopenNode command path is a bench/debug path for validating BC/BC2 objects before moving normal motion output onto the stack. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
+This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. CAN2 is the default TX/RX BC/BC2 motion bus, with the older RX-only CAN2 binding kept for passive analyzer bring-up. CAN3 is now TX/RX-capable for lift/hydraulic devices. DIO service polarity conversion is connected to the 12 isolated board outputs through `dio_hw`. RS485_1/UART11 is bound to a Modbus master service for the 8-channel analog acquisition module; RS485_2/UART12 is bound to the warning-light Modbus RTU direct-control protocol. RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. CANopenNode is staged behind an OD-dependent build switch and has a debugger-triggered command path that writes NMT/SDO commands only when `g_canopen_master_debug_control.command_sequence` changes. `servo_drive_canopen` remains the current device-level CiA 402 boundary for normal vehicle command fan-out; the CANopenNode command path is a bench/debug path for validating BC/BC2 objects before moving normal motion output onto the stack. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
 
 ## 8. Read CPU0/CPU1 data exchange
 
