@@ -1,15 +1,18 @@
 #ifndef MOTION_DEVICE_H
 #define MOTION_DEVICE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
-#include "can_bus_service.h"
+#include "canopen_master_service.h"
 #include "ecu_config.h"
 #include "ecu_types.h"
 #include "vehicle_types.h"
 
 typedef struct {
     uint32_t apply_count;
+    uint32_t skipped_count;
+    bool last_motion_command_valid;
     ecu_device_apply_result_t last_result;
     vehicle_actuator_command_t last_motion_command;
 } motion_device_state_t;
@@ -29,7 +32,7 @@ void motion_device_init(motion_device_state_t *state);
  * wheel commands; safety decisions are not made here.
  */
 ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
-                                              can_bus_service_t *can2,
+                                              canopen_master_service_t *canopen,
                                               const ecu_hardware_config_t *config,
                                               const vehicle_actuator_command_t *command);
 

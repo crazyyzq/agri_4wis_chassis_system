@@ -61,8 +61,8 @@ This file records the durable implementation state for the main-branch control f
   - CPU1 Ninja build passed and produced `demo.elf`.
 - Configurable hardware adapter framework:
   - CAN bitrates, CANopen node IDs, PDO COB-ID bases, DIO masks, hydraulic valve masks, ADC scaling, Modbus addresses and UART baud rates are centralized behind `ECU_*` macros and `ecu_hardware_config_default()`. Calibration-open values are tracked in `docs/ecu-configuration-open-items.md`.
-  - CPU0 has an `ECU_ENABLE_CANOPENNODE` build switch for HPM SDK `CANopenNode`; the current diagnostic build uses the project-generated DS301 minimum OD from `doc/ECU/DS301_OD`. Project code should use CANopenNode for PDO/SDO/NMT/heartbeat handling instead of adding a local CANopen stack.
-  - CPU0 now enables HPM SDK `agile_modbus` RTU; the project-local `modbus_rtu` module is only a compatibility wrapper that serializes requests and extracts read-input-register responses through Agile Modbus.
+  - CPU0 enables HPM SDK `CANopenNode` by default for both CAN2 motion and CAN3 lift/hydraulic CANopen networks. The project-generated DS301 minimum OD from `doc/ECU/DS301_OD` is used by the CANopenNode service.
+  - CPU0 enables HPM SDK `agile_modbus` RTU. RS485 devices call Agile Modbus serialization and confirmation parsing directly; UART services only own transport, timeout and accounting.
   - RS485_1/UART11 is connected to a foreground Modbus master service for the 8-channel analog acquisition module. The ISR only buffers bytes; the IO task owns request timing, response timeout and ADC snapshot updates.
   - `servo_drive_canopen` now provides the first device-level CiA 402 API for control word, mode selection, target position, target velocity and target torque. `motion_device` and `lift_hydraulic_device` call this API instead of building arbitrary motor payloads directly.
   - CAN, DIO, ADC and UART service boundaries are available under `ecu/drivers`.
@@ -238,8 +238,7 @@ Engineering closure result on 2026-06-29:
 - Local verification for this checkpoint:
   - `python tests\python\run_tests.py`: 50/50 tests passed.
   - `python tools\check_no_forbidden_patterns.py`: no forbidden ECU framework patterns found.
-  - CPU0 default build with `ECU_ENABLE_CANOPENNODE=OFF`: passed, `output\demo.elf` linked.
-  - CPU0 CANopenNode diagnostic build with `ECU_ENABLE_CANOPENNODE=ON`: passed, `output\demo.elf` linked.
+  - CPU0 CANopenNode build is now the default build path and produces `output\demo.elf`.
   - Active `ecu`, `tests` and `docs` files were scanned for informal uncertainty and transitional engineering wording; no matches remain outside generated build output, which was deleted before commit.
 
 ## Known open items

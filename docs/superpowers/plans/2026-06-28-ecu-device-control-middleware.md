@@ -137,7 +137,7 @@ bool servo_drive_canopen_set_target_torque(can_bus_service_t *bus,
 
 - [ ] **Step 2: Implement minimal PDO serialization**
 
-Implement little-endian packing helpers and send through `canopen_frame_build_pdo()` plus `can_bus_service_send_canopen()`. Return `false` when `bus`, `node`, or required RPDO COB-ID is invalid or disabled.
+Implement device-level CiA 402 requests through the CANopenNode service. Return `false` when the service, node, or requested object write is invalid.
 
 - [ ] **Step 3: Add CPU0 CMake source**
 

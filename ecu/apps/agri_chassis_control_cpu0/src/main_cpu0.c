@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "FreeRTOS.h"
 #include "board.h"
@@ -86,6 +87,7 @@ static const task_startup_entry_t s_startup_tasks[] = {
     { task_diag_cpu0, ECU_TASK_DIAG_CPU0 }
 };
 
+/* Create one FreeRTOS task and print a deterministic fatal message on failure. */
 static bool create_task_or_report(void (*entry)(void *), ecu_cpu0_task_id_t id)
 {
     const ecu_task_descriptor_t *desc = ecu_cpu0_task_descriptor(id);
@@ -93,6 +95,7 @@ static bool create_task_or_report(void (*entry)(void *), ecu_cpu0_task_id_t id)
         printf("[ECU] FATAL invalid task id=%d\r\n", (int)id);
         return false;
     }
+
     BaseType_t result = xTaskCreate(entry, desc->name, (uint16_t)desc->stack_words,
                                     0, (UBaseType_t)desc->priority, 0);
     if (result != pdPASS) {
@@ -102,6 +105,7 @@ static bool create_task_or_report(void (*entry)(void *), ecu_cpu0_task_id_t id)
                (unsigned long)desc->priority);
         return false;
     }
+
     printf("[ECU] task created: %s period=%lums priority=%lu\r\n",
            desc->name,
            (unsigned long)desc->period_ms,

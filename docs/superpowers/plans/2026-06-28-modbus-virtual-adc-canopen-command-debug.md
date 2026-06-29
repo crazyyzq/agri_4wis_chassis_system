@@ -15,7 +15,7 @@
 - `tests/python/test_hardware_framework.py`: contract tests for virtual Modbus ADC tooling, RS485_1 Modbus service, CANopen command debug safety gates and cleanup.
 - `tools/modbus/virtual_adc_module.py`: PC COM10 virtual ADC slave, function 04 only.
 - `tools/modbus/rtu_codec.py`: Python-only Modbus RTU CRC/frame helpers used by test tools.
-- `ecu/protocol/modbus/include/modbus_rtu.h`, `ecu/protocol/modbus/src/modbus_rtu.c`: Agile Modbus thin wrappers for request serialization and response extraction.
+- RS485 device adapters: call Agile Modbus request serialization and response extraction directly.
 - `ecu/drivers/uart/include/uart_rs485_hw.h`, `ecu/drivers/uart/src/uart_rs485_hw.c`: RS485_1 UART11 hardware binding and RX byte buffering.
 - `ecu/drivers/uart/include/modbus_master_service.h`, `ecu/drivers/uart/src/modbus_master_service.c`: foreground Modbus RTU master state machine.
 - `ecu/devices/include/analog_modbus_device.h`, `ecu/devices/src/analog_modbus_device.c`: ADC module register-map adapter.
@@ -142,8 +142,7 @@ Expected: tests related to tool files pass; remaining ECU tests may still fail u
 ## Task 3: Extend Modbus RTU wrapper and ADC device adapter
 
 **Files:**
-- Modify: `ecu/protocol/modbus/include/modbus_rtu.h`
-- Modify: `ecu/protocol/modbus/src/modbus_rtu.c`
+- Modify: RS485 device adapters that build or parse Agile Modbus ADUs.
 - Create: `ecu/devices/include/analog_modbus_device.h`
 - Create: `ecu/devices/src/analog_modbus_device.c`
 - Modify: `ecu/config/include/ecu_config.h`
@@ -157,13 +156,13 @@ Add:
 typedef struct {
     uint16_t registers[ECU_ADC_CHANNEL_COUNT];
     uint8_t register_count;
-} modbus_rtu_register_response_t;
+} adc_register_response_t;
 
-bool modbus_rtu_extract_read_input_registers(const uint8_t *adu,
+bool adc_extract_read_input_registers(const uint8_t *adu,
                                              size_t adu_size,
                                              uint8_t expected_slave_id,
                                              uint16_t expected_count,
-                                             modbus_rtu_register_response_t *out);
+                                             adc_register_response_t *out);
 ```
 
 Use Agile Modbus helpers where available; keep this wrapper thin.
@@ -196,7 +195,7 @@ typedef struct {
 } analog_modbus_device_state_t;
 
 bool analog_modbus_device_build_request(const ecu_hardware_config_t *config,
-                                        modbus_rtu_frame_t *out);
+                                        modbus_master_request_t *out);
 
 bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
                                          analog_input_service_t *analog_inputs,

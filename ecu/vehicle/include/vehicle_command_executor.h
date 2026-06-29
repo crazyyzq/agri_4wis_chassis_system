@@ -3,15 +3,15 @@
 
 #include <stdint.h>
 
-#include "can_bus_service.h"
+#include "canopen_master_service.h"
 #include "dio_service.h"
 #include "modbus_master_service.h"
 #include "uart_rs485_hw.h"
 #include "vehicle_types.h"
 
 typedef struct {
-    can_bus_service_t *can2_motion;
-    can_bus_service_t *can3_lift_hydraulic;
+    canopen_master_service_t *can2_motion_canopen;
+    canopen_master_service_t *can3_lift_hydraulic_canopen;
     dio_service_t *dio;
     uart_rs485_hw_t *warning_light_uart;
     modbus_master_service_t *warning_light_modbus;
