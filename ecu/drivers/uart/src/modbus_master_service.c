@@ -30,7 +30,7 @@ void modbus_master_service_init(modbus_master_service_t *service,
 static void modbus_master_start_request(modbus_master_service_t *service,
                                         uart_rs485_hw_t *uart,
                                         uint32_t now_ms,
-                                        const modbus_rtu_frame_t *request,
+                                        const modbus_master_request_t *request,
                                         size_t expected_response_size)
 {
     if (expected_response_size == 0U ||
@@ -83,7 +83,7 @@ static void modbus_master_finish_response(modbus_master_service_t *service,
 void modbus_master_service_process(modbus_master_service_t *service,
                                    uart_rs485_hw_t *uart,
                                    uint32_t now_ms,
-                                   const modbus_rtu_frame_t *request,
+                                   const modbus_master_request_t *request,
                                    size_t expected_response_size,
                                    modbus_master_response_handler_t handler,
                                    void *handler_context)

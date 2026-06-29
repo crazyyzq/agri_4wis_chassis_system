@@ -11,7 +11,7 @@ This stage covers the first device-control cleanup:
 - HPM SDK `agile_modbus` remains the Modbus RTU frame generator/parser.
 - HPM SDK `CANopenNode` is the intended CANopen stack.
 - Project code provides device-level APIs for servo-drive commands and Modbus devices.
-- The current `canopen_frame` module remains only as a raw CAN-frame backend boundary until project-specific CANopenNode `OD.h/OD.c` are generated.
+- The earlier raw CAN-frame backend has been replaced by CANopenNode now that the project DS301 object dictionary is available.
 
 This stage does not fake a CANopenNode object dictionary. `ECU_ENABLE_CANOPENNODE` must stay disabled until the actual EDS/object dictionary generation step is done.
 
@@ -51,7 +51,7 @@ Object indices, COB-ID bases, disabled COB-ID value and unit scaling live in `ec
 
 ### Modbus usage
 
-`modbus_rtu` stays as a thin compatibility wrapper around Agile Modbus serialization. It must not grow local CRC, parser, retry, timeout or state-machine logic.
+RS485 devices call Agile Modbus serialization and confirmation parsing directly. UART services own only transport, retry timing and timeout accounting.
 
 Device-specific Modbus behavior belongs in devices such as `warning_light_device` and future ADC module functions. UART transport, idle interrupts, and receive buffers belong under `drivers/uart`.
 

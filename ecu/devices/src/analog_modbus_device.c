@@ -2,6 +2,26 @@
 
 #include <string.h>
 
+static bool analog_modbus_init_context(agile_modbus_rtu_t *rtu,
+                                       uint8_t *send_buffer,
+                                       uint8_t *read_buffer,
+                                       const ecu_hardware_config_t *config)
+{
+    if (rtu == 0 || send_buffer == 0 || read_buffer == 0 || config == 0) {
+        return false;
+    }
+
+    if (agile_modbus_rtu_init(rtu,
+                              send_buffer,
+                              MODBUS_MASTER_MAX_ADU_BYTES,
+                              read_buffer,
+                              MODBUS_MASTER_MAX_ADU_BYTES) != 0) {
+        return false;
+    }
+
+    return agile_modbus_set_slave(&rtu->_ctx, config->modbus_adc_slave_id) == 0;
+}
+
 typedef struct {
     analog_modbus_device_state_t *state;
     analog_input_service_t *analog_inputs;
@@ -46,18 +66,32 @@ void analog_modbus_device_init(analog_modbus_device_state_t *state)
 }
 
 bool analog_modbus_device_build_request(const ecu_hardware_config_t *config,
-                                        modbus_rtu_frame_t *out)
+                                        modbus_master_request_t *out)
 {
+    agile_modbus_rtu_t rtu;
+    uint8_t read_buffer[MODBUS_MASTER_MAX_ADU_BYTES] = {0};
+    int length;
+
     if (config == 0 || out == 0 ||
         config->modbus_adc_register_count == 0U ||
         config->modbus_adc_register_count > ECU_ADC_CHANNEL_COUNT) {
         return false;
     }
 
-    return modbus_rtu_build_read_input_registers(config->modbus_adc_slave_id,
-                                                 config->modbus_adc_start_register,
-                                                 config->modbus_adc_register_count,
-                                                 out);
+    memset(out, 0, sizeof(*out));
+    if (!analog_modbus_init_context(&rtu, out->data, read_buffer, config)) {
+        return false;
+    }
+
+    length = agile_modbus_serialize_read_input_registers(&rtu._ctx,
+                                                         config->modbus_adc_start_register,
+                                                         config->modbus_adc_register_count);
+    if (length <= 0 || length > (int)sizeof(out->data)) {
+        return false;
+    }
+
+    out->size = (size_t)length;
+    return true;
 }
 
 bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
@@ -67,26 +101,39 @@ bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
                                          size_t adu_size,
                                          uint32_t now_ms)
 {
-    modbus_rtu_register_response_t response;
+    agile_modbus_rtu_t rtu;
+    uint8_t send_buffer[MODBUS_MASTER_MAX_ADU_BYTES] = {0};
+    uint8_t read_buffer[MODBUS_MASTER_MAX_ADU_BYTES] = {0};
+    uint16_t registers[ECU_ADC_CHANNEL_COUNT] = {0};
+    int result;
 
     if (state == 0 || analog_inputs == 0 || config == 0) {
         return false;
     }
 
-    if (!modbus_rtu_extract_read_input_registers(adu,
-                                                adu_size,
-                                                config->modbus_adc_slave_id,
-                                                config->modbus_adc_register_count,
-                                                &response)) {
+    if (adu == 0 || adu_size > sizeof(read_buffer) ||
+        !analog_modbus_init_context(&rtu, send_buffer, read_buffer, config)) {
         state->error_count++;
         state->online = false;
         return false;
     }
 
-    for (uint8_t channel = 0U; channel < response.register_count; ++channel) {
-        uint32_t millivolt = scale_raw_to_millivolt(response.registers[channel],
-                                                   config);
-        state->raw[channel] = response.registers[channel];
+    (void)agile_modbus_serialize_read_input_registers(&rtu._ctx,
+                                                      config->modbus_adc_start_register,
+                                                      config->modbus_adc_register_count);
+    memcpy(read_buffer, adu, adu_size);
+    result = agile_modbus_deserialize_read_input_registers(&rtu._ctx,
+                                                           (int)adu_size,
+                                                           registers);
+    if (result < 0) {
+        state->error_count++;
+        state->online = false;
+        return false;
+    }
+
+    for (uint8_t channel = 0U; channel < config->modbus_adc_register_count; ++channel) {
+        uint32_t millivolt = scale_raw_to_millivolt(registers[channel], config);
+        state->raw[channel] = registers[channel];
         state->millivolt[channel] = millivolt;
         (void)analog_input_service_update_millivolt(analog_inputs,
                                                     channel,
@@ -106,7 +153,7 @@ void analog_modbus_device_process(analog_modbus_device_state_t *state,
                                   const ecu_hardware_config_t *config,
                                   uint32_t now_ms)
 {
-    modbus_rtu_frame_t request;
+    modbus_master_request_t request;
     modbus_master_snapshot_t master_snapshot;
     analog_modbus_response_context_t context;
 

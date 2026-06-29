@@ -4,8 +4,46 @@
 
 typedef struct {
     warning_light_device_state_t *state;
+    const ecu_hardware_config_t *config;
+    uint16_t register_value;
     uint32_t now_ms;
 } warning_light_response_context_t;
+
+static bool warning_light_build_request(const ecu_hardware_config_t *config,
+                                        uint16_t register_value,
+                                        modbus_master_request_t *out)
+{
+    agile_modbus_rtu_t rtu;
+    uint8_t read_buffer[MODBUS_MASTER_MAX_ADU_BYTES] = {0};
+    int length;
+
+    if (config == 0 || out == 0) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (agile_modbus_rtu_init(&rtu,
+                              out->data,
+                              MODBUS_MASTER_MAX_ADU_BYTES,
+                              read_buffer,
+                              MODBUS_MASTER_MAX_ADU_BYTES) != 0) {
+        return false;
+    }
+    if (agile_modbus_set_slave(&rtu._ctx,
+                               config->modbus_warning_light_slave_id) != 0) {
+        return false;
+    }
+
+    length = agile_modbus_serialize_write_register(&rtu._ctx,
+                                                   config->modbus_warning_light_register,
+                                                   register_value);
+    if (length <= 0 || length > (int)sizeof(out->data)) {
+        return false;
+    }
+
+    out->size = (size_t)length;
+    return true;
+}
 
 static uint16_t warning_light_value(indicator_mode_t mode)
 {
@@ -28,14 +66,30 @@ static bool warning_light_response_handler(void *context,
 {
     warning_light_response_context_t *typed =
         (warning_light_response_context_t *)context;
-    if (typed == 0 || typed->state == 0 || adu == 0) {
+    if (typed == 0 || typed->state == 0 || typed->config == 0 || adu == 0) {
         return false;
     }
 
     warning_light_device_state_t *state = typed->state;
-    bool ok = adu_size == state->expected_response_size &&
-              adu_size <= sizeof(state->expected_response) &&
-              memcmp(adu, state->expected_response, adu_size) == 0;
+    agile_modbus_rtu_t rtu;
+    uint8_t send_buffer[MODBUS_MASTER_MAX_ADU_BYTES] = {0};
+    uint8_t read_buffer[MODBUS_MASTER_MAX_ADU_BYTES] = {0};
+    bool ok = false;
+
+    if (adu_size <= sizeof(read_buffer) &&
+        agile_modbus_rtu_init(&rtu,
+                              send_buffer,
+                              MODBUS_MASTER_MAX_ADU_BYTES,
+                              read_buffer,
+                              MODBUS_MASTER_MAX_ADU_BYTES) == 0 &&
+        agile_modbus_set_slave(&rtu._ctx,
+                               typed->config->modbus_warning_light_slave_id) == 0) {
+        (void)agile_modbus_serialize_write_register(&rtu._ctx,
+                                                    typed->config->modbus_warning_light_register,
+                                                    typed->register_value);
+        memcpy(read_buffer, adu, adu_size);
+        ok = agile_modbus_deserialize_write_register(&rtu._ctx, (int)adu_size) == 0;
+    }
 
     if (ok) {
         state->response_count++;
@@ -63,7 +117,7 @@ ecu_device_apply_result_t warning_light_device_apply(warning_light_device_state_
                                                      indicator_mode_t indicator_mode,
                                                      uint32_t now_ms)
 {
-    modbus_rtu_frame_t request;
+    modbus_master_request_t request;
     modbus_master_snapshot_t before;
     modbus_master_snapshot_t after;
     warning_light_response_context_t context;
@@ -80,10 +134,7 @@ ecu_device_apply_result_t warning_light_device_apply(warning_light_device_state_
 
     modbus_master_service_get_snapshot(master, &before);
     register_value = warning_light_value(indicator_mode);
-    if (!modbus_rtu_build_write_single_register(config->modbus_warning_light_slave_id,
-                                                config->modbus_warning_light_register,
-                                                register_value,
-                                                &request)) {
+    if (!warning_light_build_request(config, register_value, &request)) {
         state->error_count++;
         state->online = false;
         state->last_result = ECU_DEVICE_APPLY_REJECTED;
@@ -99,6 +150,8 @@ ecu_device_apply_result_t warning_light_device_apply(warning_light_device_state_
     }
 
     context.state = state;
+    context.config = config;
+    context.register_value = register_value;
     context.now_ms = now_ms;
 
     modbus_master_service_process(master,

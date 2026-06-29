@@ -8,7 +8,6 @@
 #include "ecu_config.h"
 #include "ecu_types.h"
 #include "modbus_master_service.h"
-#include "modbus_rtu.h"
 #include "uart_rs485_hw.h"
 #include "vehicle_types.h"
 
@@ -19,7 +18,7 @@ typedef struct {
     uint32_t last_response_ms;
     indicator_mode_t last_indicator_mode;
     uint16_t last_register_value;
-    uint8_t expected_response[MODBUS_RTU_MAX_ADU_BYTES];
+    uint8_t expected_response[MODBUS_MASTER_MAX_ADU_BYTES];
     size_t expected_response_size;
     bool online;
     ecu_device_apply_result_t last_result;

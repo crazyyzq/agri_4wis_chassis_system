@@ -1,7 +1,9 @@
 #ifndef LIFT_HYDRAULIC_DEVICE_H
 #define LIFT_HYDRAULIC_DEVICE_H
 
-#include "can_bus_service.h"
+#include <stdbool.h>
+
+#include "canopen_master_service.h"
 #include "dio_service.h"
 #include "ecu_config.h"
 #include "ecu_types.h"
@@ -9,7 +11,10 @@
 
 typedef struct {
     uint32_t apply_count;
+    uint32_t skipped_lift_canopen_count;
     uint32_t last_valve_mask;
+    bool last_lift_command_valid;
+    vehicle_actuator_command_t last_lift_command;
     ecu_device_apply_result_t last_result;
 } lift_hydraulic_device_state_t;
 
@@ -28,7 +33,7 @@ void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state);
  * by the vehicle and control layers before this function is called.
  */
 ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_state_t *state,
-                                                      can_bus_service_t *can3,
+                                                      canopen_master_service_t *canopen,
                                                       dio_service_t *dio,
                                                       const ecu_hardware_config_t *config,
                                                       const vehicle_actuator_command_t *command);

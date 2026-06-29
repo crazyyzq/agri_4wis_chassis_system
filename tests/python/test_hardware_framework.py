@@ -49,6 +49,8 @@ def test_no_informal_uncertainty_marker_in_code_or_tests(root: pathlib.Path) -> 
             rel = path.relative_to(root).as_posix()
             if rel.startswith("ecu/sdk_env_v1.11.0/"):
                 continue
+            if rel.startswith("ecu/apps/agri_chassis_control_cpu0/build/"):
+                continue
             if path.suffix.lower() not in {".c", ".h", ".py", ".md", ".cmake", ".txt"}:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -68,12 +70,10 @@ def test_configuration_open_items_document_exists(root: pathlib.Path) -> None:
 
 def test_protocol_driver_and_device_layers_exist(root: pathlib.Path) -> None:
     required_files = [
-        "ecu/protocol/canopen/include/canopen_frame.h",
-        "ecu/protocol/canopen/src/canopen_frame.c",
-        "ecu/protocol/modbus/include/modbus_rtu.h",
-        "ecu/protocol/modbus/src/modbus_rtu.c",
         "ecu/drivers/can/include/can_bus_service.h",
         "ecu/drivers/can/src/can_bus_service.c",
+        "ecu/drivers/canopen/include/canopen_master_service.h",
+        "ecu/drivers/canopen/src/canopen_master_service.c",
         "ecu/drivers/dio/include/dio_service.h",
         "ecu/drivers/dio/src/dio_service.c",
         "ecu/drivers/adc/include/analog_input_service.h",
@@ -97,24 +97,61 @@ def test_protocol_driver_and_device_layers_exist(root: pathlib.Path) -> None:
 
 def test_communication_stacks_use_sdk_middleware(root: pathlib.Path) -> None:
     cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
-    canopen_h = read(root, "ecu/protocol/canopen/include/canopen_frame.h")
-    modbus_h = read(root, "ecu/protocol/modbus/include/modbus_rtu.h")
     user_config_h = read(root, "ecu/apps/agri_chassis_control_cpu0/src/user_config.h")
     sbus_h = read(root, "ecu/protocol/sbus/include/sbus_decoder.h")
 
     for token in [
         "set(CONFIG_AGILE_MODBUS 1)",
         "set(CONFIG_AGILE_MODBUS_RTU 1)",
-        "ECU_ENABLE_CANOPENNODE",
         "set(CONFIG_CANOPEN 1)",
     ]:
         assert token in cmake, token
 
-    assert "MAX_CANOPEN_DEVICE" in user_config_h
-    assert "canopen_frame_build_sdo" not in canopen_h
-    assert "modbus_rtu_crc16" not in modbus_h
-    assert "modbus_rtu_parse_" not in modbus_h
+    assert "MAX_CANOPEN_DEVICE (2U)" in user_config_h
     assert "sbus_decode_frame" in sbus_h and "SBUS_CHANNEL_COUNT" in sbus_h
+
+
+def test_canopen_and_modbus_protocols_are_library_backed(root: pathlib.Path) -> None:
+    """Active ECU code must use CANopenNode and Agile Modbus, not local stacks."""
+
+    ignored_prefixes = (
+        "ecu/sdk_env_v1.11.0/",
+        "ecu/apps/agri_chassis_control_cpu0/build/",
+        "docs/superpowers/",
+    )
+    forbidden_patterns = [
+        re.compile("can" + "open_frame"),
+        re.compile(r'(?<!agile_)mod' + r'bus_rtu'),
+    ]
+    scanned_roots = [root / "ecu", root / "tests", root / "docs"]
+    for folder in scanned_roots:
+        for path in folder.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if rel.startswith(ignored_prefixes):
+                continue
+            if path.suffix.lower() not in {".c", ".h", ".py", ".md", ".cmake", ".txt"}:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for pattern in forbidden_patterns:
+                match = pattern.search(text)
+                assert match is None, f"{rel}: remove project-local protocol token {match.group(0)}"
+
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    servo_c = read(root, "ecu/devices/src/servo_drive_canopen.c")
+    analog_c = read(root, "ecu/devices/src/analog_modbus_device.c")
+    warning_c = read(root, "ecu/devices/src/warning_light_device.c")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+
+    assert "sdk_app_src(../../drivers/canopen/src/canopen_master_service.c)" in cmake
+    assert "sdk_app_src(../../protocol/canopen/src/" not in cmake
+    assert "sdk_app_src(../../protocol/modbus/src/" not in cmake
+    assert "canopen_master_service_request_sdo_write" in servo_c
+    assert "agile_modbus_serialize_read_input_registers" in analog_c
+    assert "agile_modbus_deserialize_read_input_registers" in analog_c
+    assert "agile_modbus_serialize_write_register" in warning_c
+    assert "CO_SDOclientDownloadInitiate" in service_c
 
 
 def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
@@ -131,7 +168,7 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
     assert "sdk_compile_definitions(-DECU_ENABLE_CANOPENNODE=1)" in cmake
     assert "sdk_compile_definitions(-DCONFIG_CANOPEN_MASTER=1)" in cmake
     assert "sdk_app_src(../../drivers/canopen/src/canopen_master_service.c)" in cmake
-    assert "MAX_CANOPEN_DEVICE (1U)" in user_config_h
+    assert "MAX_CANOPEN_DEVICE (2U)" in user_config_h
     for token in [
         "ECU_CANOPEN_BC2_DIAG_NODE_ID",
         "ECU_CANOPEN_OBJ_DEVICE_TYPE",
@@ -141,6 +178,19 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
         "ECU_CANOPEN_OBJ_MODES_OF_OPERATION_DISPLAY",
     ]:
         assert token in config_h, token
+
+
+def test_canopennode_hpm_tx_path_is_nonblocking(root: pathlib.Path) -> None:
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    wrapper_c = read(root, "ecu/drivers/canopen/src/hpm_can_send_nonblocking_wrap.c")
+
+    assert "sdk_ld_options(\"-Wl,--wrap=hpm_can_send\")" in cmake
+    assert "sdk_app_src(../../drivers/canopen/src/hpm_can_send_nonblocking_wrap.c)" in cmake
+    assert "__wrap_hpm_can_send" in wrapper_c
+    assert "busy-waits forever" in wrapper_c
+    assert "can_send_high_priority_message_nonblocking" in wrapper_c
+    assert "can_send_message_nonblocking" in wrapper_c
+    assert "while (!data->has_sent_out)" not in wrapper_c
 
 
 def test_canopennode_can2_diagnostic_service_is_safe(root: pathlib.Path) -> None:
@@ -175,9 +225,13 @@ def test_canopennode_can2_diagnostic_service_is_safe(root: pathlib.Path) -> None
     ]:
         assert token in service_c, token
 
-    assert "#if ECU_ENABLE_CANOPENNODE" in tasks_c
-    assert "canopen_master_service_init(&s_runtime.can2_canopen_diag" in tasks_c
-    assert "canopen_master_service_process(&s_runtime.can2_canopen_diag" in tasks_c
+    assert "ATTR_PLACE_AT_NONCACHEABLE_BSS" in service_c
+    assert "g_canopen_master_debug_control" in service_c
+    assert service_c.index("handle_debug_command(service);") < service_c.index("if (service->sdo_download_active)")
+    assert "canopen_master_service_init(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_init(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
     assert "can2_canopen_initialized" in monitor_h
     assert "ECU CANopen CAN2" in monitor_c
 
@@ -338,6 +392,169 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
     assert "ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC" in config_h
     assert "ECU_STEER_DEG_TO_COUNTS" in config_h
     assert "ECU_LIFT_MM_TO_COUNTS" in config_h
+
+
+def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    servo_h = read(root, "ecu/devices/include/servo_drive_canopen.h")
+    servo_c = read(root, "ecu/devices/src/servo_drive_canopen.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+    requirements = read(root, "doc/ECU_Project_Implementation_v1.4.md")
+
+    expected_nodes = {
+        "ECU_CANOPEN_LEG1_DRIVE_NODE_ID": "0x01U",
+        "ECU_CANOPEN_LEG1_STEER_NODE_ID": "0x02U",
+        "ECU_CANOPEN_LEG2_DRIVE_NODE_ID": "0x03U",
+        "ECU_CANOPEN_LEG2_STEER_NODE_ID": "0x04U",
+        "ECU_CANOPEN_LEG3_DRIVE_NODE_ID": "0x05U",
+        "ECU_CANOPEN_LEG3_STEER_NODE_ID": "0x06U",
+        "ECU_CANOPEN_LEG4_DRIVE_NODE_ID": "0x07U",
+        "ECU_CANOPEN_LEG4_STEER_NODE_ID": "0x08U",
+        "ECU_CANOPEN_LIFT_BC2_FRONT_NODE_ID": "0x09U",
+        "ECU_CANOPEN_LIFT_BC2_REAR_NODE_ID": "0x0AU",
+        "ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID": "0x0BU",
+    }
+    for name, value in expected_nodes.items():
+        assert re.search(rf"#define\s+{name}\s+\({value}\)", config_h), name
+
+    drive_block = re.search(r"\.drive_nodes\s*=\s*\{(?P<body>[\s\S]*?)\n\s*\},", config_c)
+    steer_block = re.search(r"\.steer_nodes\s*=\s*\{(?P<body>[\s\S]*?)\n\s*\},", config_c)
+    lift_block = re.search(r"\.lift_nodes\s*=\s*\{(?P<body>[\s\S]*?)\n\s*\},", config_c)
+    assert drive_block and steer_block and lift_block
+    assert [
+        "ECU_CANOPEN_LEG1_DRIVE_NODE_ID",
+        "ECU_CANOPEN_LEG2_DRIVE_NODE_ID",
+        "ECU_CANOPEN_LEG3_DRIVE_NODE_ID",
+        "ECU_CANOPEN_LEG4_DRIVE_NODE_ID",
+    ] == re.findall(r"ECU_CANOPEN_LEG\d_DRIVE_NODE_ID", drive_block.group("body"))
+    assert [
+        "ECU_CANOPEN_LEG1_STEER_NODE_ID",
+        "ECU_CANOPEN_LEG2_STEER_NODE_ID",
+        "ECU_CANOPEN_LEG3_STEER_NODE_ID",
+        "ECU_CANOPEN_LEG4_STEER_NODE_ID",
+    ] == re.findall(r"ECU_CANOPEN_LEG\d_STEER_NODE_ID", steer_block.group("body"))
+    assert "ECU_CANOPEN_LIFT_BC2_FRONT_NODE_ID" in lift_block.group("body")
+    assert "ECU_CANOPEN_LIFT_BC2_REAR_NODE_ID" in lift_block.group("body")
+
+    for token in [
+        "ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES",
+        "ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL",
+        "ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL",
+        "SERVO_DRIVE_OUTPUT_OUT1_MASK",
+        "SERVO_DRIVE_OUTPUT_OUT4_MASK",
+        "SERVO_DRIVE_INPUT_IN2_MASK",
+        "SERVO_DRIVE_INPUT_IN3_MASK",
+        "SERVO_DRIVE_INPUT_IN7_MASK",
+        "SERVO_DRIVE_INPUT_IN8_MASK",
+        "servo_drive_canopen_set_output_state",
+        "servo_drive_canopen_read_input_states",
+    ]:
+        assert token in config_h or token in servo_h or token in servo_c, token
+
+    assert "servo_drive_canopen_set_output_state" in motion_c
+    assert "SERVO_DRIVE_OUTPUT_OUT1_MASK" in motion_c
+    assert "servo_drive_canopen_read_input_states" in motion_c
+    assert "SERVO_DRIVE_INPUT_IN2_MASK" in motion_c
+    assert "SERVO_DRIVE_INPUT_IN3_MASK" in motion_c
+    assert "servo_drive_canopen_set_output_state" in lift_c
+    assert "SERVO_DRIVE_OUTPUT_OUT1_MASK" in lift_c
+    assert "SERVO_DRIVE_OUTPUT_OUT4_MASK" in lift_c
+    assert "SERVO_DRIVE_INPUT_IN7_MASK" in lift_c
+    assert "SERVO_DRIVE_INPUT_IN8_MASK" in lift_c
+
+    for phrase in [
+        "CAN2 是控制整车的行走和转向部分",
+        "J3 中的引脚 16 OUT1",
+        "IN2 是正限位，IN3 是负限位",
+        "CAN3 是整车的抬升功能",
+        "A 轴电机的抱闸是控制信号 I/O 端子 J3 的引脚 8 OUT1",
+        "B 轴电机的抱闸是引脚 17 OUT4",
+        "0x2194",
+        "0x2190",
+    ]:
+        assert phrase in requirements, phrase
+
+
+def test_sbus_throttle_uses_full_documented_1050_to_1950_range(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    assert "ECU_SBUS_RAW_THROTTLE_MIN" in config_h
+    assert "ECU_SBUS_RAW_THROTTLE_MAX" in config_h
+    assert re.search(r"#define\s+ECU_SBUS_RAW_THROTTLE_MIN\s+\(1050U\)", config_h)
+    assert re.search(r"#define\s+ECU_SBUS_RAW_THROTTLE_MAX\s+\(1950U\)", config_h)
+    assert ".throttle_min = ECU_SBUS_RAW_THROTTLE_MIN" in config_c
+    assert ".throttle_max = ECU_SBUS_RAW_THROTTLE_MAX" in config_c
+    assert "sbus_throttle_per_mille_from_raw" in tasks_c
+    throttle_func = re.search(
+        r"static int16_t sbus_throttle_per_mille_from_raw[\s\S]*?\n}",
+        tasks_c,
+    )
+    assert throttle_func is not None
+    assert "thresholds->throttle_min" in throttle_func.group(0)
+    assert "thresholds->throttle_max" in throttle_func.group(0)
+    assert "thresholds->throttle_start" not in throttle_func.group(0)
+
+
+def test_can3_and_rgb_status_are_enabled_for_whole_machine(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    assert re.search(r"#define\s+ECU_ENABLE_CAN3_LIFT_CANOPEN\s+\(1\)", config_h)
+    assert "#if ECU_ENABLE_CAN3_LIFT_CANOPEN" not in tasks_c
+    assert "canopen_master_service_init(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+
+    for rel in [
+        "ecu/drivers/status_led/include/status_led_service.h",
+        "ecu/drivers/status_led/src/status_led_service.c",
+    ]:
+        assert (root / rel).exists(), rel
+
+    led_h = read(root, "ecu/drivers/status_led/include/status_led_service.h")
+    led_c = read(root, "ecu/drivers/status_led/src/status_led_service.c")
+    for token in [
+        "status_led_service_update",
+        "STATUS_LED_PATTERN_BOOT",
+        "STATUS_LED_PATTERN_READY",
+        "STATUS_LED_PATTERN_WARNING",
+        "STATUS_LED_PATTERN_ESTOP",
+        "board_rgb_write",
+    ]:
+        assert token in led_h or token in led_c, token
+
+    assert "status_led_service_t status_led" in tasks_c
+    assert "status_led_service_init(&s_runtime.status_led" in tasks_c
+    assert "status_led_service_update(&s_runtime.status_led" in tasks_c
+    assert "status_led_service.c" in cmake
+
+
+def test_motion_and_lift_canopen_outputs_are_command_gated(root: pathlib.Path) -> None:
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "command_source_allows_motion_output" in motion_c
+    assert "command_source_allows_lift_output" in lift_c
+    assert "COMMAND_SOURCE_NONE" not in re.search(
+        r"command_source_allows_motion_output[\s\S]*?\n}",
+        motion_c,
+    ).group(0)
+    assert "COMMAND_SOURCE_NONE" not in re.search(
+        r"command_source_allows_lift_output[\s\S]*?\n}",
+        lift_c,
+    ).group(0)
+    assert "command_changed(state, command)" in motion_c
+    assert "lift_command_changed(state, command)" in lift_c
+    assert "last_motion_command_valid" in motion_h
+    assert "last_lift_command_valid" in lift_h
+    assert "skipped_count" in motion_h
+    assert "skipped_lift_canopen_count" in lift_h
 
 
 def test_executor_fans_out_only_through_device_adapters(root: pathlib.Path) -> None:
@@ -522,12 +739,14 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "can_bus_service_set_tx_backend(service, can_bus_hw_send_can3_frame)" in can_hw_c
     assert "can_bus_service_note_rx_from_isr" in can_service_h
     assert "can_bus_service_note_error_from_isr" in can_service_h
-    assert "can2_motion" in tasks_c
-    assert "can3_lift_hydraulic" in tasks_c
-    assert "can_bus_hw_init_can2_motion(&s_runtime.can2_motion" in tasks_c
-    assert "can_bus_hw_init_can3_lift_hydraulic(&s_runtime.can3_lift_hydraulic" in tasks_c
-    assert "can_bus_hw_poll_can2_rx(&s_runtime.can2_motion)" in tasks_c
-    assert "can_bus_hw_poll_can3_rx(&s_runtime.can3_lift_hydraulic)" in tasks_c
+    assert "can2_motion_canopen" in tasks_c
+    assert "can3_lift_hydraulic_canopen" in tasks_c
+    assert "CANOPEN_MASTER_BUS_CAN2" in tasks_c
+    assert "CANOPEN_MASTER_BUS_CAN3" in tasks_c
+    assert "ECU_ENABLE_CAN3_LIFT_CANOPEN" in config_h
+    assert "#if ECU_ENABLE_CAN3_LIFT_CANOPEN" not in tasks_c
+    assert "canopen_master_service_process(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
     assert "can2_rx_count" in monitor_h
     assert "can2_rx_buffer_status" in monitor_h
     assert "can2_receive_error_count" in monitor_h
@@ -546,7 +765,7 @@ def test_can_and_sbus_isr_snapshots_are_copied_atomically(root: pathlib.Path) ->
     assert "can_bus_service_get_snapshot" in can_service_h
     assert "taskENTER_CRITICAL" in can_service_c
     assert "taskEXIT_CRITICAL" in can_service_c
-    assert "can_bus_service_get_snapshot(&s_runtime.can2_motion" in tasks_c
+    assert "can_bus_service_get_snapshot(&s_runtime.can1_power" in tasks_c
 
 
 def test_rs4852_warning_light_protocol_is_hardware_bound(root: pathlib.Path) -> None:
@@ -586,7 +805,7 @@ def test_rs4852_warning_light_protocol_is_hardware_bound(root: pathlib.Path) -> 
     assert "uart_rs485_hw_clear_rx(uart" in modbus_c
     assert "modbus_master_service_t *master" in warning_h
     assert "modbus_master_service_process" in warning_c
-    assert "modbus_rtu_build_write_single_register" in warning_c
+    assert "agile_modbus_serialize_write_register" in warning_c
     assert "config->modbus_warning_light_register" in warning_c
     assert "rs485_2_hw" in tasks_c
     assert "warning_light_modbus_master" in tasks_c
@@ -600,8 +819,8 @@ def test_executor_uses_cpu0_owned_hardware_services(root: pathlib.Path) -> None:
 
     for token in [
         "vehicle_executor_io_t",
-        "can_bus_service_t *can2_motion",
-        "can_bus_service_t *can3_lift_hydraulic",
+        "canopen_master_service_t *can2_motion_canopen",
+        "canopen_master_service_t *can3_lift_hydraulic_canopen",
         "dio_service_t *dio",
         "uart_rs485_hw_t *warning_light_uart",
         "modbus_master_service_t *warning_light_modbus",
@@ -617,8 +836,8 @@ def test_executor_uses_cpu0_owned_hardware_services(root: pathlib.Path) -> None:
         assert forbidden not in executor_c, forbidden
 
     assert "vehicle_executor_io_t executor_io" in tasks_c
-    assert ".can2_motion = &s_runtime.can2_motion" in tasks_c
-    assert ".can3_lift_hydraulic = &s_runtime.can3_lift_hydraulic" in tasks_c
+    assert ".can2_motion_canopen = &s_runtime.can2_motion_canopen" in tasks_c
+    assert ".can3_lift_hydraulic_canopen = &s_runtime.can3_lift_hydraulic_canopen" in tasks_c
     assert ".dio = &s_runtime.dio" in tasks_c
     assert ".warning_light_uart = &s_runtime.rs485_2_hw" in tasks_c
     assert "vehicle_command_executor_apply(&s_runtime.executor, &executor_io" in tasks_c
@@ -747,6 +966,8 @@ def test_no_transitional_language_in_active_engineering_files(root: pathlib.Path
                 continue
             rel = path.relative_to(root).as_posix()
             if rel.startswith("ecu/sdk_env_v1.11.0/") or rel in ignored:
+                continue
+            if rel.startswith("ecu/apps/agri_chassis_control_cpu0/build/"):
                 continue
             if path.suffix.lower() not in {".c", ".h", ".py", ".md", ".cmake", ".txt"}:
                 continue

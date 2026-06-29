@@ -284,7 +284,9 @@ void can_bus_hw_can2_isr(void)
     can_bus_hw_handle_isr(BOARD_CAN2_BASE, s_can2_service);
 }
 
+#if !ECU_ENABLE_CANOPENNODE
 SDK_DECLARE_EXT_ISR_M(BOARD_CAN3_IRQn, can_bus_hw_can3_isr)
+#endif
 void can_bus_hw_can3_isr(void)
 {
     can_bus_hw_handle_isr(BOARD_CAN3_BASE, s_can3_service);

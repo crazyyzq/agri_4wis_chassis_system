@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "canopen_frame.h"
 #include "diag_codes.h"
 
 #define CAN_BUS_FRAME_MAX_DATA_BYTES (8U)
@@ -32,7 +31,6 @@ typedef struct {
     uint8_t receive_error_count;
     uint8_t transmit_error_count;
     uint8_t last_error_kind;
-    canopen_frame_t last_tx;
     ecu_can_frame_t last_tx_frame;
     uint32_t last_rx_id;
     uint8_t last_rx_size;
@@ -66,14 +64,6 @@ void can_bus_service_set_tx_backend(can_bus_service_t *service,
  */
 bool can_bus_service_send_frame(can_bus_service_t *service,
                                 const ecu_can_frame_t *frame);
-
-/* Send a CANopen frame through the current backend.
- *
- * CANopen uses standard 11-bit identifiers, so this helper adapts the legacy
- * CANopen frame type to the generic CAN service frame.
- */
-bool can_bus_service_send_canopen(can_bus_service_t *service,
-                                  const canopen_frame_t *frame);
 
 /* Record one received CAN 2.0 frame from a hardware ISR.
  *
