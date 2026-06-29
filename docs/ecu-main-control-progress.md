@@ -1,6 +1,6 @@
 # ECU Main Control Framework Progress
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 This file records the durable implementation state for the main-branch control framework so the project can be resumed after context compression or a new development session.
 
@@ -69,6 +69,14 @@ This file records the durable implementation state for the main-branch control f
   - Power, motion, lift/hydraulic, local IO and warning-light device adapters are available under `ecu/devices`.
   - `vehicle_command_executor_apply()` now fans out the final command through device adapters instead of keeping the output boundary as state-only.
   - DIO active-low conversion is limited to the configured managed output mask; hydraulic valve outputs are cleared as a group before a new valve target is written.
+- Control-closure hardware bindings added on 2026-06-29:
+  - CPU0 owns CAN2 motion, CAN3 lift/hydraulic, DIO, RS485_1 ADC, and RS485_2 warning-light services. `vehicle_command_executor_apply()` receives these CPU0-owned services through `vehicle_executor_io_t`; it no longer creates private software-only hardware services.
+  - CAN2 is TX/RX capable by default for BC/BC2 motion control at 1 Mbit/s. The older CAN2 RX-only binding remains available for passive bring-up.
+  - CAN3 now has a TX/RX HPM CAN binding for lift/hydraulic commands.
+  - DIO logical masks now drive the 12 isolated board outputs through `dio_hw_attach_outputs()`.
+  - RS485_2/UART12 now drives the warning light through Modbus RTU function 06, slave `0xFF`, register `0x00C2`, using the direct-control values from the supplied warning-light manual.
+  - SBUS input snapshots now preserve analog per-mille values for steer, throttle, clearance and track commands; R1/R2 mode requests require a fresh stable edge after the HOME domain guard.
+  - CAN service TX now rejects requests when no TX backend is bound, so actuator paths cannot report success from a software-only service.
 - CPU0 debug observability:
   - `ecu/diag/runtime_monitor` prints periodic CPU0 runtime status through the debug console when `ECU_ENABLE_DEBUG_MONITOR` is enabled.
   - The monitor includes `[ECU MODBUS ADC]` raw/mV values and `[ECU CANopen CMD]` command-debug counters.
@@ -211,12 +219,35 @@ Engineering closure result on 2026-06-28:
   - CPU1 build `tmp/cmake_cpu1_sbus`: passed, `output/demo.elf` produced.
   - `git diff --check`: no whitespace errors; Git only reported LF/CRLF conversion warnings for tracked text files.
 
+Engineering closure result on 2026-06-29:
+
+- Implemented the remaining CPU0 control closure for CAN2, CAN3, RS485_2, DIO and SBUS-to-command generation.
+- RS485_2 warning-light protocol is now included in the main project. Default parameters are centralized in `ecu/config/include/ecu_config.h`:
+  - `ECU_MODBUS_WARNING_LIGHT_BAUDRATE = 9600`
+  - `ECU_MODBUS_WARNING_LIGHT_SLAVE_ID = 0xFF`
+  - `ECU_MODBUS_WARNING_LIGHT_REGISTER = 0x00C2`
+  - `ECU_MODBUS_WARNING_LIGHT_REQUEST_PERIOD_MS = 100`
+  - `ECU_MODBUS_WARNING_LIGHT_RESPONSE_TIMEOUT_MS = 100`
+- Remote driving limits are centralized as macros for later vehicle calibration:
+  - `ECU_REMOTE_MAX_SPEED_KPH`
+  - `ECU_REMOTE_MAX_STEER_DEG`
+  - `ECU_REMOTE_MIN_HEIGHT_TARGET_MM`
+  - `ECU_REMOTE_MAX_HEIGHT_TARGET_MM`
+  - `ECU_REMOTE_MAX_HEIGHT_RATE_MM_S`
+  - `ECU_REMOTE_MAX_TRACK_RATE_MM_S`
+- Local verification for this checkpoint:
+  - `python tests\python\run_tests.py`: 50/50 tests passed.
+  - `python tools\check_no_forbidden_patterns.py`: no forbidden ECU framework patterns found.
+  - CPU0 default build with `ECU_ENABLE_CANOPENNODE=OFF`: passed, `output\demo.elf` linked.
+  - CPU0 CANopenNode diagnostic build with `ECU_ENABLE_CANOPENNODE=ON`: passed, `output\demo.elf` linked.
+  - Active `ecu`, `tests` and `docs` files were scanned for informal uncertainty and transitional engineering wording; no matches remain outside generated build output, which was deleted before commit.
+
 ## Known open items
 
 - Replace or extend the DS301 minimum OD with the actual BC/BC2 servo-drive EDS/object dictionary if future PDO mapping or vendor-specific objects require local OD entries.
 - CAN1 BMS/DCDC/DCAC communication is implemented through the supplier CAN protocol. Final DCDC/DCAC voltage-current setpoints remain calibration values recorded in `docs/ecu-configuration-open-items.md`.
-- CAN3/CAN4 service boundaries still need to be connected to real HPM CAN controller TX/RX/ISR paths and their intended device protocols.
-- RS485_1 is now connected to a hardware Modbus master path for the 8AI ADC module. RS485_2/RS485_3 and RS232 service boundaries still need hardware protocol owners when their devices are selected.
+- CAN4 remains an auxiliary service boundary until its real device role is selected.
+- RS485_1 is connected to the hardware Modbus master path for the 8AI ADC module. RS485_2 is connected to the warning-light Modbus protocol. RS485_3 and RS232 service boundaries need hardware protocol owners when their devices are selected.
 - Device-level control functions still need more supplier-specific detail from the real manuals: BC/BC2 scaling and enable sequence validation under main power, final DCDC/DCAC setpoints and hydraulic relay mapping.
 - CPU0/CPU1 IPC transport still needs binding to the selected SDK multicore/RPMsg mechanism.
 - CANopen PDO/object mapping, relay polarity, hydraulic valve bits and analog channel order are currently project defaults and should be calibrated on the real vehicle.

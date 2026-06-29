@@ -7,6 +7,8 @@
 #include "can_bus_service.h"
 #include "canopen_master_service.h"
 #include "command_arbiter.h"
+#include "dio_hw.h"
+#include "dio_service.h"
 #include "ecu_config.h"
 #include "ecu_tasks.h"
 #include "ipc_snapshot.h"
@@ -29,12 +31,16 @@ typedef struct {
     can_bus_service_t can1_power;
     power_device_state_t power_device;
     power_device_snapshot_t power_snapshot;
-    can_bus_service_t can2_drive_debug;
+    can_bus_service_t can2_motion;
 #if ECU_ENABLE_CANOPENNODE
     canopen_master_service_t can2_canopen_diag;
 #endif
+    can_bus_service_t can3_lift_hydraulic;
+    dio_service_t dio;
     uart_rs485_hw_t rs485_1_hw;
+    uart_rs485_hw_t rs485_2_hw;
     modbus_master_service_t adc_modbus_master;
+    modbus_master_service_t warning_light_modbus_master;
     analog_modbus_device_state_t analog_modbus_adc;
     analog_input_service_t analog_inputs;
     analog_input_snapshot_t analog_snapshot;
@@ -83,7 +89,9 @@ void ecu_task_runtime_init(uint32_t now_ms)
                                     hardware_config->can1_bitrate)) {
         can_bus_service_note_error_from_isr(&s_runtime.can1_power);
     }
+    can_bus_service_init(&s_runtime.can2_motion, hardware_config->can2_bitrate);
 #if ECU_ENABLE_CANOPENNODE
+    can_bus_service_set_online(&s_runtime.can2_motion, false);
     if (!canopen_master_service_init(&s_runtime.can2_canopen_diag,
                                      hardware_config->can2_bitrate,
                                      ECU_CANOPEN_MASTER_NODE_ID,
@@ -92,20 +100,36 @@ void ecu_task_runtime_init(uint32_t now_ms)
         s_runtime.can2_canopen_diag.snapshot.last_error = -1;
     }
 #else
-    can_bus_service_init(&s_runtime.can2_drive_debug, hardware_config->can2_bitrate);
-    if (!can_bus_hw_init_can2_rx_only(&s_runtime.can2_drive_debug,
-                                      hardware_config->can2_bitrate)) {
-        can_bus_service_note_error_from_isr(&s_runtime.can2_drive_debug);
+    if (!can_bus_hw_init_can2_motion(&s_runtime.can2_motion,
+                                     hardware_config->can2_bitrate)) {
+        can_bus_service_note_error_from_isr(&s_runtime.can2_motion);
     }
 #endif
+    can_bus_service_init(&s_runtime.can3_lift_hydraulic,
+                         hardware_config->can3_bitrate);
+    if (!can_bus_hw_init_can3_lift_hydraulic(&s_runtime.can3_lift_hydraulic,
+                                             hardware_config->can3_bitrate)) {
+        can_bus_service_note_error_from_isr(&s_runtime.can3_lift_hydraulic);
+    }
+    dio_service_init(&s_runtime.dio,
+                     hardware_config->dio_active_high,
+                     hardware_config->dio_managed_output_mask);
+    dio_hw_attach_outputs(&s_runtime.dio);
     analog_input_service_init(&s_runtime.analog_inputs);
     analog_modbus_device_init(&s_runtime.analog_modbus_adc);
     modbus_master_service_init(&s_runtime.adc_modbus_master,
                                hardware_config->modbus_adc_poll_period_ms,
                                hardware_config->modbus_adc_response_timeout_ms);
+    modbus_master_service_init(&s_runtime.warning_light_modbus_master,
+                               hardware_config->modbus_warning_light_request_period_ms,
+                               hardware_config->modbus_warning_light_response_timeout_ms);
     if (!uart_rs485_1_hw_init(&s_runtime.rs485_1_hw,
                               hardware_config->modbus_adc_baudrate)) {
         s_runtime.adc_modbus_master.snapshot.error_count++;
+    }
+    if (!uart_rs485_2_hw_init(&s_runtime.rs485_2_hw,
+                              hardware_config->modbus_warning_light_baudrate)) {
+        s_runtime.warning_light_modbus_master.snapshot.error_count++;
     }
     for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
         remote_discrete_init(&s_runtime.discrete_channels[channel],
@@ -147,6 +171,72 @@ static remote_position_t stable_position_from_channel(const sbus_service_snapsho
     return s_runtime.discrete_channels[channel].stable_position;
 }
 
+static int16_t clamp_per_mille_i16(int32_t value)
+{
+    if (value > 1000) {
+        return 1000;
+    }
+    if (value < -1000) {
+        return -1000;
+    }
+    return (int16_t)value;
+}
+
+static int16_t sbus_per_mille_from_raw(uint16_t raw,
+                                       const ecu_sbus_thresholds_t *thresholds)
+{
+    if (thresholds == 0) {
+        return 0;
+    }
+
+    int32_t neutral = (int32_t)thresholds->neutral;
+    int32_t raw_value = (int32_t)raw;
+    if (raw_value >= neutral) {
+        int32_t span = (int32_t)thresholds->high_min - neutral;
+        if (span <= 0) {
+            return 0;
+        }
+        return clamp_per_mille_i16(((raw_value - neutral) * 1000) / span);
+    }
+
+    int32_t span = neutral - (int32_t)thresholds->low_max;
+    if (span <= 0) {
+        return 0;
+    }
+    return clamp_per_mille_i16(-(((neutral - raw_value) * 1000) / span));
+}
+
+static int16_t sbus_positive_per_mille_from_raw(uint16_t raw,
+                                                const ecu_sbus_thresholds_t *thresholds)
+{
+    if (thresholds == 0 || raw <= thresholds->throttle_start) {
+        return 0;
+    }
+
+    uint32_t span = ECU_SBUS_RAW_CREDIBLE_MAX - thresholds->throttle_start;
+    if (span == 0U) {
+        return 0;
+    }
+
+    return clamp_per_mille_i16((int32_t)(((uint32_t)(raw - thresholds->throttle_start) *
+                                          1000U) / span));
+}
+
+static bool sbus_raw_channels_are_credible(const sbus_service_snapshot_t *sbus)
+{
+    if (sbus == 0 || !sbus->valid || !sbus->connected) {
+        return true;
+    }
+
+    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
+        if (sbus->channels[channel] < ECU_SBUS_RAW_CREDIBLE_MIN ||
+            sbus->channels[channel] > ECU_SBUS_RAW_CREDIBLE_MAX) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void build_remote_input_snapshot(const sbus_service_snapshot_t *sbus,
                                         const ecu_config_t *config,
                                         uint32_t now_ms,
@@ -157,8 +247,8 @@ static void build_remote_input_snapshot(const sbus_service_snapshot_t *sbus,
     out->sbus_valid = sbus->valid && sbus->connected;
     out->sbus_failsafe = sbus->failsafe;
     out->sbus_timeout = !sbus->connected;
-    out->decode_error_limit = false;
-    out->credibility_error = false;
+    out->decode_error_limit = sbus->decode_error_count >= ECU_SBUS_DECODE_ERROR_LIMIT;
+    out->credibility_error = !sbus_raw_channels_are_credible(sbus);
 
     out->steering = stable_position_from_channel(sbus, ECU_SBUS_CH_STEER, config, now_ms);
     out->clearance = stable_position_from_channel(sbus, ECU_SBUS_CH_CLEARANCE, config, now_ms);
@@ -175,6 +265,22 @@ static void build_remote_input_snapshot(const sbus_service_snapshot_t *sbus,
     out->track = stable_position_from_channel(sbus, ECU_SBUS_CH_TRACK, config, now_ms);
     out->r1 = stable_position_from_channel(sbus, ECU_SBUS_CH_R1, config, now_ms);
     out->r2 = stable_position_from_channel(sbus, ECU_SBUS_CH_R2, config, now_ms);
+    out->r1_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R1].changed;
+    out->r2_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R2].changed;
+    if (out->sbus_valid) {
+        out->steer_per_mille =
+            sbus_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_STEER],
+                                    &config->sbus_thresholds);
+        out->throttle_per_mille =
+            sbus_positive_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_THROTTLE],
+                                             &config->sbus_thresholds);
+        out->clearance_per_mille =
+            sbus_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_CLEARANCE],
+                                    &config->sbus_thresholds);
+        out->track_per_mille =
+            sbus_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_TRACK],
+                                    &config->sbus_thresholds);
+    }
 
     /* CH13 e-stop intentionally bypasses normal event suppression. */
     out->ch13_estop = stable_position_from_channel(sbus, ECU_SBUS_CH_ESTOP, config, now_ms);
@@ -218,7 +324,7 @@ static void refresh_can2_feedback(void)
         snapshot.initialized && snapshot.can_normal;
 #else
     can_bus_service_t snapshot;
-    can_bus_service_get_snapshot(&s_runtime.can2_drive_debug, &snapshot);
+    can_bus_service_get_snapshot(&s_runtime.can2_motion, &snapshot);
     s_runtime.hardware_feedback.can2_motion_online =
         snapshot.online && snapshot.error_count == 0U;
 #endif
@@ -248,7 +354,10 @@ static void refresh_power_feedback(void)
 
 static void refresh_lift_hydraulic_feedback(void)
 {
-    s_runtime.hardware_feedback.can3_lift_hydraulic_online = false;
+    can_bus_service_t snapshot;
+    can_bus_service_get_snapshot(&s_runtime.can3_lift_hydraulic, &snapshot);
+    s_runtime.hardware_feedback.can3_lift_hydraulic_online =
+        snapshot.online && snapshot.error_count == 0U;
     s_runtime.hardware_feedback.hydraulic_stopped =
         !s_runtime.executor.last_command.hydraulic_enable;
 }
@@ -300,7 +409,7 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->canopen_command = out->can2_canopen_snapshot.last_command;
 #else
     can_bus_service_t can2_snapshot;
-    can_bus_service_get_snapshot(&s_runtime.can2_drive_debug, &can2_snapshot);
+    can_bus_service_get_snapshot(&s_runtime.can2_motion, &can2_snapshot);
     out->can2_rx_count = can2_snapshot.rx_count;
     out->can2_error_count = can2_snapshot.error_count;
     out->can2_rx_buffer_status = can2_snapshot.rx_buffer_status;
@@ -388,7 +497,7 @@ void ecu_task_can2_motion_step(uint32_t now_ms)
 #if ECU_ENABLE_CANOPENNODE
     canopen_master_service_process(&s_runtime.can2_canopen_diag, now_ms);
 #else
-    can_bus_hw_poll_can2_rx(&s_runtime.can2_drive_debug);
+    can_bus_hw_poll_can2_rx(&s_runtime.can2_motion);
 #endif
     refresh_can2_feedback();
 }
@@ -415,6 +524,13 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
 void ecu_task_vehicle_control_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
+    vehicle_executor_io_t executor_io = {
+        .can2_motion = &s_runtime.can2_motion,
+        .can3_lift_hydraulic = &s_runtime.can3_lift_hydraulic,
+        .dio = &s_runtime.dio,
+        .warning_light_uart = &s_runtime.rs485_2_hw,
+        .warning_light_modbus = &s_runtime.warning_light_modbus_master,
+    };
 
     command_arbiter_update(&s_runtime.remote_request,
                            &s_runtime.auto_request,
@@ -422,7 +538,8 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
                            now_ms,
                            &s_runtime.final_command);
     safety_manager_apply(&s_runtime.safety_snapshot, &s_runtime.final_command);
-    (void)vehicle_command_executor_apply(&s_runtime.executor, &s_runtime.final_command);
+    (void)vehicle_command_executor_apply(&s_runtime.executor, &executor_io,
+                                         &s_runtime.final_command, now_ms);
     vehicle_state_publish(&s_runtime.vehicle_state,
                           now_ms,
                           &s_runtime.safety_snapshot,
@@ -450,6 +567,7 @@ void ecu_task_can1_power_step(uint32_t now_ms)
 void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
+    can_bus_hw_poll_can3_rx(&s_runtime.can3_lift_hydraulic);
     refresh_lift_hydraulic_feedback();
 }
 

@@ -4,11 +4,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef bool (*dio_service_apply_backend_t)(void *context,
+                                            uint32_t physical_output_mask,
+                                            uint32_t managed_output_mask);
+
 typedef struct {
     uint32_t output_mask;
     uint32_t physical_output_mask;
     uint32_t managed_output_mask;
+    void *apply_context;
+    dio_service_apply_backend_t apply_backend;
     bool active_high;
+    bool last_apply_ok;
 } dio_service_t;
 
 /* Initialize digital output state, active polarity and managed bit range.
@@ -21,6 +28,15 @@ typedef struct {
 void dio_service_init(dio_service_t *service,
                       bool active_high,
                       uint32_t managed_output_mask);
+
+/* Attach the physical output writer owned by the board driver layer.
+ *
+ * The service still owns logical state and polarity conversion.  The backend
+ * receives only the already-converted physical mask for managed output bits.
+ */
+void dio_service_set_apply_backend(dio_service_t *service,
+                                   dio_service_apply_backend_t backend,
+                                   void *context);
 
 /* Set or clear logical output bits using a mask from hardware config. */
 void dio_service_write_masked(dio_service_t *service,

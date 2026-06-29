@@ -8,6 +8,14 @@ static void dio_service_refresh_physical(dio_service_t *service)
     service->physical_output_mask = service->active_high ?
                                     logical :
                                     ((~logical) & service->managed_output_mask);
+    if (service->apply_backend != 0) {
+        service->last_apply_ok =
+            service->apply_backend(service->apply_context,
+                                   service->physical_output_mask,
+                                   service->managed_output_mask);
+    } else {
+        service->last_apply_ok = true;
+    }
 }
 
 void dio_service_init(dio_service_t *service,
@@ -20,6 +28,18 @@ void dio_service_init(dio_service_t *service,
     memset(service, 0, sizeof(*service));
     service->active_high = active_high;
     service->managed_output_mask = managed_output_mask;
+    dio_service_refresh_physical(service);
+}
+
+void dio_service_set_apply_backend(dio_service_t *service,
+                                   dio_service_apply_backend_t backend,
+                                   void *context)
+{
+    if (service == 0) {
+        return;
+    }
+    service->apply_backend = backend;
+    service->apply_context = context;
     dio_service_refresh_physical(service);
 }
 
