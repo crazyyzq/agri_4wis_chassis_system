@@ -167,6 +167,8 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
     assert "sdk_app_src(../../protocol/canopen/od/ds301/OD.c)" in cmake
     assert "sdk_compile_definitions(-DECU_ENABLE_CANOPENNODE=1)" in cmake
     assert "sdk_compile_definitions(-DCONFIG_CANOPEN_MASTER=1)" in cmake
+    assert 'sdk_compile_options("-Wno-unused-parameter")' in cmake
+    assert 'sdk_ses_compile_options("-Wno-macro-redefined")' in cmake
     assert "sdk_app_src(../../drivers/canopen/src/canopen_master_service.c)" in cmake
     assert "MAX_CANOPEN_DEVICE (2U)" in user_config_h
     for token in [
@@ -405,16 +407,18 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
 
     expected_nodes = {
         "ECU_CANOPEN_LEG1_DRIVE_NODE_ID": "0x01U",
-        "ECU_CANOPEN_LEG1_STEER_NODE_ID": "0x02U",
-        "ECU_CANOPEN_LEG2_DRIVE_NODE_ID": "0x03U",
-        "ECU_CANOPEN_LEG2_STEER_NODE_ID": "0x04U",
-        "ECU_CANOPEN_LEG3_DRIVE_NODE_ID": "0x05U",
-        "ECU_CANOPEN_LEG3_STEER_NODE_ID": "0x06U",
-        "ECU_CANOPEN_LEG4_DRIVE_NODE_ID": "0x07U",
+        "ECU_CANOPEN_LEG2_DRIVE_NODE_ID": "0x02U",
+        "ECU_CANOPEN_LEG3_DRIVE_NODE_ID": "0x03U",
+        "ECU_CANOPEN_LEG4_DRIVE_NODE_ID": "0x04U",
+        "ECU_CANOPEN_LEG1_STEER_NODE_ID": "0x05U",
+        "ECU_CANOPEN_LEG2_STEER_NODE_ID": "0x06U",
+        "ECU_CANOPEN_LEG3_STEER_NODE_ID": "0x07U",
         "ECU_CANOPEN_LEG4_STEER_NODE_ID": "0x08U",
-        "ECU_CANOPEN_LIFT_BC2_FRONT_NODE_ID": "0x09U",
-        "ECU_CANOPEN_LIFT_BC2_REAR_NODE_ID": "0x0AU",
-        "ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID": "0x0BU",
+        "ECU_CANOPEN_LIFT_LEG1_NODE_ID": "0x09U",
+        "ECU_CANOPEN_LIFT_LEG2_NODE_ID": "0x0AU",
+        "ECU_CANOPEN_LIFT_LEG3_NODE_ID": "0x0BU",
+        "ECU_CANOPEN_LIFT_LEG4_NODE_ID": "0x0CU",
+        "ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID": "0x0DU",
     }
     for name, value in expected_nodes.items():
         assert re.search(rf"#define\s+{name}\s+\({value}\)", config_h), name
@@ -435,8 +439,12 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
         "ECU_CANOPEN_LEG3_STEER_NODE_ID",
         "ECU_CANOPEN_LEG4_STEER_NODE_ID",
     ] == re.findall(r"ECU_CANOPEN_LEG\d_STEER_NODE_ID", steer_block.group("body"))
-    assert "ECU_CANOPEN_LIFT_BC2_FRONT_NODE_ID" in lift_block.group("body")
-    assert "ECU_CANOPEN_LIFT_BC2_REAR_NODE_ID" in lift_block.group("body")
+    assert [
+        "ECU_CANOPEN_LIFT_LEG1_NODE_ID",
+        "ECU_CANOPEN_LIFT_LEG2_NODE_ID",
+        "ECU_CANOPEN_LIFT_LEG3_NODE_ID",
+        "ECU_CANOPEN_LIFT_LEG4_NODE_ID",
+    ] == re.findall(r"ECU_CANOPEN_LIFT_LEG\d_NODE_ID", lift_block.group("body"))
 
     for token in [
         "ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES",
@@ -460,17 +468,22 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
     assert "SERVO_DRIVE_INPUT_IN3_MASK" in motion_c
     assert "servo_drive_canopen_set_output_state" in lift_c
     assert "SERVO_DRIVE_OUTPUT_OUT1_MASK" in lift_c
-    assert "SERVO_DRIVE_OUTPUT_OUT4_MASK" in lift_c
-    assert "SERVO_DRIVE_INPUT_IN7_MASK" in lift_c
-    assert "SERVO_DRIVE_INPUT_IN8_MASK" in lift_c
+    assert "BC2_AXIS_OUTPUT_BRAKE_MASK" in lift_c
+    assert "BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK" in lift_c
+    assert "BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK" in lift_c
+    assert "SERVO_DRIVE_OUTPUT_OUT4_MASK" not in lift_c
+    assert "SERVO_DRIVE_INPUT_IN7_MASK" not in lift_c
+    assert "SERVO_DRIVE_INPUT_IN8_MASK" not in lift_c
 
     for phrase in [
         "CAN2 是控制整车的行走和转向部分",
         "J3 中的引脚 16 OUT1",
         "IN2 是正限位，IN3 是负限位",
         "CAN3 是整车的抬升功能",
+        "BC2 的 SW 拨码只设置 A 轴节点号，B 轴节点号等于 A 轴节点号加 1",
         "A 轴电机的抱闸是控制信号 I/O 端子 J3 的引脚 8 OUT1",
         "B 轴电机的抱闸是引脚 17 OUT4",
+        "B 轴节点访问 `0x2194` 时仍写轴内 OUT1 对应的 bit0",
         "0x2194",
         "0x2190",
     ]:
