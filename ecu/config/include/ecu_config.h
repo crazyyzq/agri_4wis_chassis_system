@@ -18,16 +18,29 @@
 #define REMOTE_EVENT_ESTOP_RESET_TTL_MS (1000U)
 #define REMOTE_EVENT_LIGHT_REQUEST_TTL_MS (1000U)
 
-#define ECU_SBUS_RAW_LOW_MAX             (1050U)
-#define ECU_SBUS_RAW_CENTER_MIN          (1400U)
-#define ECU_SBUS_RAW_CENTER_MAX          (1600U)
-#define ECU_SBUS_RAW_HIGH_MIN            (1950U)
-#define ECU_SBUS_RAW_NEUTRAL             (1500U)
-#define ECU_SBUS_RAW_THROTTLE_MIN        (1050U)
-#define ECU_SBUS_RAW_THROTTLE_MAX        (1950U)
-#define ECU_SBUS_RAW_THROTTLE_START      (1100U)
-#define ECU_SBUS_RAW_CREDIBLE_MIN        (1000U)
-#define ECU_SBUS_RAW_CREDIBLE_MAX        (2000U)
+/* SBUS channel values are decoded from the receiver as protocol-native 11-bit
+ * raw values.  The CPU0 remote task converts those raw values to PPM-equivalent
+ * servo values before evaluating switches, throttle, steering and safety
+ * states.
+ *
+ * Measured commissioning points on the installed receiver:
+ *   raw low ~= 282, raw center ~= 1002, raw high ~= 1722.
+ *
+ * Remote state machines use the PPM-equivalent range because it matches the
+ * transmitter manual and is easier to debug during whole-machine testing. */
+#define ECU_SBUS_PROTOCOL_RAW_LOW        (282U)
+#define ECU_SBUS_PROTOCOL_RAW_CENTER     (1002U)
+#define ECU_SBUS_PROTOCOL_RAW_HIGH       (1722U)
+#define ECU_SBUS_PPM_LOW                 (1050U)
+#define ECU_SBUS_PPM_CENTER              (1500U)
+#define ECU_SBUS_PPM_HIGH                (1950U)
+#define ECU_SBUS_PPM_LOW_MAX             (1200U)
+#define ECU_SBUS_PPM_CENTER_MIN          (1400U)
+#define ECU_SBUS_PPM_CENTER_MAX          (1600U)
+#define ECU_SBUS_PPM_HIGH_MIN            (1800U)
+#define ECU_SBUS_PPM_THROTTLE_START      (1100U)
+#define ECU_SBUS_PPM_CREDIBLE_MIN        (1000U)
+#define ECU_SBUS_PPM_CREDIBLE_MAX        (2000U)
 #define ECU_SBUS_DECODE_ERROR_LIMIT      (10U)
 
 #define ECU_CPU0_SAFETY_PERIOD_MS        (1U)
@@ -56,6 +69,9 @@
 #define ECU_ENABLE_CANOPENNODE           (0)
 #endif
 
+/* Physical bus defaults.  CAN1 is reserved for power devices, CAN2 for drive
+ * and steering servos, and CAN3 for lift/hydraulic servos.  These values are
+ * deliberately centralized so field changes do not require touching drivers. */
 #define ECU_CAN1_POWER_BITRATE           (250000UL)
 #define ECU_CAN2_MOTION_BITRATE          (1000000UL)
 #define ECU_CAN3_LIFT_HYDRAULIC_BITRATE  (1000000UL)
@@ -89,6 +105,18 @@
 #define ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA (100U)
 #define ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV   (2200U)
 
+/* Vehicle CANopen node contract.
+ *
+ * CAN2:
+ *   - Drive motors use nodes 1..4 in leg order.
+ *   - Steering motors use nodes 5..8 in leg order.
+ *
+ * CAN3:
+ *   - Lift motors use nodes 9..12 in leg order.
+ *   - The hydraulic station motor uses node 13.
+ *
+ * BC2 dual-axis drives expose A and B axes as separate CANopen nodes.  The SW
+ * BCD switch sets the A-axis node ID and the B-axis node ID is A + 1. */
 #define ECU_CANOPEN_LEG1_DRIVE_NODE_ID (0x01U)
 #define ECU_CANOPEN_LEG2_DRIVE_NODE_ID (0x02U)
 #define ECU_CANOPEN_LEG3_DRIVE_NODE_ID (0x03U)
@@ -103,6 +131,8 @@
 #define ECU_CANOPEN_LIFT_LEG4_NODE_ID  (0x0CU)
 #define ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID (0x0DU)
 
+/* Semantic aliases used by control code.  The aliases keep vehicle-side code
+ * readable even when a field change requires remapping the physical node IDs. */
 #define ECU_CANOPEN_DRIVE_FL_NODE_ID   ECU_CANOPEN_LEG1_DRIVE_NODE_ID
 #define ECU_CANOPEN_DRIVE_FR_NODE_ID   ECU_CANOPEN_LEG2_DRIVE_NODE_ID
 #define ECU_CANOPEN_DRIVE_RL_NODE_ID   ECU_CANOPEN_LEG3_DRIVE_NODE_ID
@@ -116,6 +146,9 @@
 #define ECU_CANOPEN_LIFT_RL_NODE_ID    ECU_CANOPEN_LIFT_LEG3_NODE_ID
 #define ECU_CANOPEN_LIFT_RR_NODE_ID    ECU_CANOPEN_LIFT_LEG4_NODE_ID
 
+/* Default CiA-301 COB-ID bases.  Device adapters build TPDO/RPDO/heartbeat
+ * identifiers from these bases plus the node ID unless a device-specific
+ * configuration overrides them. */
 #define ECU_CANOPEN_TPDO1_BASE     (0x180UL)
 #define ECU_CANOPEN_RPDO1_BASE     (0x200UL)
 #define ECU_CANOPEN_RPDO2_BASE     (0x300UL)
@@ -130,6 +163,10 @@
 #define ECU_CANOPEN_BC2_DIAG_NODE_ID     (ECU_CANOPEN_DRIVE_FL_NODE_ID)
 #define ECU_CANOPEN_SDO_TIMEOUT_MS       (100U)
 #define ECU_CANOPEN_SDO_PERIOD_MS        (100U)
+
+/* CANopen object indexes used by the BC/BC2 servo adapter.  0x2190 reports
+ * drive terminal input states; 0x2194 writes outputs configured for program
+ * control, including the brake-release output. */
 #define ECU_CANOPEN_OBJ_DEVICE_TYPE      (0x1000U)
 #define ECU_CANOPEN_OBJ_ERROR_REGISTER   (0x1001U)
 #define ECU_CANOPEN_OBJ_IDENTITY         (0x1018U)
@@ -143,14 +180,26 @@
 #define ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES (0x2190U)
 #define ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL (0x2194U)
 
+/* Brake output polarity.
+ *
+ * The installed servos are mechanically braked by default.  Current field
+ * wiring releases the brake when the drive output is low.  Keep both polarity
+ * macros in configuration so reversing the drive terminal polarity is a single
+ * compile-time change instead of a logic edit in the device layer. */
 #define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)
 #define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (1U)
 #define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_COUNTS_PER_SEC (1000)
 
+/* Commissioning scale factors.  These convert high-level vehicle commands into
+ * drive counts and remain centralized for motor/gearbox calibration updates on
+ * the complete machine. */
 #define ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC (100.0f)
 #define ECU_STEER_DEG_TO_COUNTS               (100.0f)
 #define ECU_LIFT_MM_TO_COUNTS                 (100.0f)
 
+/* Local digital outputs stay limited to board-level loads.  Servo brakes are
+ * controlled through drive terminal outputs over CANopen, not through these
+ * PCB output channels. */
 #define ECU_DIO_BRAKE_RELEASE_MASK       (1UL << 0)
 #define ECU_DIO_HYDRAULIC_ENABLE_MASK    (1UL << 1)
 #define ECU_DIO_HORN_MASK                (1UL << 2)
@@ -228,6 +277,9 @@ typedef struct {
     uint16_t center_min;
     uint16_t center_max;
     uint16_t high_min;
+    uint16_t stick_min;
+    uint16_t stick_neutral;
+    uint16_t stick_max;
     uint16_t neutral;
     uint16_t throttle_min;
     uint16_t throttle_max;

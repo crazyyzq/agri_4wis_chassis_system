@@ -1,5 +1,8 @@
 #include "ecu_config.h"
 
+/* Build the standard CANopen communication identifiers for one slave node.
+ * The ECU keeps this as a macro because the default hardware table is static
+ * const data and must be fully initialized at compile time. */
 #define CANOPEN_NODE_CONFIG(node) \
     { \
         .node_id = (node), \
@@ -13,6 +16,9 @@
         .timeout_ms = ECU_CANOPEN_TIMEOUT_MS \
     }
 
+/* Runtime-independent defaults consumed by the remote, control, and task
+ * layers.  Timing values are kept here so all state machines share the same
+ * debounce, timeout, and diagnostic cadence. */
 static const ecu_config_t s_default_config = {
     .discrete_debounce_ms = REMOTE_DISCRETE_DEBOUNCE_MS,
     .link_qualify_ms = REMOTE_LINK_QUALIFY_MS,
@@ -25,14 +31,17 @@ static const ecu_config_t s_default_config = {
     .estop_reset_ttl_ms = REMOTE_EVENT_ESTOP_RESET_TTL_MS,
     .light_request_ttl_ms = REMOTE_EVENT_LIGHT_REQUEST_TTL_MS,
     .sbus_thresholds = {
-        .low_max = ECU_SBUS_RAW_LOW_MAX,
-        .center_min = ECU_SBUS_RAW_CENTER_MIN,
-        .center_max = ECU_SBUS_RAW_CENTER_MAX,
-        .high_min = ECU_SBUS_RAW_HIGH_MIN,
-        .neutral = ECU_SBUS_RAW_NEUTRAL,
-        .throttle_min = ECU_SBUS_RAW_THROTTLE_MIN,
-        .throttle_max = ECU_SBUS_RAW_THROTTLE_MAX,
-        .throttle_start = ECU_SBUS_RAW_THROTTLE_START
+        .low_max = ECU_SBUS_PPM_LOW_MAX,
+        .center_min = ECU_SBUS_PPM_CENTER_MIN,
+        .center_max = ECU_SBUS_PPM_CENTER_MAX,
+        .high_min = ECU_SBUS_PPM_HIGH_MIN,
+        .stick_min = ECU_SBUS_PPM_LOW,
+        .stick_neutral = ECU_SBUS_PPM_CENTER,
+        .stick_max = ECU_SBUS_PPM_HIGH,
+        .neutral = ECU_SBUS_PPM_CENTER,
+        .throttle_min = ECU_SBUS_PPM_LOW,
+        .throttle_max = ECU_SBUS_PPM_HIGH,
+        .throttle_start = ECU_SBUS_PPM_THROTTLE_START
     },
     .cpu0_task_period_ms = {
         ECU_CPU0_SAFETY_PERIOD_MS,
@@ -47,6 +56,9 @@ static const ecu_config_t s_default_config = {
     .cpu1_service_period_ms = ECU_CPU1_SERVICE_PERIOD_MS
 };
 
+/* Track-width adjustment helper gains.  Steering targets point the wheels into
+ * the adjustment posture, while assist torque signs compensate for the mirrored
+ * geometry of the four legs. */
 static const track_adjust_config_t s_track_adjust_config = {
     .steer_target_deg = { 90.0f, -90.0f, -90.0f, 90.0f },
     .assist_torque_sign = { 1.0f, -1.0f, -1.0f, 1.0f },
@@ -54,30 +66,44 @@ static const track_adjust_config_t s_track_adjust_config = {
     .assist_wheel_speed_limit_rpm = { 12.0f, 12.0f, 12.0f, 12.0f }
 };
 
+/* Hardware binding table for CPU0.
+ *
+ * The order of each node array is the vehicle leg order used throughout the
+ * control stack: front-left, front-right, rear-left, rear-right.  This keeps
+ * motion-control code independent from the actual CANopen node numbers. */
 static const ecu_hardware_config_t s_hardware_config = {
     .can1_bitrate = ECU_CAN1_POWER_BITRATE,
     .can2_bitrate = ECU_CAN2_MOTION_BITRATE,
     .can3_bitrate = ECU_CAN3_LIFT_HYDRAULIC_BITRATE,
     .can4_bitrate = ECU_CAN4_AUXILIARY_BITRATE,
     .power_protocol = ECU_POWER_PROTOCOL_SUPPLIER_CAN,
+
+    /* CAN2 drive motors: node 1..4. */
     .drive_nodes = {
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG1_DRIVE_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG2_DRIVE_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG3_DRIVE_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG4_DRIVE_NODE_ID)
     },
+
+    /* CAN2 steering motors: node 5..8. */
     .steer_nodes = {
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG1_STEER_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG2_STEER_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG3_STEER_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG4_STEER_NODE_ID)
     },
+
+    /* CAN3 lift motors: node 9..12.  On BC2 drives the B axis is addressed as
+     * its own CANopen node, not as extra bits on the A-axis node. */
     .lift_nodes = {
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LIFT_LEG1_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LIFT_LEG2_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LIFT_LEG3_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LIFT_LEG4_NODE_ID)
     },
+
+    /* CAN3 hydraulic-station motor: node 13, commanded in velocity mode. */
     .hydraulic_pump_node = CANOPEN_NODE_CONFIG(ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID),
     .dio_brake_release_mask = ECU_DIO_BRAKE_RELEASE_MASK,
     .dio_hydraulic_enable_mask = ECU_DIO_HYDRAULIC_ENABLE_MASK,

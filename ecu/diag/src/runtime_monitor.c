@@ -110,19 +110,26 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            diag_code_name(snapshot->diagnostic));
 
 #if ECU_DEBUG_MONITOR_VERBOSE
-    printf("[ECU SBUS] ch=[");
+    printf("[ECU SBUS RAW]");
     for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
-        if (channel > 0U) {
-            printf(",");
-        }
-        printf("%u", (unsigned int)snapshot->sbus_channels[channel]);
+        printf(" ch%02lu=%u",
+               (unsigned long)(channel + 1U),
+               (unsigned int)snapshot->sbus_channels[channel]);
     }
-    printf("] ch17=%s ch18=%s lost=%s uart_err=%lu last=%lums\r\n",
+    printf(" ch17=%s ch18=%s lost=%s uart_err=%lu last=%lums\r\n",
            bool_text(snapshot->sbus_channel17),
            bool_text(snapshot->sbus_channel18),
            bool_text(snapshot->sbus_frame_lost),
            (unsigned long)snapshot->sbus_uart_error_count,
            (unsigned long)snapshot->sbus_last_frame_ms);
+
+    printf("[ECU SBUS PPM]");
+    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
+        printf(" ch%02lu=%u",
+               (unsigned long)(channel + 1U),
+               (unsigned int)snapshot->sbus_ppm_channels[channel]);
+    }
+    printf("\r\n");
 
     printf("[ECU CAN2] rx=%lu err=%lu rbuf=%u flags=0x%02x eflags=0x%02x rec=%u tec=%u lek=%u "
            "last_id=0x%03lx ext=%s rtr=%s dlc=%u data=[",

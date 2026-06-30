@@ -192,7 +192,78 @@ static int16_t clamp_per_mille_i16(int32_t value)
     return (int16_t)value;
 }
 
-/* Convert a bidirectional SBUS stick around neutral into -1000..1000. */
+/* Linear interpolation helper used for SBUS raw-to-PPM conversion. */
+static uint16_t interpolate_u16(uint16_t input,
+                                uint16_t input_low,
+                                uint16_t input_high,
+                                uint16_t output_low,
+                                uint16_t output_high)
+{
+    if (input_high <= input_low) {
+        return output_low;
+    }
+
+    uint32_t input_span = (uint32_t)input_high - (uint32_t)input_low;
+    uint32_t output_span = (uint32_t)output_high - (uint32_t)output_low;
+    uint32_t offset = (uint32_t)input - (uint32_t)input_low;
+    return (uint16_t)((uint32_t)output_low +
+                      ((offset * output_span + (input_span / 2U)) / input_span));
+}
+
+/* Convert an 11-bit SBUS protocol channel value to the PPM-equivalent servo
+ * range expected by the remote state machines.
+ */
+static uint16_t sbus_protocol_raw_to_ppm_equivalent(uint16_t raw)
+{
+    if (raw <= ECU_SBUS_PROTOCOL_RAW_LOW) {
+        return ECU_SBUS_PPM_LOW;
+    }
+    if (raw < ECU_SBUS_PROTOCOL_RAW_CENTER) {
+        return interpolate_u16(raw,
+                               ECU_SBUS_PROTOCOL_RAW_LOW,
+                               ECU_SBUS_PROTOCOL_RAW_CENTER,
+                               ECU_SBUS_PPM_LOW,
+                               ECU_SBUS_PPM_CENTER);
+    }
+    if (raw == ECU_SBUS_PROTOCOL_RAW_CENTER) {
+        return ECU_SBUS_PPM_CENTER;
+    }
+    if (raw < ECU_SBUS_PROTOCOL_RAW_HIGH) {
+        return interpolate_u16(raw,
+                               ECU_SBUS_PROTOCOL_RAW_CENTER,
+                               ECU_SBUS_PROTOCOL_RAW_HIGH,
+                               ECU_SBUS_PPM_CENTER,
+                               ECU_SBUS_PPM_HIGH);
+    }
+    return ECU_SBUS_PPM_HIGH;
+}
+
+/* Copy one SBUS snapshot and convert all analog channels to PPM-equivalent
+ * values.  Link, failsafe and diagnostic counters remain untouched.
+ */
+static void sbus_build_ppm_snapshot(const sbus_service_snapshot_t *raw,
+                                    sbus_service_snapshot_t *ppm)
+{
+    if (raw == 0 || ppm == 0) {
+        return;
+    }
+
+    *ppm = *raw;
+    if (!ppm->valid) {
+        return;
+    }
+
+    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
+        ppm->channels[channel] =
+            sbus_protocol_raw_to_ppm_equivalent(raw->channels[channel]);
+    }
+}
+
+/* Convert a bidirectional PPM-equivalent SBUS stick around neutral into
+ * -1000..1000.  This deliberately uses stick endpoints, not the discrete
+ * switch thresholds, so analog control does not saturate at the low/high
+ * classification boundaries.
+ */
 static int16_t sbus_per_mille_from_raw(uint16_t raw,
                                        const ecu_sbus_thresholds_t *thresholds)
 {
@@ -200,24 +271,24 @@ static int16_t sbus_per_mille_from_raw(uint16_t raw,
         return 0;
     }
 
-    int32_t neutral = (int32_t)thresholds->neutral;
+    int32_t neutral = (int32_t)thresholds->stick_neutral;
     int32_t raw_value = (int32_t)raw;
     if (raw_value >= neutral) {
-        int32_t span = (int32_t)thresholds->high_min - neutral;
+        int32_t span = (int32_t)thresholds->stick_max - neutral;
         if (span <= 0) {
             return 0;
         }
         return clamp_per_mille_i16(((raw_value - neutral) * 1000) / span);
     }
 
-    int32_t span = neutral - (int32_t)thresholds->low_max;
+    int32_t span = neutral - (int32_t)thresholds->stick_min;
     if (span <= 0) {
         return 0;
     }
     return clamp_per_mille_i16(-(((neutral - raw_value) * 1000) / span));
 }
 
-/* Convert the one-way throttle channel from the documented 1050..1950 range. */
+/* Convert the one-way throttle channel from the PPM-equivalent SBUS range. */
 static int16_t sbus_throttle_per_mille_from_raw(uint16_t raw,
                                                 const ecu_sbus_thresholds_t *thresholds)
 {
@@ -239,15 +310,15 @@ static int16_t sbus_throttle_per_mille_from_raw(uint16_t raw,
                                           1000U) / span));
 }
 
-static bool sbus_raw_channels_are_credible(const sbus_service_snapshot_t *sbus)
+static bool sbus_ppm_channels_are_credible(const sbus_service_snapshot_t *sbus)
 {
     if (sbus == 0 || !sbus->valid || !sbus->connected) {
         return true;
     }
 
     for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
-        if (sbus->channels[channel] < ECU_SBUS_RAW_CREDIBLE_MIN ||
-            sbus->channels[channel] > ECU_SBUS_RAW_CREDIBLE_MAX) {
+        if (sbus->channels[channel] < ECU_SBUS_PPM_CREDIBLE_MIN ||
+            sbus->channels[channel] > ECU_SBUS_PPM_CREDIBLE_MAX) {
             return false;
         }
     }
@@ -265,7 +336,7 @@ static void build_remote_input_snapshot(const sbus_service_snapshot_t *sbus,
     out->sbus_failsafe = sbus->failsafe;
     out->sbus_timeout = !sbus->connected;
     out->decode_error_limit = sbus->decode_error_count >= ECU_SBUS_DECODE_ERROR_LIMIT;
-    out->credibility_error = !sbus_raw_channels_are_credible(sbus);
+    out->credibility_error = !sbus_ppm_channels_are_credible(sbus);
 
     out->steering = stable_position_from_channel(sbus, ECU_SBUS_CH_STEER, config, now_ms);
     out->clearance = stable_position_from_channel(sbus, ECU_SBUS_CH_CLEARANCE, config, now_ms);
@@ -396,7 +467,10 @@ static int32_t float_to_centi(float value)
 static void build_runtime_monitor_snapshot(uint32_t now_ms,
                                            runtime_monitor_snapshot_t *out)
 {
+    sbus_service_snapshot_t ppm_sbus;
+
     memset(out, 0, sizeof(*out));
+    sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &ppm_sbus);
     out->now_ms = now_ms;
     out->executor_sequence = s_runtime.executor.applied_sequence;
     out->sbus_valid = s_runtime.sbus_snapshot.valid;
@@ -407,6 +481,7 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->sbus_channel18 = s_runtime.sbus_snapshot.channel18;
     for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
         out->sbus_channels[channel] = s_runtime.sbus_snapshot.channels[channel];
+        out->sbus_ppm_channels[channel] = ppm_sbus.channels[channel];
     }
     out->sbus_frame_count = s_runtime.sbus_snapshot.frame_count;
     out->sbus_decode_error_count = s_runtime.sbus_snapshot.decode_error_count;
@@ -525,12 +600,14 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
     ecu_runtime_init_once(now_ms);
 
     const ecu_config_t *config = ecu_config_default();
+    sbus_service_snapshot_t remote_sbus;
     remote_input_snapshot_t remote_input;
     remote_preconditions_t preconditions;
 
     sbus_service_poll(&s_runtime.sbus, now_ms);
     sbus_service_get_snapshot(&s_runtime.sbus, &s_runtime.sbus_snapshot);
-    build_remote_input_snapshot(&s_runtime.sbus_snapshot, config, now_ms, &remote_input);
+    sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus);
+    build_remote_input_snapshot(&remote_sbus, config, now_ms, &remote_input);
     build_remote_preconditions(&remote_input, &preconditions);
     remote_manager_update(&s_runtime.remote_manager,
                           &remote_input,

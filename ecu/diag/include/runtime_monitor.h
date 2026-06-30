@@ -31,6 +31,7 @@ typedef struct {
     bool sbus_channel17;
     bool sbus_channel18;
     uint16_t sbus_channels[ECU_SBUS_CHANNEL_COUNT];
+    uint16_t sbus_ppm_channels[ECU_SBUS_CHANNEL_COUNT];
     uint32_t sbus_frame_count;
     uint32_t sbus_decode_error_count;
     uint32_t sbus_uart_error_count;

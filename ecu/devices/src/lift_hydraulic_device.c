@@ -17,6 +17,9 @@
 #define BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK  SERVO_DRIVE_INPUT_IN2_MASK
 #define BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK  SERVO_DRIVE_INPUT_IN3_MASK
 
+/* Convert a floating-point engineering command into the signed integer counts
+ * accepted by the servo drive.  Saturation avoids undefined overflow if a
+ * debug command or upstream controller supplies an out-of-range value. */
 static int32_t scaled_float_to_i32(float value, float scale)
 {
     float scaled = value * scale;
@@ -29,6 +32,12 @@ static int32_t scaled_float_to_i32(float value, float scale)
     return (int32_t)scaled;
 }
 
+/* Send one lift-axis motion command.
+ *
+ * Before commanding a new target position, the adapter reads the drive terminal
+ * input-state object and blocks motion into an active limit switch.  If the
+ * read fails, the command is still sent; the drive-side limit function remains
+ * the last line of defense and the failed SDO is visible in diagnostics. */
 static bool send_lift_command(canopen_master_service_t *canopen,
                               const ecu_canopen_node_config_t *node,
                               float height_mm,
@@ -64,6 +73,10 @@ static bool send_lift_command(canopen_master_service_t *canopen,
                                                    height_counts);
 }
 
+/* Command the hydraulic station motor through the BC drive on CAN3.
+ *
+ * The station is treated as a velocity-mode servo: enable means run at the
+ * configured service velocity, disable means quick-stop and zero target speed. */
 static bool send_hydraulic_pump_command(canopen_master_service_t *canopen,
                                         const ecu_canopen_node_config_t *node,
                                         bool hydraulic_enable)
@@ -85,6 +98,9 @@ static bool send_hydraulic_pump_command(canopen_master_service_t *canopen,
                                                    velocity_counts);
 }
 
+/* Translate the vehicle-level "brake release requested" flag into the active
+ * bit written to 0x2194.  The polarity is intentionally configuration-driven
+ * because drive terminal output inversion is often changed during commissioning. */
 static uint16_t brake_active_mask(bool brake_release, uint16_t output_mask)
 {
     bool canopen_active = brake_release ?
@@ -93,6 +109,8 @@ static uint16_t brake_active_mask(bool brake_release, uint16_t output_mask)
     return canopen_active ? output_mask : 0U;
 }
 
+/* Convert signed track-width rate into the PCB hydraulic valve output mask.
+ * The final DIO write is still gated by the hydraulic-enable command. */
 static uint32_t valve_mask_from_track_rate(const ecu_hardware_config_t *config,
                                            float track_rate_mm_s)
 {
@@ -105,6 +123,9 @@ static uint32_t valve_mask_from_track_rate(const ecu_hardware_config_t *config,
     return 0U;
 }
 
+/* Only sources that have passed the authority/safety pipeline may update
+ * CANopen lift outputs.  This prevents stale passive sources from repeatedly
+ * rewriting brake and motion objects. */
 static bool command_source_allows_lift_output(ecu_command_source_t source)
 {
     return source == COMMAND_SOURCE_REMOTE ||
@@ -114,6 +135,9 @@ static bool command_source_allows_lift_output(ecu_command_source_t source)
            source == COMMAND_SOURCE_SAFETY;
 }
 
+/* Avoid resending identical lift SDO sequences every scheduler tick.  The
+ * command source is included so a safety override is sent even if target values
+ * numerically match the previous command. */
 static bool lift_command_changed(const lift_hydraulic_device_state_t *state,
                                  const vehicle_actuator_command_t *command)
 {
@@ -123,6 +147,8 @@ static bool lift_command_changed(const lift_hydraulic_device_state_t *state,
            state->last_lift_command.source != command->source;
 }
 
+/* Reset counters and cached command state.  The device adapter owns no hardware
+ * resources directly; CANopen and DIO services are injected at apply time. */
 void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state)
 {
     if (state != 0) {
@@ -131,6 +157,12 @@ void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state)
     }
 }
 
+/* Apply the vehicle lift/hydraulic command to CAN3 servos and local valves.
+ *
+ * Lift axes are processed in vehicle leg order.  Each BC2 axis receives its own
+ * SDO writes through its own CANopen node, including the brake-release output.
+ * Local PCB outputs are limited to hydraulic enable and valve coils; servo
+ * motor brakes are never driven through PCB DIO channels here. */
 ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_state_t *state,
                                                       canopen_master_service_t *canopen,
                                                       dio_service_t *dio,

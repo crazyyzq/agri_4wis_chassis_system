@@ -1,5 +1,3 @@
-#include <stdio.h>
-
 #include "board.h"
 #include "hpm_canopen_can.h"
 #include "user_config.h"
@@ -28,12 +26,10 @@ int __wrap_hpm_can_send(const struct device *dev,
     hpm_stat_t status;
 
     if ((frame->flags & (CAN_FRAME_FDF | CAN_FRAME_BRS | CAN_FRAME_ESI)) != 0) {
-        printf("unsupported CAN frame flags 0x%02x\n", frame->flags);
         return -ENOTSUP;
     }
 
     if (frame->dlc > CAN_MAX_DLC) {
-        printf("DLC of %d exceeds maximum (%d)\n", frame->dlc, CAN_MAX_DLC);
         return -EINVAL;
     }
 
@@ -43,7 +39,6 @@ int __wrap_hpm_can_send(const struct device *dev,
 
     (void)hpm_can_get_state(dev, &state, NULL);
     if (state == CAN_STATE_BUS_OFF) {
-        printf("Transmit failed, bus-off\n");
         return -ENETUNREACH;
     }
 

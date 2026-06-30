@@ -1,14 +1,21 @@
 cmake_minimum_required(VERSION 3.13)
 
+# CPU0 application build switchboard.  The ECU application uses HPM SDK
+# middleware directly for RTOS scheduling, Agile Modbus RTU, and CANopenNode;
+# protocol code in this repository only contains device-level adapters.
 set(CONFIG_FREERTOS 1)
 set(CONFIG_AGILE_MODBUS 1)
 set(CONFIG_AGILE_MODBUS_RTU 1)
 set(CONFIG_CANOPEN 1)
 
+# Default to flash XIP because the MR6750-based ECU boots and is debugged from
+# external flash during bench and whole-machine commissioning.
 if("${HPM_BUILD_TYPE}" STREQUAL "")
     set(HPM_BUILD_TYPE flash_xip)
 endif()
 
+# Keep the project self-contained for developers opening it from SEGGER
+# Embedded Studio or CMake without preconfigured SDK environment variables.
 if("$ENV{HPM_SDK_BASE}" STREQUAL "")
     set(ENV{HPM_SDK_BASE} "${CMAKE_CURRENT_LIST_DIR}/../../sdk_env_v1.11.0/hpm_sdk")
 endif()
@@ -20,6 +27,9 @@ find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 
 project(agri_chassis_control_cpu0)
 
+# Core firmware feature definitions.  CANopenNode is enabled as the only
+# CANopen stack; application code talks to it through canopen_master_service and
+# servo_drive_canopen instead of hand-built CANopen frames.
 sdk_compile_definitions(-DUSE_NONVECTOR_MODE=1)
 sdk_compile_definitions(-DDISABLE_IRQ_PREEMPTIVE=1)
 sdk_compile_definitions(-DECU_ENABLE_CANOPENNODE=1)
@@ -29,12 +39,16 @@ sdk_compile_definitions("-DCO_CONFIG_NMT=0x3002")
 sdk_compile_definitions("-DCO_CONFIG_SDO_CLI=(CO_CONFIG_SDO_CLI_ENABLE|CO_CONFIG_SDO_CLI_SEGMENTED)")
 sdk_ld_options("-Wl,--wrap=hpm_can_send")
 
-# CANopenNode is imported vendor middleware.  Keep application warnings visible
-# while suppressing known vendor-header diagnostics that otherwise make the SES
-# project noisy during whole-machine debugging.
+# CANopenNode is imported vendor middleware. Keep application warnings visible
+# while suppressing known vendor unused-parameter diagnostics.
 sdk_compile_options("-Wno-unused-parameter")
 sdk_ses_compile_options("-Wno-unused-parameter")
-sdk_ses_compile_options("-Wno-macro-redefined")
+
+# The ECU is commissioned through the MR6750 J-Link/JTAG path.  Keep this
+# explicit so a regenerated SEGGER project does not inherit a local Simulator
+# session and fail during download/debug startup.
+sdk_ses_opt_debug_connection("J-Link")
+sdk_ses_opt_debug_jlink_speed(4000)
 
 sdk_inc(src)
 sdk_inc(../../common/include)

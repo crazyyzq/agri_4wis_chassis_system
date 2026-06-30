@@ -168,8 +168,12 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
     assert "sdk_compile_definitions(-DECU_ENABLE_CANOPENNODE=1)" in cmake
     assert "sdk_compile_definitions(-DCONFIG_CANOPEN_MASTER=1)" in cmake
     assert 'sdk_compile_options("-Wno-unused-parameter")' in cmake
-    assert 'sdk_ses_compile_options("-Wno-macro-redefined")' in cmake
+    assert "-Wno-macro-redefined" not in cmake
     assert "sdk_app_src(../../drivers/canopen/src/canopen_master_service.c)" in cmake
+    canopen_errno_h = read(root, "ecu/apps/agri_chassis_control_cpu0/src/canopen_errno.h")
+    assert "#ifndef EMSGSIZE" in canopen_errno_h
+    assert "#define EMSGSIZE 122" in canopen_errno_h
+    assert "without editing the ignored SDK environment" in canopen_errno_h
     assert "MAX_CANOPEN_DEVICE (2U)" in user_config_h
     for token in [
         "ECU_CANOPEN_BC2_DIAG_NODE_ID",
@@ -192,6 +196,8 @@ def test_canopennode_hpm_tx_path_is_nonblocking(root: pathlib.Path) -> None:
     assert "busy-waits forever" in wrapper_c
     assert "can_send_high_priority_message_nonblocking" in wrapper_c
     assert "can_send_message_nonblocking" in wrapper_c
+    assert "printf(" not in wrapper_c
+    assert "Transmit failed" not in wrapper_c
     assert "while (!data->has_sent_out)" not in wrapper_c
 
 
@@ -490,27 +496,61 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
         assert phrase in requirements, phrase
 
 
-def test_sbus_throttle_uses_full_documented_1050_to_1950_range(root: pathlib.Path) -> None:
+def test_sbus_remote_logic_maps_protocol_raw_to_ppm_equivalent(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     config_c = read(root, "ecu/config/src/ecu_config.c")
     tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    decoder_c = read(root, "ecu/protocol/sbus/src/sbus_decoder.c")
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
 
-    assert "ECU_SBUS_RAW_THROTTLE_MIN" in config_h
-    assert "ECU_SBUS_RAW_THROTTLE_MAX" in config_h
-    assert re.search(r"#define\s+ECU_SBUS_RAW_THROTTLE_MIN\s+\(1050U\)", config_h)
-    assert re.search(r"#define\s+ECU_SBUS_RAW_THROTTLE_MAX\s+\(1950U\)", config_h)
-    assert ".throttle_min = ECU_SBUS_RAW_THROTTLE_MIN" in config_c
-    assert ".throttle_max = ECU_SBUS_RAW_THROTTLE_MAX" in config_c
-    assert "sbus_throttle_per_mille_from_raw" in tasks_c
-    throttle_func = re.search(
-        r"static int16_t sbus_throttle_per_mille_from_raw[\s\S]*?\n}",
-        tasks_c,
+    expected_defines = {
+        "ECU_SBUS_PROTOCOL_RAW_LOW": "282U",
+        "ECU_SBUS_PROTOCOL_RAW_CENTER": "1002U",
+        "ECU_SBUS_PROTOCOL_RAW_HIGH": "1722U",
+        "ECU_SBUS_PPM_LOW": "1050U",
+        "ECU_SBUS_PPM_CENTER": "1500U",
+        "ECU_SBUS_PPM_HIGH": "1950U",
+        "ECU_SBUS_PPM_LOW_MAX": "1200U",
+        "ECU_SBUS_PPM_CENTER_MIN": "1400U",
+        "ECU_SBUS_PPM_CENTER_MAX": "1600U",
+        "ECU_SBUS_PPM_HIGH_MIN": "1800U",
+        "ECU_SBUS_PPM_CREDIBLE_MIN": "1000U",
+        "ECU_SBUS_PPM_CREDIBLE_MAX": "2000U",
+    }
+    for name, value in expected_defines.items():
+        assert re.search(rf"#define\s+{name}\s+\({value}\)", config_h), name
+
+    for field in [
+        ".stick_min = ECU_SBUS_PPM_LOW",
+        ".stick_neutral = ECU_SBUS_PPM_CENTER",
+        ".stick_max = ECU_SBUS_PPM_HIGH",
+        ".throttle_min = ECU_SBUS_PPM_LOW",
+        ".throttle_max = ECU_SBUS_PPM_HIGH",
+    ]:
+        assert field in config_c, field
+
+    assert "0x07FFU" in decoder_c
+    assert "sbus_protocol_raw_to_ppm_equivalent" in tasks_c
+    assert "sbus_build_ppm_snapshot" in tasks_c
+    assert "sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus)" in tasks_c
+    assert tasks_c.index("sbus_service_get_snapshot(&s_runtime.sbus") < tasks_c.index(
+        "sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus)"
     )
-    assert throttle_func is not None
-    assert "thresholds->throttle_min" in throttle_func.group(0)
-    assert "thresholds->throttle_max" in throttle_func.group(0)
-    assert "thresholds->throttle_start" not in throttle_func.group(0)
+    assert tasks_c.index("sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus)") < tasks_c.index(
+        "build_remote_input_snapshot(&remote_sbus"
+    )
+    assert "sbus_ppm_channels[ECU_SBUS_CHANNEL_COUNT]" in monitor_h
+    assert "ECU SBUS RAW" in monitor_c
+    assert "ECU SBUS PPM" in monitor_c
 
+    stick_func = re.search(r"static int16_t sbus_per_mille_from_raw[\s\S]*?\n}", tasks_c)
+    assert stick_func is not None
+    assert "thresholds->stick_neutral" in stick_func.group(0)
+    assert "thresholds->stick_max" in stick_func.group(0)
+    assert "thresholds->stick_min" in stick_func.group(0)
+    assert "thresholds->high_min" not in stick_func.group(0)
+    assert "thresholds->low_max" not in stick_func.group(0)
 
 def test_can3_and_rgb_status_are_enabled_for_whole_machine(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
@@ -672,6 +712,13 @@ def test_cpu0_runtime_monitor_is_configurable_and_task_owned(root: pathlib.Path)
     assert "runtime_monitor_print_cpu0" in tasks_c
     assert "ECU_ENABLE_DEBUG_MONITOR" in tasks_c
     assert "runtime_monitor.c" in cmake
+
+
+def test_cpu0_segger_project_uses_jlink_debug_connection(root: pathlib.Path) -> None:
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    assert 'sdk_ses_opt_debug_connection("J-Link")' in cmake
+    assert "sdk_ses_opt_debug_jlink_speed(4000)" in cmake
 
 
 def test_sbus_uart1_idle_interrupt_is_bound_to_service(root: pathlib.Path) -> None:
