@@ -4,6 +4,19 @@
 #include "lift_hydraulic_device.h"
 #include "servo_drive_canopen.h"
 
+/*
+ * BC2 exposes the A axis and B axis as independent CANopen nodes.  The physical
+ * J3 terminal names are different on the second axis (OUT4/IN7/IN8), but the
+ * CANopen object map is addressed through the selected axis node.  Therefore
+ * each lift node uses the same axis-local logical bits:
+ *   - 0x2194 bit 0 controls the axis brake-release output.
+ *   - 0x2190 bit 1 is the positive limit input.
+ *   - 0x2190 bit 2 is the negative limit input.
+ */
+#define BC2_AXIS_OUTPUT_BRAKE_MASK          SERVO_DRIVE_OUTPUT_OUT1_MASK
+#define BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK  SERVO_DRIVE_INPUT_IN2_MASK
+#define BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK  SERVO_DRIVE_INPUT_IN3_MASK
+
 static int32_t scaled_float_to_i32(float value, float scale)
 {
     float scaled = value * scale;
@@ -80,27 +93,6 @@ static uint16_t brake_active_mask(bool brake_release, uint16_t output_mask)
     return canopen_active ? output_mask : 0U;
 }
 
-static uint16_t lift_axis_brake_output_mask(uint32_t wheel)
-{
-    return (wheel % 2U) == 0U ?
-           SERVO_DRIVE_OUTPUT_OUT1_MASK :
-           SERVO_DRIVE_OUTPUT_OUT4_MASK;
-}
-
-static uint16_t lift_axis_positive_limit_mask(uint32_t wheel)
-{
-    return (wheel % 2U) == 0U ?
-           SERVO_DRIVE_INPUT_IN2_MASK :
-           SERVO_DRIVE_INPUT_IN7_MASK;
-}
-
-static uint16_t lift_axis_negative_limit_mask(uint32_t wheel)
-{
-    return (wheel % 2U) == 0U ?
-           SERVO_DRIVE_INPUT_IN3_MASK :
-           SERVO_DRIVE_INPUT_IN8_MASK;
-}
-
 static uint32_t valve_mask_from_track_rate(const ecu_hardware_config_t *config,
                                            float track_rate_mm_s)
 {
@@ -156,38 +148,25 @@ ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_stat
     bool ok = true;
     if (command_source_allows_lift_output(command->source) &&
         lift_command_changed(state, command)) {
-        uint16_t front_output_mask = 0U;
-        uint16_t front_active_mask = 0U;
-        uint16_t rear_output_mask = 0U;
-        uint16_t rear_active_mask = 0U;
         bool lift_brake_release = command->height_rate_mm_s != 0.0f;
 
         for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-            uint16_t output_mask = lift_axis_brake_output_mask(wheel);
-            if (wheel < 2U) {
-                front_output_mask |= output_mask;
-                front_active_mask |= brake_active_mask(lift_brake_release, output_mask);
-            } else {
-                rear_output_mask |= output_mask;
-                rear_active_mask |= brake_active_mask(lift_brake_release, output_mask);
-            }
+            const ecu_canopen_node_config_t *node = &config->lift_nodes[wheel];
 
             ok = send_lift_command(canopen,
-                                   &config->lift_nodes[wheel],
+                                   node,
                                    command->target_height_mm,
                                    command->height_rate_mm_s,
                                    config->lift_mm_to_counts,
-                                   lift_axis_positive_limit_mask(wheel),
-                                   lift_axis_negative_limit_mask(wheel)) && ok;
+                                   BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK,
+                                   BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK) && ok;
+            ok = servo_drive_canopen_set_output_state(
+                     canopen,
+                     node,
+                     BC2_AXIS_OUTPUT_BRAKE_MASK,
+                     brake_active_mask(lift_brake_release,
+                                       BC2_AXIS_OUTPUT_BRAKE_MASK)) && ok;
         }
-        ok = servo_drive_canopen_set_output_state(canopen,
-                                                  &config->lift_nodes[0],
-                                                  front_output_mask,
-                                                  front_active_mask) && ok;
-        ok = servo_drive_canopen_set_output_state(canopen,
-                                                  &config->lift_nodes[2],
-                                                  rear_output_mask,
-                                                  rear_active_mask) && ok;
         ok = send_hydraulic_pump_command(canopen,
                                          &config->hydraulic_pump_node,
                                          command->hydraulic_enable) && ok;

@@ -29,6 +29,13 @@ sdk_compile_definitions("-DCO_CONFIG_NMT=0x3002")
 sdk_compile_definitions("-DCO_CONFIG_SDO_CLI=(CO_CONFIG_SDO_CLI_ENABLE|CO_CONFIG_SDO_CLI_SEGMENTED)")
 sdk_ld_options("-Wl,--wrap=hpm_can_send")
 
+# CANopenNode is imported vendor middleware.  Keep application warnings visible
+# while suppressing known vendor-header diagnostics that otherwise make the SES
+# project noisy during whole-machine debugging.
+sdk_compile_options("-Wno-unused-parameter")
+sdk_ses_compile_options("-Wno-unused-parameter")
+sdk_ses_compile_options("-Wno-macro-redefined")
+
 sdk_inc(src)
 sdk_inc(../../common/include)
 sdk_inc(../../config/include)
