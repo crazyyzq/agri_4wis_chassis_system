@@ -391,6 +391,24 @@ Motion/control bug-fix checkpoint on 2026-07-01:
   - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu1_latest`: passed and linked `output\demo.elf`.
   - `git diff --check`: no whitespace errors; only Git LF/CRLF conversion warnings for tracked text files.
 
+Four-wheel kinematics checkpoint on 2026-07-01:
+
+- Added `ecu/control/four_wheel_kinematics` as the focused module for motion geometry. `motion_control` now selects the requested motion mode and delegates target calculation to the kinematic module.
+- Positive Ackermann and reverse Ackermann now use ICR geometry from wheelbase, track width and minimum turning radius to compute each wheel's steering angle and signed wheel speed.
+- Reverse Ackermann treats the rear of the vehicle as the driving-forward direction. In that mode, D gear commands negative vehicle-X speed and R gear commands positive vehicle-X speed, while CH1 steering remains relative to the rear-facing driver view. This means a left stick command in reverse Ackermann bends left from the rear-view driving frame, which is rightward in the front-fixed vehicle frame.
+- Vehicle geometry values are centralized in `ecu/config/include/ecu_config.h`:
+  - `ECU_VEHICLE_WHEELBASE_MM`
+  - `ECU_VEHICLE_TRACK_WIDTH_MIN_MM`
+  - `ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM`
+  - `ECU_VEHICLE_TRACK_WIDTH_MAX_MM`
+  - `ECU_VEHICLE_MIN_TURN_RADIUS_MM`
+- `motion_control_limits_t` carries `wheelbase_mm` and `track_width_mm`, so later hydraulic/ADC feedback can feed real-time geometry into the same formulas.
+- Local verification for this checkpoint:
+  - Added regression coverage in `test_four_wheel_ackermann_kinematics_uses_vehicle_geometry`.
+  - `python tests\python\run_tests.py`: 78/78 tests passed.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu0_canopennode`: passed and linked `output\demo.elf`.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu1_latest`: passed.
+
 ## Known open items
 
 - Replace or extend the DS301 minimum OD with the actual BC/BC2 servo-drive EDS/object dictionary if future PDO mapping or vendor-specific objects require local OD entries.

@@ -63,7 +63,21 @@ static float scale_positive_per_mille(int16_t per_mille, float full_scale)
     return (clamped * full_scale) / 1000.0f;
 }
 
-static float remote_speed_command_kph(const remote_control_request_t *remote)
+static bool motion_mode_reverses_driving_direction(ecu_motion_mode_t mode)
+{
+    return mode == ECU_MOTION_MODE_REVERSE_ACKERMANN;
+}
+
+static float apply_driving_direction_to_speed(ecu_motion_mode_t mode, float speed_kph)
+{
+    /* Gear and throttle are operator-frame concepts.  In reverse Ackermann the
+     * operator drives from the rear-facing frame: D means travel toward the
+     * original vehicle rear, so the fixed vehicle-frame speed sign is inverted.
+     */
+    return motion_mode_reverses_driving_direction(mode) ? -speed_kph : speed_kph;
+}
+
+static float remote_speed_command_kph(const remote_control_request_t *remote, ecu_motion_mode_t mode)
 {
     if (remote->active_gear == ECU_GEAR_REQUEST_P) {
         return 0.0f;
@@ -74,7 +88,7 @@ static float remote_speed_command_kph(const remote_control_request_t *remote)
     if (remote->active_gear == ECU_GEAR_REQUEST_R) {
         speed = -speed;
     }
-    return speed;
+    return apply_driving_direction_to_speed(mode, speed);
 }
 
 static bool remote_requests_brake_release(const remote_control_request_t *remote)
@@ -122,6 +136,19 @@ static ecu_gear_request_t auto_gear_from_speed(float target_speed_kph)
 static bool auto_requests_brake_release(const auto_control_request_t *auto_request)
 {
     return auto_request != 0 && auto_request->target_speed_kph != 0.0f;
+}
+
+static float auto_speed_command_kph(const auto_control_request_t *auto_request)
+{
+    if (auto_request == 0) {
+        return 0.0f;
+    }
+    /* Automatic requests use the same driver-frame convention as remote
+     * requests: positive target speed means "forward in the selected motion
+     * mode", not always fixed vehicle +X.
+     */
+    return apply_driving_direction_to_speed(auto_request->requested_mode,
+                                           auto_request->target_speed_kph);
 }
 
 static void apply_remote_adjust_command(const remote_control_request_t *remote,
@@ -175,6 +202,8 @@ void command_arbiter_update(const remote_control_request_t *remote,
         motion_control_limits_t limits = {
             .max_speed_kph = ECU_REMOTE_MAX_SPEED_KPH,
             .max_steer_deg = ECU_REMOTE_MAX_STEER_DEG,
+            .wheelbase_mm = ECU_VEHICLE_WHEELBASE_MM,
+            .track_width_mm = ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM,
         };
         out->source = COMMAND_SOURCE_REMOTE;
         out->motion_mode = remote->active_motion_mode;
@@ -186,7 +215,7 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->headlight_on = remote->headlight_on;
         out->diagnostic = remote->diagnostic;
         motion_control_build_candidate(remote->active_motion_mode,
-                                       remote_speed_command_kph(remote),
+                                       remote_speed_command_kph(remote, remote->active_motion_mode),
                                        scale_signed_per_mille(remote->steer_per_mille,
                                                               ECU_REMOTE_MAX_STEER_DEG),
                                        &limits,
@@ -201,11 +230,17 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->motion_mode = auto_request->requested_mode;
         out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph);
         out->brake_release = auto_requests_brake_release(auto_request);
-        out->target_speed_kph = auto_request->target_speed_kph;
-        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-            out->target_wheel_speed_kph[wheel] = auto_request->target_speed_kph;
-            out->target_steer_deg[wheel] = auto_request->target_steer_deg;
-        }
+        motion_control_limits_t limits = {
+            .max_speed_kph = ECU_REMOTE_MAX_SPEED_KPH,
+            .max_steer_deg = ECU_REMOTE_MAX_STEER_DEG,
+            .wheelbase_mm = ECU_VEHICLE_WHEELBASE_MM,
+            .track_width_mm = ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM,
+        };
+        motion_control_build_candidate(auto_request->requested_mode,
+                                       auto_speed_command_kph(auto_request),
+                                       auto_request->target_steer_deg,
+                                       &limits,
+                                       out);
         out->high_voltage_enable = remote->high_voltage_enable_request;
     }
 }

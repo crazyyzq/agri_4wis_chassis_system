@@ -11,7 +11,9 @@ This file records project defaults that need final confirmation from vehicle wir
 - CAN2 motion bus: default `1 Mbit/s`.
   - Scope: BC/BC2 drive and steering devices.
   - Hardware debug: CANopenNode CAN2 command path has verified BC2 SDO downloads and NMT commands with auxiliary power only. Main-power and motor-motion behavior still needs controlled validation.
-- CAN3 lift/hydraulic bus: project default `500 kbit/s`.
+- CAN3 lift/hydraulic bus: project default `1 Mbit/s`.
+  - Scope: BC/BC2 lift servos and the hydraulic station servo.
+  - Source: current whole-vehicle wiring uses BC/BC2 CANopen devices on CAN3.
 - CAN4 auxiliary bus: project default `500 kbit/s`.
 
 ## Items requiring vehicle calibration
@@ -28,6 +30,7 @@ This file records project defaults that need final confirmation from vehicle wir
 - DCDC12 command setpoints: current default follows the document example, `27.5 V` and `10.0 A`, controlled by `ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV` and `ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA`.
 - DCAC output voltage: current default is `220.0 V`, controlled by `ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV`.
 - BC/BC2 PDO mapping, CiA 402 object dictionary details, scaling and enable sequence. Current CANopen command-debug firmware has verified NMT and SDO writes on a BC2 drive under auxiliary power; main-power and motor-motion behavior still needs controlled validation.
+- Drive, steering and lift conversion scales. The four-wheel kinematic model now computes per-wheel angles and wheel speeds from wheelbase, track width and ICR geometry, but the final counts-per-engineering-unit scale factors still require controlled vehicle calibration.
 - Lift servo PDO mapping, scaling and enable sequence.
 - Relay/MOS digital output polarity and final managed-output bit masks.
 - Hydraulic valve bit mapping and electrical interlock requirements.

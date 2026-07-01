@@ -27,6 +27,13 @@ find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 
 project(agri_chassis_control_cpu0)
 
+# SEGGER emits HPM_SDK_LIB_ITF include directories before app include
+# directories.  Put the application source directory at the front of that
+# interface so the protected project-local canopen_errno.h is selected before
+# the SDK CANopenNode port header, avoiding EMSGSIZE redefinition with the
+# toolchain errno.h.
+target_include_directories(${HPM_SDK_LIB_ITF} BEFORE INTERFACE "${CMAKE_CURRENT_LIST_DIR}/src")
+
 # Core firmware feature definitions.  CANopenNode is enabled as the only
 # CANopen stack; application code talks to it through canopen_master_service and
 # servo_drive_canopen instead of hand-built CANopen frames.
@@ -38,6 +45,7 @@ sdk_compile_definitions("-DCO_CONFIG_FIFO=(CO_CONFIG_FIFO_ENABLE)")
 sdk_compile_definitions("-DCO_CONFIG_NMT=0x3002")
 sdk_compile_definitions("-DCO_CONFIG_SDO_CLI=(CO_CONFIG_SDO_CLI_ENABLE|CO_CONFIG_SDO_CLI_SEGMENTED)")
 sdk_ld_options("-Wl,--wrap=hpm_can_send")
+sdk_ld_options("-lm")
 
 # CANopenNode is imported vendor middleware. Keep application warnings visible
 # while suppressing known vendor unused-parameter diagnostics.
@@ -117,6 +125,7 @@ sdk_app_src(../../vehicle/src/safety_manager.c)
 sdk_app_src(../../vehicle/src/vehicle_command_executor.c)
 sdk_app_src(../../vehicle/src/vehicle_state.c)
 sdk_app_src(../../control/src/motion_control.c)
+sdk_app_src(../../control/src/four_wheel_kinematics.c)
 sdk_app_src(../../control/src/adjust_control.c)
 sdk_app_src(../../ipc/src/ipc_snapshot.c)
 sdk_app_src(../../os/src/ecu_tasks_cpu0.c)

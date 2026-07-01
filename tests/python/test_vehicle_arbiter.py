@@ -71,6 +71,38 @@ def test_auto_motion_command_sets_consistent_gear_and_brake_release(root: pathli
         assert token in text if token.startswith("auto_") else token in auto_block, token
 
 
+def test_reverse_ackermann_uses_rear_as_driving_forward(root: pathlib.Path) -> None:
+    """Reverse Ackermann keeps stick logic in the rear-facing driving frame."""
+
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    kinematics_c = read(root, "ecu/control/src/four_wheel_kinematics.c")
+
+    for token in [
+        "motion_mode_reverses_driving_direction",
+        "mode == ECU_MOTION_MODE_REVERSE_ACKERMANN",
+        "apply_driving_direction_to_speed",
+        "return motion_mode_reverses_driving_direction(mode) ? -speed_kph : speed_kph",
+        "remote_speed_command_kph(const remote_control_request_t *remote, ecu_motion_mode_t mode)",
+        "apply_driving_direction_to_speed(mode, speed)",
+        "auto_speed_command_kph",
+        "auto_request->requested_mode",
+    ]:
+        assert token in arbiter_c, token
+
+    remote_call = arbiter_c.split("motion_control_build_candidate(remote->active_motion_mode", 1)[1]
+    assert "remote_speed_command_kph(remote, remote->active_motion_mode)" in remote_call
+
+    auto_block = arbiter_c.split("if (remote != 0 && remote->auto_control_allowed", 1)[1]
+    assert "out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph)" in auto_block
+    assert "auto_speed_command_kph(auto_request)" in auto_block
+
+    reverse_kinematics = kinematics_c[
+        kinematics_c.index("void four_wheel_kinematics_build_reverse_ackermann"):
+        kinematics_c.index("void four_wheel_kinematics_build_spin")
+    ]
+    assert "build_ackermann_from_curvature(speed_kph, steer_input_deg, -1.0f" in reverse_kinematics
+
+
 def test_remote_arming_gear_requests_release_brake_before_active_drive(root: pathlib.Path) -> None:
     text = read(root, "ecu/vehicle/src/command_arbiter.c")
     required = [
@@ -117,28 +149,39 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
 
     vehicle_h = read(root, "ecu/vehicle/include/vehicle_types.h")
     motion_c = read(root, "ecu/control/src/motion_control.c")
+    kin_c = read(root, "ecu/control/src/four_wheel_kinematics.c")
     motion_device_c = read(root, "ecu/devices/src/motion_device.c")
     command_c = read(root, "ecu/vehicle/src/command_arbiter.c")
 
     assert "float target_wheel_speed_kph[ECU_WHEEL_COUNT]" in vehicle_h
     assert "command->target_wheel_speed_kph[wheel]" in motion_device_c
-    assert "out->target_wheel_speed_kph[wheel]" in command_c
+    assert "motion_control_build_candidate" in command_c
+    assert "out->target_wheel_speed_kph[wheel]" in motion_c
 
     for token in [
         "build_positive_ackermann_targets",
         "build_reverse_ackermann_targets",
         "build_spin_targets",
         "build_crab_targets",
+    ]:
+        assert token in motion_c, token
+
+    for token in [
         "ECU_WHEEL_LEG1_FRONT_RIGHT",
         "ECU_WHEEL_LEG2_FRONT_LEFT",
         "ECU_WHEEL_LEG3_REAR_LEFT",
         "ECU_WHEEL_LEG4_REAR_RIGHT",
     ]:
-        assert token in motion_c, token
+        assert token in kin_c, token
 
     spin_block = motion_c[
         motion_c.index("static void build_spin_targets"):
         motion_c.index("static void build_crab_targets")
+    ]
+    assert "four_wheel_kinematics_build_spin" in spin_block
+    spin_impl = kin_c[
+        kin_c.index("void four_wheel_kinematics_build_spin"):
+        kin_c.index("void four_wheel_kinematics_build_crab")
     ]
     for token in [
         "out->target_steer_deg[ECU_WHEEL_LEG1_FRONT_RIGHT] = spin_angle",
@@ -148,7 +191,65 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
         "out->target_wheel_speed_kph[ECU_WHEEL_LEG2_FRONT_LEFT] = -speed_kph",
         "out->target_wheel_speed_kph[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_kph",
     ]:
-        assert token in spin_block, token
+        assert token in spin_impl, token
+
+
+def test_four_wheel_ackermann_kinematics_uses_vehicle_geometry(root: pathlib.Path) -> None:
+    """Ackermann output must be computed from wheelbase, track width and ICR geometry."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/control/include/motion_control.h")
+    motion_c = read(root, "ecu/control/src/motion_control.c")
+    kin_h = read(root, "ecu/control/include/four_wheel_kinematics.h")
+    kin_c = read(root, "ecu/control/src/four_wheel_kinematics.c")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "ECU_VEHICLE_WHEELBASE_MM",
+        "ECU_VEHICLE_TRACK_WIDTH_MIN_MM",
+        "ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM",
+        "ECU_VEHICLE_TRACK_WIDTH_MAX_MM",
+        "ECU_VEHICLE_MIN_TURN_RADIUS_MM",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "float wheelbase_mm",
+        "float track_width_mm",
+    ]:
+        assert token in motion_h, token
+        assert token in kin_h, token
+
+    assert '#include "four_wheel_kinematics.h"' in motion_c
+    assert "four_wheel_kinematics_build_ackermann" in motion_c
+    assert "four_wheel_kinematics_build_reverse_ackermann" in motion_c
+    assert "four_wheel_kinematics_build_spin" in motion_c
+    assert "four_wheel_kinematics_build_crab" in motion_c
+
+    for token in [
+        "four_wheel_kinematics_geometry_t",
+        "four_wheel_kinematics_output_t",
+        "atan2f",
+        "sqrtf",
+        "tanf",
+        "clamp_geometry",
+        "turn_radius_mm",
+        "wheel_x_mm",
+        "wheel_y_mm",
+        "linear_velocity_x",
+        "linear_velocity_y",
+        "ECU_WHEEL_LEG1_FRONT_RIGHT",
+        "ECU_WHEEL_LEG2_FRONT_LEFT",
+        "ECU_WHEEL_LEG3_REAR_LEFT",
+        "ECU_WHEEL_LEG4_REAR_RIGHT",
+    ]:
+        assert token in kin_c, token
+
+    assert ".wheelbase_mm = ECU_VEHICLE_WHEELBASE_MM" in arbiter_c
+    assert ".track_width_mm = ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM" in arbiter_c
+    assert "four_wheel_kinematics.c" in cmake
+    assert 'sdk_ld_options("-lm")' in cmake
 
 
 def test_safety_manager_clamps_dangerous_outputs(root: pathlib.Path) -> None:

@@ -169,10 +169,14 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
     assert "sdk_compile_definitions(-DCONFIG_CANOPEN_MASTER=1)" in cmake
     assert 'sdk_compile_options("-Wno-unused-parameter")' in cmake
     assert "-Wno-macro-redefined" not in cmake
+    assert 'target_include_directories(${HPM_SDK_LIB_ITF} BEFORE INTERFACE "${CMAKE_CURRENT_LIST_DIR}/src")' in cmake
     assert "sdk_app_src(../../drivers/canopen/src/canopen_master_service.c)" in cmake
     canopen_errno_h = read(root, "ecu/apps/agri_chassis_control_cpu0/src/canopen_errno.h")
+    assert "#ifndef EIO" in canopen_errno_h
+    assert "#define EIO 5" in canopen_errno_h
     assert "#ifndef EMSGSIZE" in canopen_errno_h
     assert "#define EMSGSIZE 122" in canopen_errno_h
+    assert "hpm_sdk_errno.h" not in canopen_errno_h
     assert "without editing the ignored SDK environment" in canopen_errno_h
     assert "MAX_CANOPEN_DEVICE (2U)" in user_config_h
     for token in [

@@ -12,12 +12,15 @@
 #define ECU_CANOPEN_ERRNO_COMPAT_H
 
 #include <errno.h>
-#include "hpm_sdk_errno.h"
 
 /* CANopenNode/HPM code expects the BSD socket-style errno names below.  Define
  * only the names missing from the active toolchain so this header remains safe
  * with both SEGGER and GCC/newlib headers.
  */
+#ifndef EIO
+#define EIO 5
+#endif
+
 #ifndef ENOTSUP
 #define ENOTSUP 134
 #endif

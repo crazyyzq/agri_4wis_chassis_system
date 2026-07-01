@@ -302,11 +302,22 @@
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
 #define ECU_REMOTE_MAX_SPEED_KPH          (6.0f)
 #define ECU_REMOTE_MAX_STEER_DEG          (35.0f)
+/* Vehicle geometry used by four-wheel kinematics.
+ *
+ * Wheelbase is the longitudinal distance between front and rear axle centers.
+ * Track width is the lateral distance between left and right wheel centers.
+ * The hydraulic track-width mechanism changes the lateral distance at runtime;
+ * until closed-loop position feedback is wired into the command path, the
+ * default value below is used by the remote and automatic command builders.
+ */
+#define ECU_VEHICLE_WHEELBASE_MIN_MM      (1200.0f)
+#define ECU_VEHICLE_WHEELBASE_MM          (2200.0f)
+#define ECU_VEHICLE_WHEELBASE_MAX_MM      (3200.0f)
+#define ECU_VEHICLE_TRACK_WIDTH_MIN_MM    (1200.0f)
+#define ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM (1800.0f)
+#define ECU_VEHICLE_TRACK_WIDTH_MAX_MM    (2600.0f)
+#define ECU_VEHICLE_MIN_TURN_RADIUS_MM    (1500.0f)
 #define ECU_MOTION_SPIN_STEER_DEG         (45.0f)
-#define ECU_MOTION_ACKERMANN_FRONT_SIGN   (1.0f)
-#define ECU_MOTION_ACKERMANN_REAR_SIGN    (-1.0f)
-#define ECU_MOTION_REVERSE_ACK_FRONT_SIGN (-1.0f)
-#define ECU_MOTION_REVERSE_ACK_REAR_SIGN  (1.0f)
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (400.0f)
 #define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
