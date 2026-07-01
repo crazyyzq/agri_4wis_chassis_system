@@ -34,7 +34,8 @@ typedef struct {
     ecu_motion_mode_t motion_mode;
     ecu_gear_request_t active_gear;
     float target_speed_kph;
-    float target_steer_deg[4];
+    float target_wheel_speed_kph[ECU_WHEEL_COUNT];
+    float target_steer_deg[ECU_WHEEL_COUNT];
     float target_height_mm;
     float height_rate_mm_s;
     float track_rate_mm_s;

@@ -156,6 +156,7 @@ void analog_modbus_device_process(analog_modbus_device_state_t *state,
     modbus_master_request_t request;
     modbus_master_snapshot_t master_snapshot;
     analog_modbus_response_context_t context;
+    uint32_t previous_timeout_count;
 
     if (state == 0 || master == 0 || uart == 0 || analog_inputs == 0 ||
         config == 0) {
@@ -173,6 +174,9 @@ void analog_modbus_device_process(analog_modbus_device_state_t *state,
     context.config = config;
     context.now_ms = now_ms;
 
+    modbus_master_service_get_snapshot(master, &master_snapshot);
+    previous_timeout_count = master_snapshot.timeout_count;
+
     modbus_master_service_process(master,
                                   uart,
                                   now_ms,
@@ -183,6 +187,9 @@ void analog_modbus_device_process(analog_modbus_device_state_t *state,
 
     modbus_master_service_get_snapshot(master, &master_snapshot);
     state->request_count = master_snapshot.tx_count;
+    if (master_snapshot.timeout_count > previous_timeout_count) {
+        state->online = false;
+    }
     if (master_snapshot.error_count > state->error_count) {
         state->error_count = master_snapshot.error_count;
     }

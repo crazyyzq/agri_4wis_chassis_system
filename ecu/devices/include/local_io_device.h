@@ -19,10 +19,12 @@ typedef struct {
  */
 void local_io_device_init(local_io_device_state_t *state);
 
-/* Apply final brake, horn, headlight and indicator requests to DIO.
+/* Apply final horn, headlight and indicator requests to DIO.
  *
  * Units: all fields are logical outputs after safety clamping.
  * Dependencies: DIO masks and active polarity from hardware config.
+ * Servo brake outputs are intentionally excluded; they are controlled through
+ * the BC/BC2 drive terminal outputs over CANopen.
  * Failure behavior: invalid arguments return an error; this function does not
  * infer missing safety conditions.
  */

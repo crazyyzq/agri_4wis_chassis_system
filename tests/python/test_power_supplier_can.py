@@ -143,3 +143,10 @@ def test_cpu0_monitor_reports_can1_power_snapshot(root: pathlib.Path) -> None:
     assert "[ECU POWER]" in monitor_c
     assert "last_tx_id" in monitor_c
     assert "bms_soc" in monitor_c
+
+
+def test_power_can_online_uses_current_bus_state_not_cumulative_errors(root: pathlib.Path) -> None:
+    power_c = read(root, "ecu/devices/src/power_device.c")
+
+    assert "snapshot->can1_online = can1 != 0 && can1->online;" in power_c
+    assert "snapshot->can1_online = can1 != 0 && can1->online && can1->error_count == 0U;" not in power_c

@@ -66,13 +66,15 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
     executor->motion_result = motion_device_apply(&s_runtime.motion,
                                                   io->can2_motion_canopen,
                                                   config,
-                                                  command);
+                                                  command,
+                                                  now_ms);
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
                                     io->can3_lift_hydraulic_canopen,
                                     io->dio,
                                     config,
-                                    command);
+                                    command,
+                                    now_ms);
     executor->local_io_result = local_io_device_apply(&s_runtime.local_io,
                                                       io->dio,
                                                       config,

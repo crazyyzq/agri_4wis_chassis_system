@@ -19,7 +19,6 @@ ecu_device_apply_result_t local_io_device_apply(local_io_device_state_t *state,
         return ECU_DEVICE_APPLY_INVALID_ARGUMENT;
     }
 
-    dio_service_write_masked(dio, config->dio_brake_release_mask, command->brake_release);
     dio_service_write_masked(dio, config->dio_horn_mask, command->horn_on);
     dio_service_write_masked(dio, config->dio_headlight_mask, command->headlight_on);
     dio_service_write_masked(dio,

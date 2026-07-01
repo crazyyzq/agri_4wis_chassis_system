@@ -56,9 +56,11 @@ static const ecu_config_t s_default_config = {
     .cpu1_service_period_ms = ECU_CPU1_SERVICE_PERIOD_MS
 };
 
-/* Track-width adjustment helper gains.  Steering targets point the wheels into
- * the adjustment posture, while assist torque signs compensate for the mirrored
- * geometry of the four legs. */
+/* Track-width adjustment helper gains in vehicle leg order:
+ *   leg 1 front-right, leg 2 front-left, leg 3 rear-left, leg 4 rear-right.
+ * Steering targets point the wheels into the adjustment posture.  Assist torque
+ * signs are positive on the right side and negative on the left side, matching
+ * the confirmed vehicle geometry. */
 static const track_adjust_config_t s_track_adjust_config = {
     .steer_target_deg = { 90.0f, -90.0f, -90.0f, 90.0f },
     .assist_torque_sign = { 1.0f, -1.0f, -1.0f, 1.0f },
@@ -69,8 +71,14 @@ static const track_adjust_config_t s_track_adjust_config = {
 /* Hardware binding table for CPU0.
  *
  * The order of each node array is the vehicle leg order used throughout the
- * control stack: front-left, front-right, rear-left, rear-right.  This keeps
- * motion-control code independent from the actual CANopen node numbers. */
+ * control stack:
+ *   - Leg 1: front-right
+ *   - Leg 2: front-left
+ *   - Leg 3: rear-left
+ *   - Leg 4: rear-right
+ *
+ * This keeps motion-control code independent from the actual CANopen node
+ * numbers while making the physical position of each array slot explicit. */
 static const ecu_hardware_config_t s_hardware_config = {
     .can1_bitrate = ECU_CAN1_POWER_BITRATE,
     .can2_bitrate = ECU_CAN2_MOTION_BITRATE,
@@ -94,8 +102,9 @@ static const ecu_hardware_config_t s_hardware_config = {
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LEG4_STEER_NODE_ID)
     },
 
-    /* CAN3 lift motors: node 9..12.  On BC2 drives the B axis is addressed as
-     * its own CANopen node, not as extra bits on the A-axis node. */
+    /* CAN3 lift motors: node 9, 11, 12 and 10 in vehicle leg order.  On BC2
+     * drives the B axis is addressed as its own CANopen node, not as extra
+     * bits on the A-axis node. */
     .lift_nodes = {
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LIFT_LEG1_NODE_ID),
         CANOPEN_NODE_CONFIG(ECU_CANOPEN_LIFT_LEG2_NODE_ID),

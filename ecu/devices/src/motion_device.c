@@ -88,10 +88,46 @@ static bool command_source_allows_motion_output(ecu_command_source_t source)
 static bool command_changed(const motion_device_state_t *state,
                             const vehicle_actuator_command_t *command)
 {
+    if (!state->last_motion_command_valid) {
+        return true;
+    }
+
+    if (state->last_motion_command.source != command->source ||
+        state->last_motion_command.motion_mode != command->motion_mode ||
+        state->last_motion_command.active_gear != command->active_gear ||
+        state->last_motion_command.target_speed_kph != command->target_speed_kph ||
+        state->last_motion_command.brake_release != command->brake_release) {
+        return true;
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        if (state->last_motion_command.target_wheel_speed_kph[wheel] !=
+            command->target_wheel_speed_kph[wheel]) {
+            return true;
+        }
+        if (state->last_motion_command.target_steer_deg[wheel] !=
+            command->target_steer_deg[wheel]) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* Decide when an unchanged motion command must be re-sent.
+ *
+ * CANopen SDO downloads are asynchronous from the adapter's point of view:
+ * servo_drive_canopen_*() can report that a request entered the service queue,
+ * while the actual SDO transfer may later timeout or be aborted by the drive.
+ * A bounded refresh interval prevents that later failure from leaving a stale
+ * cached command that is skipped forever.
+ */
+static bool motion_command_refresh_due(const motion_device_state_t *state,
+                                       uint32_t now_ms)
+{
     return !state->last_motion_command_valid ||
-           memcmp(&state->last_motion_command,
-                  command,
-                  sizeof(state->last_motion_command)) != 0;
+           (uint32_t)(now_ms - state->last_motion_command_queue_ms) >=
+               ECU_CANOPEN_MOTION_COMMAND_REFRESH_MS;
 }
 
 void motion_device_init(motion_device_state_t *state)
@@ -105,7 +141,8 @@ void motion_device_init(motion_device_state_t *state)
 ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                               canopen_master_service_t *canopen,
                                               const ecu_hardware_config_t *config,
-                                              const vehicle_actuator_command_t *command)
+                                              const vehicle_actuator_command_t *command,
+                                              uint32_t now_ms)
 {
     if (state == 0 || canopen == 0 || config == 0 || command == 0) {
         return ECU_DEVICE_APPLY_INVALID_ARGUMENT;
@@ -114,8 +151,11 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
         state->last_result = ECU_DEVICE_APPLY_BACKEND_OFFLINE;
         return state->last_result;
     }
+
+    bool changed = command_changed(state, command);
+    bool refresh_due = motion_command_refresh_due(state, now_ms);
     if (!command_source_allows_motion_output(command->source) ||
-        !command_changed(state, command)) {
+        (!changed && !refresh_due)) {
         state->skipped_count++;
         state->last_result = ECU_DEVICE_APPLY_OK;
         return state->last_result;
@@ -125,7 +165,7 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         ok = send_drive_command(canopen,
                                 &config->drive_nodes[wheel],
-                                command->target_speed_kph,
+                                command->target_wheel_speed_kph[wheel],
                                 config->drive_speed_kph_to_counts_per_sec,
                                 command->brake_release) && ok;
         ok = send_steer_command(canopen,
@@ -133,8 +173,11 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                 command->target_steer_deg[wheel],
                                 config->steer_deg_to_counts) && ok;
     }
-    state->last_motion_command = *command;
-    state->last_motion_command_valid = true;
+    if (ok) {
+        state->last_motion_command = *command;
+        state->last_motion_command_valid = true;
+        state->last_motion_command_queue_ms = now_ms;
+    }
     state->apply_count++;
     state->last_result = ok ? ECU_DEVICE_APPLY_OK : ECU_DEVICE_APPLY_REJECTED;
     return state->last_result;

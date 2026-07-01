@@ -145,12 +145,18 @@ void board_init_console(void)
     cfg.baudrate = BOARD_CONSOLE_UART_BAUDRATE;
 
     if (status_success != console_init(&cfg)) {
-        while (1) {
-        }
+        /*
+         * The debug UART is useful during bring-up, but it is not a safety
+         * dependency.  Keep booting so CAN/Modbus tasks and the RGB heartbeat
+         * can still prove that the ECU firmware is alive if the console path is
+         * misconfigured or the USB-UART adapter is absent.
+         */
+        printf("[ECU BOARD] WARN: console init failed, continuing without debug console\r\n");
+        return;
     }
 #else
-    while (1) {
-    }
+    printf("[ECU BOARD] WARN: console init skipped, unsupported console backend\r\n");
+    return;
 #endif
 #endif
 }
@@ -488,13 +494,28 @@ void board_init_i2c(I2C_Type *ptr)
     }
 
     freq = board_init_i2c_clock(ptr);
+    if (freq == 0U) {
+        /*
+         * Unknown I2C base address means this board file has no clock/pinmux
+         * binding for the requested peripheral.  Do not pass a zero source
+         * clock into the SDK driver; report it and keep the ECU scheduler alive.
+         */
+        printf("[ECU BOARD] WARN: I2C init skipped for unbound peripheral 0x%lx\r\n",
+               (uint32_t) ptr);
+        return;
+    }
+
     config.i2c_mode = i2c_mode_normal;
     config.is_10bit_addressing = false;
     stat = i2c_init_master(ptr, freq, &config);
     if (stat != status_success) {
-        printf("failed to initialize i2c 0x%lx\n", (uint32_t) ptr);
-        while (1) {
-        }
+        /*
+         * I2C is currently used for optional board peripherals.  A missing
+         * EEPROM or an unpopulated I2C branch must not freeze the chassis ECU;
+         * the device-level code can mark its own feedback offline later.
+         */
+        printf("[ECU BOARD] WARN: I2C init failed at 0x%lx, continuing\r\n", (uint32_t) ptr);
+        return;
     }
 }
 

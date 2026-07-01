@@ -54,6 +54,44 @@ def test_remote_modules_expose_owner_update_api(root: pathlib.Path) -> None:
         assert "get_state" in header or "get_request" in header, module
 
 
+def test_sbus_mapping_is_owned_by_remote_layer_not_cpu0_tasks(root: pathlib.Path) -> None:
+    mapper_h = read(root, "ecu/remote/include/remote_sbus_mapper.h")
+    mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "remote_sbus_sample_t",
+        "remote_sbus_mapper_t",
+        "remote_sbus_mapper_init",
+        "remote_sbus_mapper_build_ppm_sample",
+        "remote_sbus_mapper_build_input",
+    ]:
+        assert token in mapper_h, token
+
+    for token in [
+        "sbus_protocol_raw_to_ppm_equivalent",
+        "sbus_per_mille_from_raw",
+        "sbus_throttle_per_mille_from_raw",
+        "sbus_ppm_channels_are_credible",
+        "stable_position_from_channel",
+        "remote_discrete_channel_t discrete_channels",
+    ]:
+        assert token not in tasks_c, token
+
+    for token in [
+        "sbus_protocol_raw_to_ppm_equivalent",
+        "sbus_per_mille_from_ppm",
+        "sbus_throttle_per_mille_from_ppm",
+        "sbus_ppm_channels_are_credible",
+        "stable_position_from_channel",
+    ]:
+        assert token in mapper_c, token
+
+    assert "remote_discrete_channel_t discrete_channels" in mapper_h
+    assert "remote_sbus_mapper.c" in cmake
+
+
 def test_remote_source_has_required_safety_logic_names(root: pathlib.Path) -> None:
     combined = "\n".join(
         read(root, f"ecu/remote/src/{name}.c")
@@ -106,15 +144,15 @@ def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> 
 
 def test_mode_fsm_requires_fresh_r1_r2_event(root: pathlib.Path) -> None:
     mode_c = read(root, "ecu/remote/src/remote_mode_fsm.c")
-    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
 
     assert "input->r1_changed" in mode_c
     assert "input->r2_changed" in mode_c
     assert "fresh_r1_event" in mode_c
     assert "fresh_r2_event" in mode_c
     assert "old R1/R2 events" not in mode_c
-    assert "out->r1_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R1].changed" in tasks_c
-    assert "out->r2_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R2].changed" in tasks_c
+    assert "out->r1_changed = mapper->discrete_channels[ECU_SBUS_CH_R1].changed" in mapper_c
+    assert "out->r2_changed = mapper->discrete_channels[ECU_SBUS_CH_R2].changed" in mapper_c
 
 
 def test_remote_event_lifetimes_are_configured(root: pathlib.Path) -> None:

@@ -58,6 +58,46 @@ def test_vehicle_sources_rebuild_complete_command(root: pathlib.Path) -> None:
         assert token in text, token
 
 
+def test_auto_motion_command_sets_consistent_gear_and_brake_release(root: pathlib.Path) -> None:
+    text = read(root, "ecu/vehicle/src/command_arbiter.c")
+
+    auto_block = text.split("if (remote != 0 && remote->auto_control_allowed", 1)[1]
+    for token in [
+        "auto_gear_from_speed",
+        "auto_requests_brake_release",
+        "out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph)",
+        "out->brake_release = auto_requests_brake_release(auto_request)",
+    ]:
+        assert token in text if token.startswith("auto_") else token in auto_block, token
+
+
+def test_remote_arming_gear_requests_release_brake_before_active_drive(root: pathlib.Path) -> None:
+    text = read(root, "ecu/vehicle/src/command_arbiter.c")
+    required = [
+        "remote_requests_brake_release",
+        "GEAR_STATE_ARM_D",
+        "GEAR_STATE_ARM_R",
+        "remote->gear_state",
+        "out->brake_release = remote_requests_brake_release(remote)",
+    ]
+    for token in required:
+        assert token in text, token
+
+
+def test_track_adjust_prepare_requests_brake_release_before_active_adjust(root: pathlib.Path) -> None:
+    text = read(root, "ecu/vehicle/src/command_arbiter.c")
+    adjust = read(root, "ecu/remote/src/remote_adjust_fsm.c")
+
+    assert "ADJUST_STATE_TRACK_PREPARE" in adjust
+    assert "preconditions->brake_release_confirmed" in adjust
+    for token in [
+        "ADJUST_STATE_TRACK_PREPARE",
+        "ADJUST_STATE_TRACK_ACTIVE",
+        "remote->adjust_state",
+    ]:
+        assert token in text, token
+
+
 def test_track_adjust_configuration_is_parameterized(root: pathlib.Path) -> None:
     text = read(root, "ecu/config/include/ecu_config.h")
     required = [
@@ -70,6 +110,45 @@ def test_track_adjust_configuration_is_parameterized(root: pathlib.Path) -> None
     ]
     for token in required:
         assert token in text, token
+
+
+def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib.Path) -> None:
+    """Four steering modes must not collapse into the same four-wheel command."""
+
+    vehicle_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    motion_c = read(root, "ecu/control/src/motion_control.c")
+    motion_device_c = read(root, "ecu/devices/src/motion_device.c")
+    command_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+
+    assert "float target_wheel_speed_kph[ECU_WHEEL_COUNT]" in vehicle_h
+    assert "command->target_wheel_speed_kph[wheel]" in motion_device_c
+    assert "out->target_wheel_speed_kph[wheel]" in command_c
+
+    for token in [
+        "build_positive_ackermann_targets",
+        "build_reverse_ackermann_targets",
+        "build_spin_targets",
+        "build_crab_targets",
+        "ECU_WHEEL_LEG1_FRONT_RIGHT",
+        "ECU_WHEEL_LEG2_FRONT_LEFT",
+        "ECU_WHEEL_LEG3_REAR_LEFT",
+        "ECU_WHEEL_LEG4_REAR_RIGHT",
+    ]:
+        assert token in motion_c, token
+
+    spin_block = motion_c[
+        motion_c.index("static void build_spin_targets"):
+        motion_c.index("static void build_crab_targets")
+    ]
+    for token in [
+        "out->target_steer_deg[ECU_WHEEL_LEG1_FRONT_RIGHT] = spin_angle",
+        "out->target_steer_deg[ECU_WHEEL_LEG2_FRONT_LEFT] = -spin_angle",
+        "out->target_steer_deg[ECU_WHEEL_LEG3_REAR_LEFT] = spin_angle",
+        "out->target_steer_deg[ECU_WHEEL_LEG4_REAR_RIGHT] = -spin_angle",
+        "out->target_wheel_speed_kph[ECU_WHEEL_LEG2_FRONT_LEFT] = -speed_kph",
+        "out->target_wheel_speed_kph[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_kph",
+    ]:
+        assert token in spin_block, token
 
 
 def test_safety_manager_clamps_dangerous_outputs(root: pathlib.Path) -> None:

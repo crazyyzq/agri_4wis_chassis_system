@@ -65,6 +65,29 @@
 #define ECU_DEBUG_MONITOR_VERBOSE        (1)
 #endif
 
+/* Commissioning-only power debug.
+ *
+ * This J-Link/Watch controlled hook is for whole-machine communication
+ * checkout when the remote controller is not present.  It may request BMS high
+ * voltage only; it must not release brakes, enable hydraulics, or send motion
+ * targets.  Keep the hook compiled in but inactive until the magic value and
+ * high_voltage_enable flag are written through the debugger.
+ */
+#ifndef ECU_ENABLE_COMMISSIONING_POWER_DEBUG
+#define ECU_ENABLE_COMMISSIONING_POWER_DEBUG (1)
+#endif
+#define ECU_COMMISSIONING_CONTROL_MAGIC      (0xEC0C0DEUL)
+#define ECU_COMMISSIONING_HV_REQUEST_TIMEOUT_MS (600000U)
+
+/* Read-only SDO scanner for whole-machine CANopen communication checkout.
+ * It queues one 0x6041 statusword upload at a time across all configured servo
+ * nodes.  This provides per-node traffic evidence without enabling operation.
+ */
+#ifndef ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN
+#define ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN (1)
+#endif
+#define ECU_CANOPEN_COMMISSIONING_SCAN_PERIOD_MS (50U)
+
 #ifndef ECU_ENABLE_CANOPENNODE
 #define ECU_ENABLE_CANOPENNODE           (0)
 #endif
@@ -78,7 +101,18 @@
 #define ECU_CAN4_AUXILIARY_BITRATE       (500000UL)
 #define ECU_CAN1_TERMINATION_ENABLE      (0)
 #define ECU_CAN2_TERMINATION_ENABLE      (0)
-#define ECU_CAN3_TERMINATION_ENABLE      (0)
+#define ECU_CAN3_TERMINATION_ENABLE      (1)
+#define ECU_CAN4_TERMINATION_ENABLE      (1)
+
+/* Bench-only CAN4 physical-layer test.  When enabled, CPU0 initializes the
+ * auxiliary CAN4 controller and sends a harmless standard CAN frame at a fixed
+ * period.  The payload is intentionally not a CANopen, BMS or actuator command.
+ */
+#ifndef ECU_ENABLE_CAN4_PHYSICAL_TEST_TX
+#define ECU_ENABLE_CAN4_PHYSICAL_TEST_TX (1)
+#endif
+#define ECU_CAN4_PHYSICAL_TEST_TX_PERIOD_MS (500U)
+#define ECU_CAN4_PHYSICAL_TEST_FRAME_ID     (0x444UL)
 
 #ifndef ECU_ENABLE_CAN3_LIFT_CANOPEN
 #define ECU_ENABLE_CAN3_LIFT_CANOPEN     (1)
@@ -107,16 +141,33 @@
 
 /* Vehicle CANopen node contract.
  *
+ * Vehicle direction is defined with the front of the vehicle as positive X.
+ * All four actuator arrays use vehicle leg order, not the common FL/FR/RL/RR
+ * order:
+ *   - Leg 1: front-right drive, steering and lift motors.
+ *   - Leg 2: front-left drive, steering and lift motors.
+ *   - Leg 3: rear-left drive, steering and lift motors.
+ *   - Leg 4: rear-right drive, steering and lift motors.
+ *
+ * Keep this contract explicit.  Field wiring, CANopen node IDs, steering signs,
+ * lift signs and diagnostic print order all become ambiguous if the code silently
+ * switches to another wheel order.
+ *
  * CAN2:
  *   - Drive motors use nodes 1..4 in leg order.
  *   - Steering motors use nodes 5..8 in leg order.
  *
  * CAN3:
- *   - Lift motors use nodes 9..12 in leg order.
+ *   - Lift motors use nodes 9, 11, 12 and 10 in vehicle leg order.
  *   - The hydraulic station motor uses node 13.
  *
  * BC2 dual-axis drives expose A and B axes as separate CANopen nodes.  The SW
  * BCD switch sets the A-axis node ID and the B-axis node ID is A + 1. */
+#define ECU_WHEEL_LEG1_FRONT_RIGHT (0U)
+#define ECU_WHEEL_LEG2_FRONT_LEFT  (1U)
+#define ECU_WHEEL_LEG3_REAR_LEFT   (2U)
+#define ECU_WHEEL_LEG4_REAR_RIGHT  (3U)
+
 #define ECU_CANOPEN_LEG1_DRIVE_NODE_ID (0x01U)
 #define ECU_CANOPEN_LEG2_DRIVE_NODE_ID (0x02U)
 #define ECU_CANOPEN_LEG3_DRIVE_NODE_ID (0x03U)
@@ -126,23 +177,24 @@
 #define ECU_CANOPEN_LEG3_STEER_NODE_ID (0x07U)
 #define ECU_CANOPEN_LEG4_STEER_NODE_ID (0x08U)
 #define ECU_CANOPEN_LIFT_LEG1_NODE_ID  (0x09U)
-#define ECU_CANOPEN_LIFT_LEG2_NODE_ID  (0x0AU)
-#define ECU_CANOPEN_LIFT_LEG3_NODE_ID  (0x0BU)
-#define ECU_CANOPEN_LIFT_LEG4_NODE_ID  (0x0CU)
+#define ECU_CANOPEN_LIFT_LEG2_NODE_ID  (0x0BU)
+#define ECU_CANOPEN_LIFT_LEG3_NODE_ID  (0x0CU)
+#define ECU_CANOPEN_LIFT_LEG4_NODE_ID  (0x0AU)
 #define ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID (0x0DU)
 
-/* Semantic aliases used by control code.  The aliases keep vehicle-side code
- * readable even when a field change requires remapping the physical node IDs. */
-#define ECU_CANOPEN_DRIVE_FL_NODE_ID   ECU_CANOPEN_LEG1_DRIVE_NODE_ID
-#define ECU_CANOPEN_DRIVE_FR_NODE_ID   ECU_CANOPEN_LEG2_DRIVE_NODE_ID
+/* Semantic aliases used by control code and diagnostics.  The aliases keep
+ * position-oriented code readable while the primary storage order remains
+ * explicit vehicle leg order: FR, FL, RL, RR. */
+#define ECU_CANOPEN_DRIVE_FR_NODE_ID   ECU_CANOPEN_LEG1_DRIVE_NODE_ID
+#define ECU_CANOPEN_DRIVE_FL_NODE_ID   ECU_CANOPEN_LEG2_DRIVE_NODE_ID
 #define ECU_CANOPEN_DRIVE_RL_NODE_ID   ECU_CANOPEN_LEG3_DRIVE_NODE_ID
 #define ECU_CANOPEN_DRIVE_RR_NODE_ID   ECU_CANOPEN_LEG4_DRIVE_NODE_ID
-#define ECU_CANOPEN_STEER_FL_NODE_ID   ECU_CANOPEN_LEG1_STEER_NODE_ID
-#define ECU_CANOPEN_STEER_FR_NODE_ID   ECU_CANOPEN_LEG2_STEER_NODE_ID
+#define ECU_CANOPEN_STEER_FR_NODE_ID   ECU_CANOPEN_LEG1_STEER_NODE_ID
+#define ECU_CANOPEN_STEER_FL_NODE_ID   ECU_CANOPEN_LEG2_STEER_NODE_ID
 #define ECU_CANOPEN_STEER_RL_NODE_ID   ECU_CANOPEN_LEG3_STEER_NODE_ID
 #define ECU_CANOPEN_STEER_RR_NODE_ID   ECU_CANOPEN_LEG4_STEER_NODE_ID
-#define ECU_CANOPEN_LIFT_FL_NODE_ID    ECU_CANOPEN_LIFT_LEG1_NODE_ID
-#define ECU_CANOPEN_LIFT_FR_NODE_ID    ECU_CANOPEN_LIFT_LEG2_NODE_ID
+#define ECU_CANOPEN_LIFT_FR_NODE_ID    ECU_CANOPEN_LIFT_LEG1_NODE_ID
+#define ECU_CANOPEN_LIFT_FL_NODE_ID    ECU_CANOPEN_LIFT_LEG2_NODE_ID
 #define ECU_CANOPEN_LIFT_RL_NODE_ID    ECU_CANOPEN_LIFT_LEG3_NODE_ID
 #define ECU_CANOPEN_LIFT_RR_NODE_ID    ECU_CANOPEN_LIFT_LEG4_NODE_ID
 
@@ -160,9 +212,18 @@
 #define ECU_CANOPEN_COB_ID_DISABLED      (0x80000000UL)
 
 #define ECU_CANOPEN_MASTER_NODE_ID       (0x7FU)
-#define ECU_CANOPEN_BC2_DIAG_NODE_ID     (ECU_CANOPEN_DRIVE_FL_NODE_ID)
+#define ECU_CANOPEN_BC2_DIAG_NODE_ID     (ECU_CANOPEN_DRIVE_FR_NODE_ID)
 #define ECU_CANOPEN_SDO_TIMEOUT_MS       (100U)
 #define ECU_CANOPEN_SDO_PERIOD_MS        (100U)
+/* Device adapters cache the last successfully queued actuator command to avoid
+ * flooding the CANopen SDO queue every scheduler tick.  Queue success does not
+ * prove the remote drive accepted the SDO later, so unchanged commands are
+ * refreshed periodically.  This keeps the command path self-healing after a
+ * transient full queue, timeout, reset or abort without generating 5 ms SDO
+ * bursts during steady state.
+ */
+#define ECU_CANOPEN_MOTION_COMMAND_REFRESH_MS (500U)
+#define ECU_CANOPEN_LIFT_COMMAND_REFRESH_MS   (500U)
 
 /* CANopen object indexes used by the BC/BC2 servo adapter.  0x2190 reports
  * drive terminal input states; 0x2194 writes outputs configured for program
@@ -187,7 +248,7 @@
  * macros in configuration so reversing the drive terminal polarity is a single
  * compile-time change instead of a logic edit in the device layer. */
 #define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)
-#define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (1U)
+#define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (0U)
 #define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_COUNTS_PER_SEC (1000)
 
 /* Commissioning scale factors.  These convert high-level vehicle commands into
@@ -198,16 +259,15 @@
 #define ECU_LIFT_MM_TO_COUNTS                 (100.0f)
 
 /* Local digital outputs stay limited to board-level loads.  Servo brakes are
- * controlled through drive terminal outputs over CANopen, not through these
- * PCB output channels. */
-#define ECU_DIO_BRAKE_RELEASE_MASK       (1UL << 0)
+ * controlled through drive terminal outputs over CANopen, not through PCB DIO.
+ */
+#define ECU_DIO_BRAKE_RELEASE_MASK       (0UL)
 #define ECU_DIO_HYDRAULIC_ENABLE_MASK    (1UL << 1)
 #define ECU_DIO_HORN_MASK                (1UL << 2)
 #define ECU_DIO_HEADLIGHT_MASK           (1UL << 3)
 #define ECU_DIO_LEFT_INDICATOR_MASK      (1UL << 4)
 #define ECU_DIO_RIGHT_INDICATOR_MASK     (1UL << 5)
-#define ECU_DIO_MANAGED_OUTPUT_MASK      (ECU_DIO_BRAKE_RELEASE_MASK | \
-                                                ECU_DIO_HYDRAULIC_ENABLE_MASK | \
+#define ECU_DIO_MANAGED_OUTPUT_MASK      (ECU_DIO_HYDRAULIC_ENABLE_MASK | \
                                                 ECU_DIO_HORN_MASK | \
                                                 ECU_DIO_HEADLIGHT_MASK | \
                                                 ECU_DIO_LEFT_INDICATOR_MASK | \
@@ -242,6 +302,11 @@
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
 #define ECU_REMOTE_MAX_SPEED_KPH          (6.0f)
 #define ECU_REMOTE_MAX_STEER_DEG          (35.0f)
+#define ECU_MOTION_SPIN_STEER_DEG         (45.0f)
+#define ECU_MOTION_ACKERMANN_FRONT_SIGN   (1.0f)
+#define ECU_MOTION_ACKERMANN_REAR_SIGN    (-1.0f)
+#define ECU_MOTION_REVERSE_ACK_FRONT_SIGN (-1.0f)
+#define ECU_MOTION_REVERSE_ACK_REAR_SIGN  (1.0f)
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (400.0f)
 #define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
@@ -271,6 +336,13 @@ typedef enum {
     ECU_SBUS_CH_R2,
     ECU_SBUS_CHANNEL_COUNT
 } ecu_sbus_channel_role_t;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t command_sequence;
+    bool high_voltage_enable;
+    uint32_t request_time_ms;
+} ecu_commissioning_control_t;
 
 typedef struct {
     uint16_t low_max;

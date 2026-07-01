@@ -7,6 +7,16 @@
 
 #define STATUS_LED_STEP_MS (250U)
 
+/*
+ * ECU front-panel RGB meaning:
+ * BOOT: blue heartbeat while scheduler is starting.
+ * NO_REMOTE: blue heartbeat when SBUS/remote is not online.
+ * READY: solid green when remote and required buses are healthy.
+ * ACTIVE: cyan heartbeat when an actuator/high-voltage command is active.
+ * WARNING: yellow heartbeat for missing optional/commissioning peripherals.
+ * ESTOP/FATAL: red is reserved for operator emergency stop or fatal faults.
+ */
+
 static void status_led_write(bool red, bool green, bool blue)
 {
     board_rgb_write(BOARD_RGB_RED, red ? 1U : 0U);
@@ -44,12 +54,19 @@ void status_led_service_update(status_led_service_t *service,
     }
 
     switch (service->last_pattern) {
+    case STATUS_LED_PATTERN_NO_REMOTE:
+        status_led_write(false, false, service->phase != 0U);
+        break;
     case STATUS_LED_PATTERN_READY:
         status_led_write(false, true, false);
+        break;
+    case STATUS_LED_PATTERN_ACTIVE:
+        status_led_write(false, service->phase != 0U, service->phase != 0U);
         break;
     case STATUS_LED_PATTERN_WARNING:
         status_led_write(service->phase != 0U, service->phase != 0U, false);
         break;
+    case STATUS_LED_PATTERN_FATAL:
     case STATUS_LED_PATTERN_ESTOP:
         status_led_write(true, false, false);
         break;

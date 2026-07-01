@@ -1,6 +1,6 @@
 # ECU Main Control Framework Progress
 
-Last updated: 2026-06-29
+Last updated: 2026-07-01
 
 This file records the durable implementation state for the main-branch control framework so the project can be resumed after context compression or a new development session.
 
@@ -10,6 +10,25 @@ This file records the durable implementation state for the main-branch control f
 - Ethernet and CAN-FD are intentionally out of scope for the current software framework.
 - The main project target is the HPM6750 ECU based on the MR6750 module and the HPM SDK 1.11 environment.
 - The main framework is being written on `main`, not on the previous board-test branch.
+
+## 2026-07-01 whole-vehicle pre-debug audit
+
+- Fresh Python contract tests passed: `python tests\python\run_tests.py` -> 63/63.
+- Fresh CPU0 target build passed through the SDK CMake tool:
+  `ecu\sdk_env_v1.11.0\tools\cmake\bin\cmake.exe --build tmp\cmake_cpu0_canopennode --target all`.
+- J-Link download to the connected ECU passed with `HPM6750xVMx`, JTAG, 4000 kHz and `VTref=3.283V`; the final run reported the flash content already matched `tmp\cmake_cpu0_canopennode\output\demo.elf`.
+- COM5 debug UART is working at 115200 baud. With SBUS and most external devices not connected, the runtime correctly stays in safety state: `DIAG_REMOTE_ESTOP_SBUS_TIMEOUT`, gear `P`, speed `0`, brake release `0`, high voltage `0`, hydraulic `0`.
+- Corrected two whole-vehicle blocking logic issues found during audit:
+  - Servo brake-release polarity now matches the field wiring note: drive output low releases the brake, so `ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT` is `0`.
+  - D/R arming now requests brake release while active gear remains `P`, avoiding the previous ARM_D/ARM_R deadlock where the gear FSM waited for brake feedback before the command path released the brake.
+- Corrected one hardware-boundary issue:
+  - Servo brakes are no longer driven through PCB DIO. PCB local IO now handles horn, headlight and indicators only; BC/BC2 J3 OUT brake outputs are controlled through CANopen object `0x2194`.
+- Corrected one CANopen command-cache retry issue:
+  - Motion and lift/hydraulic adapters update their cached actuator command only after all SDO requests in the current command set are accepted by the local CANopen queue.
+  - Because local queue acceptance is not the same as remote SDO completion, unchanged motion and lift commands are also refreshed at `ECU_CANOPEN_MOTION_COMMAND_REFRESH_MS` / `ECU_CANOPEN_LIFT_COMMAND_REFRESH_MS`. This prevents a later SDO timeout, abort or drive reset from causing an unchanged command to be skipped indefinitely.
+- Current commissioning switches intentionally still enabled:
+  - `ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN=1` sends read-only `0x6041` statusword SDO scans on CAN2/CAN3.
+  - `ECU_ENABLE_CAN4_PHYSICAL_TEST_TX=1` sends standard CAN4 test frame `0x444` every 500 ms. Disable this before assigning CAN4 to a real device protocol.
 
 ## Requirement source
 
@@ -241,6 +260,137 @@ Engineering closure result on 2026-06-29:
   - CPU0 CANopenNode build is now the default build path and produces `output\demo.elf`.
   - Active `ecu`, `tests` and `docs` files were scanned for informal uncertainty and transitional engineering wording; no matches remain outside generated build output, which was deleted before commit.
 
+Code-quality and logic audit checkpoint on 2026-07-01:
+
+- `ecu/os/src/ecu_tasks_cpu0.c` was reduced back to orchestration responsibility. SBUS protocol raw-to-PPM conversion, analog channel scaling, credibility checks and discrete switch debouncing now live in `ecu/remote/src/remote_sbus_mapper.c` with the public interface in `ecu/remote/include/remote_sbus_mapper.h`.
+- Fixed CAN1 power-bus online logic. `power_device_refresh_online()` now uses the current CAN service online state and no longer treats cumulative `error_count` as a permanent offline latch.
+- Fixed CAN3 lift/hydraulic command caching. Track-width adjustment, hydraulic enable and hydraulic valve-mask changes are now part of the CAN3 command cache key, so a pure track-width command still resends the hydraulic-station CANopen command.
+- Fixed RS485_1 analog ADC online state. A Modbus master timeout now clears `analog_modbus_device_state_t.online`, preventing stale “online” reporting after the ADC module is unplugged or stops responding.
+- Added regression coverage for the three bugs above:
+  - `test_sbus_mapping_is_owned_by_remote_layer_not_cpu0_tasks`
+  - `test_power_can_online_uses_current_bus_state_not_cumulative_errors`
+  - `test_lift_hydraulic_canopen_command_cache_includes_track_and_pump_intent`
+  - `test_analog_modbus_adc_marks_offline_on_master_timeout`
+- Local verification for this checkpoint:
+  - `python tests\python\run_tests.py`: 67/67 tests passed.
+  - `cmake --build tmp\cmake_cpu0_canopennode --target all`: passed and linked `output\demo.elf`.
+  - `git diff --check`: no whitespace errors; Git only reported LF/CRLF conversion warnings for tracked text files.
+- Remaining code-quality note: `remote_event_lifecycle` is initialized but not yet functionally wired into the remote FSM event path. It is not a direct dangerous-output bug, but it should either be connected to mode/power/light events or removed in a later cleanup to avoid unused architecture.
+
+Additional logic audit checkpoint on 2026-07-01:
+
+- Fixed a track-width adjustment deadlock. `remote_adjust_fsm` enters `ADJUST_STATE_TRACK_PREPARE` and waits for `brake_release_confirmed`; `command_arbiter` now requests brake release during `ADJUST_STATE_TRACK_PREPARE` and `ADJUST_STATE_TRACK_ACTIVE`, matching the existing D/R arming handshake.
+- Fixed AUTO command consistency. Automatic motion commands now derive D/R/P gear from target speed and request brake release when target speed is non-zero, avoiding contradictory `target_speed_kph != 0` with P gear and brake applied.
+- Fixed motion command cache comparison. `motion_device` no longer uses `memcmp()` on `vehicle_actuator_command_t`; it explicitly compares the motion-relevant fields so structure padding cannot cause false command changes.
+- Added regression coverage:
+  - `test_track_adjust_prepare_requests_brake_release_before_active_adjust`
+  - `test_auto_motion_command_sets_consistent_gear_and_brake_release`
+  - `test_motion_command_cache_does_not_memcmp_struct_padding`
+- Hardware download/check:
+  - J-Link V9.16 detected HPM6750xVMx RV32 target at VTref 3.283 V and downloaded `tmp\cmake_cpu0_canopennode\output\demo.elf` successfully.
+  - COM5 monitor showed the ECU running in safe state with no SBUS connected: `src=safety`, `gear=P`, `speed=0.00kph`, `brake=0`, `hv=0`, `hyd=0`.
+  - CAN2/CAN3 CANopen services initialized and stayed `normal=1`; missing node responses appear as SDO abort/timeouts when devices are not responding.
+  - RS485_1 ADC showed `online=0` after timeouts, confirming the stale-online fix.
+
+Hardware-missing and status-indicator audit checkpoint on 2026-07-01:
+
+- Refined ECU RGB status semantics so the PCB LED can distinguish a running safe ECU from a real hard stop:
+  - blue heartbeat: booting or no online SBUS/remote;
+  - solid green: remote online and required buses healthy;
+  - cyan heartbeat: high-voltage, brake-release, hydraulic or motion command active;
+  - yellow heartbeat: communication/peripheral warning;
+  - red: operator CH13 emergency stop or fatal A-class fault.
+- SBUS timeout/failsafe still clamps all actuator outputs through the safety manager, but it no longer forces the LED to solid red. This prevents an ECU on the bench with no transmitter connected from looking like a dead or fatal board.
+- `board_init_console()` and `board_init_i2c()` no longer trap forever if the debug console path or optional I2C branch cannot initialize. They report a warning and allow the scheduler, watchdog-visible tasks and RGB status service to continue.
+- Core fatal loops remain intentionally limited to clock/SDRAM startup failure and FreeRTOS fault/assert hooks. These are not ordinary unplugged-peripheral cases.
+- Local verification for this checkpoint:
+  - `python tests\python\run_tests.py`: 72/72 tests passed.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu0_canopennode`: passed and linked `output\demo.elf`.
+  - `tmp\cmake_cpu0_canopennode\segger_embedded_studio\agri_chassis_control_cpu0.emProject` includes the modified CPU0 task, board and RGB status LED source files.
+
+Follow-up hardware verification on 2026-07-01:
+
+- Added `led=<pattern>` to the `[ECU MON]` runtime line so the serial log reports the selected PCB RGB state explicitly.
+- Added a board-level guard in `board_init_i2c()` so an unbound I2C peripheral base or zero source clock is reported and skipped before the SDK I2C driver is called.
+- J-Link download passed after ECU power was restored:
+  - target `HPM6750xVMx`, JTAG 4000 kHz, `VTref=3.283V`;
+  - flash erase/program/verify completed for `tmp\cmake_cpu0_canopennode\output\demo.elf`.
+- COM5 serial monitor confirmed the firmware kept scheduling with disconnected SBUS/power/ADC/drive responses:
+  - `[ECU MON] ... led=no_remote ... link=offline estop=latched diag=DIAG_REMOTE_ESTOP_SBUS_TIMEOUT`;
+  - `seq` kept increasing, CANopen and Modbus remained in timeout/offline paths, and final command stayed safe: `src=safety`, gear `P`, speed `0`, brake release `0`, high voltage `0`, hydraulic `0`.
+- Local verification for this follow-up:
+  - `python tests\python\run_tests.py`: 73/73 tests passed.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu0_canopennode`: passed and linked `output\demo.elf`.
+
+SEGGER regeneration and code-quality audit on 2026-07-01:
+
+- Re-generated current SEGGER Embedded Studio projects:
+  - CPU0: `tmp\cmake_cpu0_canopennode\segger_embedded_studio\agri_chassis_control_cpu0.emProject`
+  - CPU1: `tmp\cmake_cpu1_latest\segger_embedded_studio\agri_chassis_control_cpu1.emProject`
+- CPU1 CMake now matches CPU0's self-contained SDK/toolchain setup and explicitly selects J-Link at 4000 kHz. This prevents regenerated CPU1 SES projects from falling back to OpenOCD/manual debugger setup.
+- Full code-quality scan result:
+  - no project-local uncertainty marker or hand-written CANopen/Modbus protocol stack remains;
+  - CANopen communication is routed through HPM SDK CANopenNode and `canopen_master_service`;
+  - Modbus communication is routed through HPM SDK Agile Modbus and `modbus_master_service`;
+  - remote/control layers do not directly access HPM registers or board GPIO/CAN/UART drivers;
+  - remaining infinite loops are limited to FreeRTOS task loops and fatal/assert hooks;
+  - UART RX loops have per-ISR byte budgets, RS485 TX wait has a timeout, and CAN RX processing uses finite service queues.
+- Local verification for this audit:
+  - `python tests\python\run_tests.py`: 74/74 tests passed.
+  - CPU0 regenerate + build passed and linked `tmp\cmake_cpu0_canopennode\output\demo.elf`.
+  - CPU1 regenerate + build passed and linked `tmp\cmake_cpu1_latest\output\demo.elf`.
+  - `git diff --check`: no whitespace errors; only Git LF/CRLF conversion warnings for tracked text files.
+
+Vehicle geometry mapping checkpoint on 2026-07-01:
+
+- Froze the physical wheel/leg convention with the vehicle front as the positive direction:
+  - leg 1 = front-right drive, steering and lift;
+  - leg 2 = front-left drive, steering and lift;
+  - leg 3 = rear-left drive, steering and lift;
+  - leg 4 = rear-right drive, steering and lift.
+- Updated `ecu/config` so all actuator arrays are explicitly documented as leg order `1, 2, 3, 4`, which means physical order `front-right, front-left, rear-left, rear-right`.
+- Corrected the semantic CANopen aliases:
+  - `FR` aliases now bind to leg 1 nodes;
+  - `FL` aliases now bind to leg 2 nodes;
+  - `RL` aliases bind to leg 3 nodes;
+  - `RR` aliases bind to leg 4 nodes.
+- Updated CPU0 CAN3 CANopen diagnostic default node from the stale front-left alias to the front-right/leg-1 lift node.
+- Added regression checks so a future edit cannot silently map leg 1 back to front-left.
+- Local verification for this mapping update:
+  - `python tests\python\run_tests.py`: 74/74 tests passed.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu0_canopennode`: passed and linked `output\demo.elf`.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu1_latest`: passed and linked `output\demo.elf`.
+
+Motion/control bug-fix checkpoint on 2026-07-01:
+
+- Fixed the motion command model so the final actuator command carries both the
+  chassis-level target speed and explicit per-wheel target speeds.  CANopen drive
+  nodes now receive `target_wheel_speed_kph[wheel]` instead of the same chassis
+  speed for every wheel.
+- Replaced the earlier simplified steering output that gave all four wheels the same
+  angle.  `motion_control` now builds distinct four-wheel targets for positive
+  Ackermann, reverse Ackermann, spin and crab modes using the confirmed leg
+  order: front-right, front-left, rear-left, rear-right.
+- Fixed CANopen command caching in the motion and lift/hydraulic adapters.  A
+  command is cached only after all queued SDO writes for that adapter succeed,
+  so a full queue, offline node or rejected write does not suppress the next
+  retry.
+- Fixed lift limit behavior.  If a lift axis is commanded into an active upper
+  or lower limit, the adapter queues quick-stop for that axis and does not
+  release that axis brake output.
+- Extended commissioning high-voltage debug clamping so it also clears all
+  per-wheel speed targets.
+- Added regression checks for:
+  - mode-specific four-wheel motion targets;
+  - per-wheel speed propagation into `motion_device`;
+  - CANopen command cache update only on successful queueing;
+  - lift limit blocking the corresponding brake release.
+- Local verification for this bug-fix checkpoint:
+  - `python tests\python\run_tests.py`: 77/77 tests passed.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu0_canopennode`: passed and linked `output\demo.elf`.
+  - `ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe -C tmp\cmake_cpu1_latest`: passed and linked `output\demo.elf`.
+  - `git diff --check`: no whitespace errors; only Git LF/CRLF conversion warnings for tracked text files.
+
 ## Known open items
 
 - Replace or extend the DS301 minimum OD with the actual BC/BC2 servo-drive EDS/object dictionary if future PDO mapping or vendor-specific objects require local OD entries.
@@ -250,4 +400,4 @@ Engineering closure result on 2026-06-29:
 - Device-level control functions still need more supplier-specific detail from the real manuals: BC/BC2 scaling and enable sequence validation under main power, final DCDC/DCAC setpoints and hydraulic relay mapping.
 - CPU0/CPU1 IPC transport still needs binding to the selected SDK multicore/RPMsg mechanism.
 - CANopen PDO/object mapping, relay polarity, hydraulic valve bits and analog channel order are currently project defaults and should be calibrated on the real vehicle.
-- Generated SES projects currently report that OpenOCD was not located, so debugger configuration must be set manually in SEGGER Embedded Studio unless OpenOCD is added to the SDK/tool PATH.
+- Generated CPU0 and CPU1 SEGGER projects currently select J-Link at 4000 kHz.

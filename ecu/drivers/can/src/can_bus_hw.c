@@ -15,6 +15,7 @@
 static can_bus_service_t *s_can1_service;
 static can_bus_service_t *s_can2_service;
 static can_bus_service_t *s_can3_service;
+static can_bus_service_t *s_can4_service;
 
 static uint8_t can_bus_hw_size_from_dlc(uint8_t dlc)
 {
@@ -69,9 +70,9 @@ static bool can_bus_hw_init_classic_bus(CAN_Type *base,
     } else if (bus_index == 2U) {
         board_set_can_termination(2U, ECU_CAN2_TERMINATION_ENABLE != 0);
     } else if (bus_index == 3U) {
-        board_set_can_termination(3U, false);
+        board_set_can_termination(3U, ECU_CAN3_TERMINATION_ENABLE != 0);
     } else if (bus_index == 4U) {
-        board_set_can_termination(4U, false);
+        board_set_can_termination(4U, ECU_CAN4_TERMINATION_ENABLE != 0);
     }
 
     can_config.baudrate = bitrate;
@@ -153,6 +154,20 @@ bool can_bus_hw_init_can3_lift_hydraulic(can_bus_service_t *service,
     return true;
 }
 
+bool can_bus_hw_init_can4_auxiliary(can_bus_service_t *service, uint32_t bitrate)
+{
+    if (!can_bus_hw_init_classic_bus(BOARD_CAN4_BASE, 4U, true, service, bitrate)) {
+        s_can4_service = 0;
+        can_bus_service_set_online(service, false);
+        return false;
+    }
+
+    s_can4_service = service;
+    can_bus_service_set_tx_backend(service, can_bus_hw_send_can4_frame);
+    intc_m_enable_irq_with_priority(BOARD_CAN4_IRQn, 2);
+    return true;
+}
+
 static void can_bus_hw_poll_rx(CAN_Type *base, can_bus_service_t *service)
 {
     if (service == 0) {
@@ -190,6 +205,11 @@ void can_bus_hw_poll_can2_rx(can_bus_service_t *service)
 void can_bus_hw_poll_can3_rx(can_bus_service_t *service)
 {
     can_bus_hw_poll_rx(BOARD_CAN3_BASE, service);
+}
+
+void can_bus_hw_poll_can4_rx(can_bus_service_t *service)
+{
+    can_bus_hw_poll_rx(BOARD_CAN4_BASE, service);
 }
 
 static bool can_bus_hw_send_frame(CAN_Type *base,
@@ -241,6 +261,11 @@ bool can_bus_hw_send_can3_frame(const ecu_can_frame_t *frame)
     return can_bus_hw_send_frame(BOARD_CAN3_BASE, s_can3_service, frame);
 }
 
+bool can_bus_hw_send_can4_frame(const ecu_can_frame_t *frame)
+{
+    return can_bus_hw_send_frame(BOARD_CAN4_BASE, s_can4_service, frame);
+}
+
 static void can_bus_hw_handle_isr(CAN_Type *base, can_bus_service_t *service)
 {
     uint8_t flags = can_get_tx_rx_flags(base);
@@ -290,4 +315,10 @@ SDK_DECLARE_EXT_ISR_M(BOARD_CAN3_IRQn, can_bus_hw_can3_isr)
 void can_bus_hw_can3_isr(void)
 {
     can_bus_hw_handle_isr(BOARD_CAN3_BASE, s_can3_service);
+}
+
+SDK_DECLARE_EXT_ISR_M(BOARD_CAN4_IRQn, can_bus_hw_can4_isr)
+void can_bus_hw_can4_isr(void)
+{
+    can_bus_hw_handle_isr(BOARD_CAN4_BASE, s_can4_service);
 }

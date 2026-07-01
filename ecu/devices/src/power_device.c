@@ -50,7 +50,13 @@ static void power_device_refresh_online(power_device_state_t *state,
                                         uint32_t now_ms)
 {
     power_device_snapshot_t *snapshot = &state->snapshot;
-    snapshot->can1_online = can1 != 0 && can1->online && can1->error_count == 0U;
+    /* CAN service error_count is cumulative diagnostic information.  Do not
+     * use it as an online latch, otherwise one transient TX/RX fault keeps the
+     * recovered power bus offline forever.  Current bus health is represented
+     * by can1->online; device-level online flags below are based on fresh
+     * protocol frames and their own timeouts.
+     */
+    snapshot->can1_online = can1 != 0 && can1->online;
     snapshot->bms_online =
         ECU_POWER_ENABLE_BMS != 0 &&
         power_device_recent(now_ms,

@@ -44,20 +44,29 @@ static bool send_lift_command(canopen_master_service_t *canopen,
                               float height_rate_mm_s,
                               float lift_scale,
                               uint16_t positive_limit_mask,
-                              uint16_t negative_limit_mask)
+                              uint16_t negative_limit_mask,
+                              bool *blocked_by_limit)
 {
     uint16_t control_word = (height_rate_mm_s == 0.0f) ?
                             SERVO_DRIVE_CONTROL_QUICK_STOP :
                             SERVO_DRIVE_CONTROL_ENABLE_OPERATION;
     uint16_t input_states = 0U;
+    if (blocked_by_limit != 0) {
+        *blocked_by_limit = false;
+    }
+
     if (servo_drive_canopen_read_input_states(canopen, node, &input_states)) {
         bool positive_limit = (input_states & positive_limit_mask) != 0U;
         bool negative_limit = (input_states & negative_limit_mask) != 0U;
         if ((height_rate_mm_s > 0.0f && positive_limit) ||
             (height_rate_mm_s < 0.0f && negative_limit)) {
-            return servo_drive_canopen_send_control_word(canopen,
-                                                         node,
-                                                         SERVO_DRIVE_CONTROL_QUICK_STOP);
+            if (blocked_by_limit != 0) {
+                *blocked_by_limit = true;
+            }
+            (void)servo_drive_canopen_send_control_word(canopen,
+                                                        node,
+                                                        SERVO_DRIVE_CONTROL_QUICK_STOP);
+            return false;
         }
     }
 
@@ -135,16 +144,40 @@ static bool command_source_allows_lift_output(ecu_command_source_t source)
            source == COMMAND_SOURCE_SAFETY;
 }
 
-/* Avoid resending identical lift SDO sequences every scheduler tick.  The
- * command source is included so a safety override is sent even if target values
- * numerically match the previous command. */
-static bool lift_command_changed(const lift_hydraulic_device_state_t *state,
-                                 const vehicle_actuator_command_t *command)
+/* Avoid resending identical CANopen SDO sequences every scheduler tick.
+ *
+ * Lift axes and the hydraulic pump share CAN3.  Track-width adjustment may
+ * change only the hydraulic pump/valve intent while height fields remain
+ * unchanged, so the cache key must include both lift and hydraulic fields.  The
+ * command source is included so a safety override is sent even when target
+ * values numerically match the previous command.
+ */
+static bool can3_actuator_command_changed(const lift_hydraulic_device_state_t *state,
+                                          const vehicle_actuator_command_t *command)
 {
     return !state->last_lift_command_valid ||
            state->last_lift_command.target_height_mm != command->target_height_mm ||
            state->last_lift_command.height_rate_mm_s != command->height_rate_mm_s ||
+           state->last_lift_command.track_rate_mm_s != command->track_rate_mm_s ||
+           state->last_lift_command.hydraulic_enable != command->hydraulic_enable ||
+           state->last_lift_command.hydraulic_valve_mask != command->hydraulic_valve_mask ||
            state->last_lift_command.source != command->source;
+}
+
+/* Decide when an unchanged CAN3 command must be re-sent.
+ *
+ * This protects lift brakes, lift motion and hydraulic-pump commands from a
+ * subtle SDO queue failure mode: the adapter can cache a command after all
+ * request entries were accepted, but one of those downloads can still fail
+ * later in the CANopen service.  The periodic refresh gives the drive network a
+ * bounded retry without flooding CAN3 every scheduler cycle.
+ */
+static bool lift_command_refresh_due(const lift_hydraulic_device_state_t *state,
+                                     uint32_t now_ms)
+{
+    return !state->last_lift_command_valid ||
+           (uint32_t)(now_ms - state->last_lift_command_queue_ms) >=
+               ECU_CANOPEN_LIFT_COMMAND_REFRESH_MS;
 }
 
 /* Reset counters and cached command state.  The device adapter owns no hardware
@@ -167,7 +200,8 @@ ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_stat
                                                       canopen_master_service_t *canopen,
                                                       dio_service_t *dio,
                                                       const ecu_hardware_config_t *config,
-                                                      const vehicle_actuator_command_t *command)
+                                                      const vehicle_actuator_command_t *command,
+                                                      uint32_t now_ms)
 {
     if (state == 0 || canopen == 0 || dio == 0 || config == 0 || command == 0) {
         return ECU_DEVICE_APPLY_INVALID_ARGUMENT;
@@ -178,32 +212,42 @@ ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_stat
     }
 
     bool ok = true;
+    bool changed = can3_actuator_command_changed(state, command);
+    bool refresh_due = lift_command_refresh_due(state, now_ms);
     if (command_source_allows_lift_output(command->source) &&
-        lift_command_changed(state, command)) {
+        (changed || refresh_due)) {
         bool lift_brake_release = command->height_rate_mm_s != 0.0f;
 
         for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
             const ecu_canopen_node_config_t *node = &config->lift_nodes[wheel];
+            bool axis_blocked_by_limit = false;
+            bool axis_brake_release;
 
-            ok = send_lift_command(canopen,
-                                   node,
-                                   command->target_height_mm,
-                                   command->height_rate_mm_s,
-                                   config->lift_mm_to_counts,
-                                   BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK,
-                                   BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK) && ok;
+            bool lift_ok = send_lift_command(canopen,
+                                             node,
+                                             command->target_height_mm,
+                                             command->height_rate_mm_s,
+                                             config->lift_mm_to_counts,
+                                             BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK,
+                                             BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK,
+                                             &axis_blocked_by_limit);
+            ok = lift_ok && ok;
+            axis_brake_release = lift_brake_release && !axis_blocked_by_limit;
             ok = servo_drive_canopen_set_output_state(
                      canopen,
                      node,
                      BC2_AXIS_OUTPUT_BRAKE_MASK,
-                     brake_active_mask(lift_brake_release,
+                     brake_active_mask(axis_brake_release,
                                        BC2_AXIS_OUTPUT_BRAKE_MASK)) && ok;
         }
         ok = send_hydraulic_pump_command(canopen,
                                          &config->hydraulic_pump_node,
                                          command->hydraulic_enable) && ok;
-        state->last_lift_command = *command;
-        state->last_lift_command_valid = true;
+        if (ok) {
+            state->last_lift_command = *command;
+            state->last_lift_command_valid = true;
+            state->last_lift_command_queue_ms = now_ms;
+        }
     } else {
         state->skipped_lift_canopen_count++;
     }

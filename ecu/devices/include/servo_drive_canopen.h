@@ -57,7 +57,7 @@ bool servo_drive_canopen_select_mode(canopen_master_service_t *canopen,
                                      uint16_t control_word,
                                      servo_drive_mode_t mode);
 
-/* Send RPDO3: control word + target position.
+/* Queue target-position SDO writes through CANopenNode.
  *
  * Units: target_position_counts is in the drive's configured position units.
  */
@@ -66,7 +66,7 @@ bool servo_drive_canopen_set_target_position(canopen_master_service_t *canopen,
                                              uint16_t control_word,
                                              int32_t target_position_counts);
 
-/* Send RPDO4: control word + target velocity.
+/* Queue target-velocity SDO writes through CANopenNode.
  *
  * Units: target_velocity_counts_per_sec is in the drive's configured velocity
  * units per second.
@@ -76,11 +76,7 @@ bool servo_drive_canopen_set_target_velocity(canopen_master_service_t *canopen,
                                              uint16_t control_word,
                                              int32_t target_velocity_counts_per_sec);
 
-/* Send RPDO5: control word + target torque.
- *
- * The provided EDS marks RPDO5 disabled by default. This function returns false
- * until configuration provides an enabled RPDO5 COB-ID.
- */
+/* Queue target-torque SDO writes through CANopenNode. */
 bool servo_drive_canopen_set_target_torque(canopen_master_service_t *canopen,
                                            const ecu_canopen_node_config_t *node,
                                            uint16_t control_word,

@@ -6,6 +6,7 @@
 #include "can_bus_hw.h"
 #include "can_bus_service.h"
 #include "canopen_master_service.h"
+#include "commissioning_debug.h"
 #include "command_arbiter.h"
 #include "dio_hw.h"
 #include "dio_service.h"
@@ -14,8 +15,8 @@
 #include "ipc_snapshot.h"
 #include "modbus_master_service.h"
 #include "power_device.h"
-#include "remote_discrete.h"
 #include "remote_manager.h"
+#include "remote_sbus_mapper.h"
 #include "runtime_monitor.h"
 #include "safety_manager.h"
 #include "sbus_service.h"
@@ -38,6 +39,7 @@ typedef struct {
     power_device_snapshot_t power_snapshot;
     canopen_master_service_t can2_motion_canopen;
     canopen_master_service_t can3_lift_hydraulic_canopen;
+    commissioning_debug_context_t commissioning_debug;
     dio_service_t dio;
     uart_rs485_hw_t rs485_1_hw;
     uart_rs485_hw_t rs485_2_hw;
@@ -46,7 +48,7 @@ typedef struct {
     analog_modbus_device_state_t analog_modbus_adc;
     analog_input_service_t analog_inputs;
     analog_input_snapshot_t analog_snapshot;
-    remote_discrete_channel_t discrete_channels[ECU_SBUS_CHANNEL_COUNT];
+    remote_sbus_mapper_t remote_sbus_mapper;
     remote_manager_t remote_manager;
     remote_control_request_t remote_request;
     auto_control_request_t auto_request;
@@ -109,10 +111,12 @@ void ecu_task_runtime_init(uint32_t now_ms)
                                      CANOPEN_MASTER_BUS_CAN3,
                                      hardware_config->can3_bitrate,
                                      ECU_CANOPEN_MASTER_NODE_ID,
-                                     ECU_CANOPEN_LIFT_FL_NODE_ID,
+                                     ECU_CANOPEN_LIFT_FR_NODE_ID,
                                      now_ms)) {
         s_runtime.can3_lift_hydraulic_canopen.snapshot.last_error = -1;
     }
+
+    commissioning_debug_init(&s_runtime.commissioning_debug, hardware_config);
 
     dio_service_init(&s_runtime.dio,
                      hardware_config->dio_active_high,
@@ -138,12 +142,7 @@ void ecu_task_runtime_init(uint32_t now_ms)
         s_runtime.warning_light_modbus_master.snapshot.error_count++;
     }
 
-    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
-        remote_discrete_init(&s_runtime.discrete_channels[channel],
-                             REMOTE_POS_CENTER,
-                             now_ms);
-    }
-
+    remote_sbus_mapper_init(&s_runtime.remote_sbus_mapper, now_ms);
     remote_manager_init(&s_runtime.remote_manager, now_ms);
     vehicle_actuator_command_safe_default(&s_runtime.final_command);
     vehicle_command_executor_init(&s_runtime.executor);
@@ -163,221 +162,27 @@ static void ecu_runtime_init_once(uint32_t now_ms)
     ecu_task_runtime_init(now_ms);
 }
 
-/* Debounce one SBUS channel into a stable discrete switch position. */
-static remote_position_t stable_position_from_channel(const sbus_service_snapshot_t *sbus,
-                                                      ecu_sbus_channel_role_t channel,
-                                                      const ecu_config_t *config,
-                                                      uint32_t now_ms)
+static void remote_sbus_sample_from_service(const sbus_service_snapshot_t *service,
+                                            remote_sbus_sample_t *out)
 {
-    remote_position_t candidate = REMOTE_POS_INVALID;
-    if (sbus->valid && channel < ECU_SBUS_CHANNEL_COUNT) {
-        candidate = remote_discrete_position_from_raw(sbus->channels[channel],
-                                                      &config->sbus_thresholds);
-    }
-    remote_discrete_update(&s_runtime.discrete_channels[channel],
-                           candidate,
-                           now_ms,
-                           config->discrete_debounce_ms);
-    return s_runtime.discrete_channels[channel].stable_position;
-}
-
-static int16_t clamp_per_mille_i16(int32_t value)
-{
-    if (value > 1000) {
-        return 1000;
-    }
-    if (value < -1000) {
-        return -1000;
-    }
-    return (int16_t)value;
-}
-
-/* Linear interpolation helper used for SBUS raw-to-PPM conversion. */
-static uint16_t interpolate_u16(uint16_t input,
-                                uint16_t input_low,
-                                uint16_t input_high,
-                                uint16_t output_low,
-                                uint16_t output_high)
-{
-    if (input_high <= input_low) {
-        return output_low;
-    }
-
-    uint32_t input_span = (uint32_t)input_high - (uint32_t)input_low;
-    uint32_t output_span = (uint32_t)output_high - (uint32_t)output_low;
-    uint32_t offset = (uint32_t)input - (uint32_t)input_low;
-    return (uint16_t)((uint32_t)output_low +
-                      ((offset * output_span + (input_span / 2U)) / input_span));
-}
-
-/* Convert an 11-bit SBUS protocol channel value to the PPM-equivalent servo
- * range expected by the remote state machines.
- */
-static uint16_t sbus_protocol_raw_to_ppm_equivalent(uint16_t raw)
-{
-    if (raw <= ECU_SBUS_PROTOCOL_RAW_LOW) {
-        return ECU_SBUS_PPM_LOW;
-    }
-    if (raw < ECU_SBUS_PROTOCOL_RAW_CENTER) {
-        return interpolate_u16(raw,
-                               ECU_SBUS_PROTOCOL_RAW_LOW,
-                               ECU_SBUS_PROTOCOL_RAW_CENTER,
-                               ECU_SBUS_PPM_LOW,
-                               ECU_SBUS_PPM_CENTER);
-    }
-    if (raw == ECU_SBUS_PROTOCOL_RAW_CENTER) {
-        return ECU_SBUS_PPM_CENTER;
-    }
-    if (raw < ECU_SBUS_PROTOCOL_RAW_HIGH) {
-        return interpolate_u16(raw,
-                               ECU_SBUS_PROTOCOL_RAW_CENTER,
-                               ECU_SBUS_PROTOCOL_RAW_HIGH,
-                               ECU_SBUS_PPM_CENTER,
-                               ECU_SBUS_PPM_HIGH);
-    }
-    return ECU_SBUS_PPM_HIGH;
-}
-
-/* Copy one SBUS snapshot and convert all analog channels to PPM-equivalent
- * values.  Link, failsafe and diagnostic counters remain untouched.
- */
-static void sbus_build_ppm_snapshot(const sbus_service_snapshot_t *raw,
-                                    sbus_service_snapshot_t *ppm)
-{
-    if (raw == 0 || ppm == 0) {
+    if (service == 0 || out == 0) {
         return;
     }
 
-    *ppm = *raw;
-    if (!ppm->valid) {
-        return;
-    }
-
-    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
-        ppm->channels[channel] =
-            sbus_protocol_raw_to_ppm_equivalent(raw->channels[channel]);
-    }
-}
-
-/* Convert a bidirectional PPM-equivalent SBUS stick around neutral into
- * -1000..1000.  This deliberately uses stick endpoints, not the discrete
- * switch thresholds, so analog control does not saturate at the low/high
- * classification boundaries.
- */
-static int16_t sbus_per_mille_from_raw(uint16_t raw,
-                                       const ecu_sbus_thresholds_t *thresholds)
-{
-    if (thresholds == 0) {
-        return 0;
-    }
-
-    int32_t neutral = (int32_t)thresholds->stick_neutral;
-    int32_t raw_value = (int32_t)raw;
-    if (raw_value >= neutral) {
-        int32_t span = (int32_t)thresholds->stick_max - neutral;
-        if (span <= 0) {
-            return 0;
-        }
-        return clamp_per_mille_i16(((raw_value - neutral) * 1000) / span);
-    }
-
-    int32_t span = neutral - (int32_t)thresholds->stick_min;
-    if (span <= 0) {
-        return 0;
-    }
-    return clamp_per_mille_i16(-(((neutral - raw_value) * 1000) / span));
-}
-
-/* Convert the one-way throttle channel from the PPM-equivalent SBUS range. */
-static int16_t sbus_throttle_per_mille_from_raw(uint16_t raw,
-                                                const ecu_sbus_thresholds_t *thresholds)
-{
-    if (thresholds == 0 || raw <= thresholds->throttle_min) {
-        return 0;
-    }
-
-    uint32_t span = (uint32_t)thresholds->throttle_max -
-                    (uint32_t)thresholds->throttle_min;
-    if (span == 0U) {
-        return 0;
-    }
-
-    if (raw >= thresholds->throttle_max) {
-        return 1000;
-    }
-
-    return clamp_per_mille_i16((int32_t)(((uint32_t)(raw - thresholds->throttle_min) *
-                                          1000U) / span));
-}
-
-static bool sbus_ppm_channels_are_credible(const sbus_service_snapshot_t *sbus)
-{
-    if (sbus == 0 || !sbus->valid || !sbus->connected) {
-        return true;
-    }
-
-    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
-        if (sbus->channels[channel] < ECU_SBUS_PPM_CREDIBLE_MIN ||
-            sbus->channels[channel] > ECU_SBUS_PPM_CREDIBLE_MAX) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static void build_remote_input_snapshot(const sbus_service_snapshot_t *sbus,
-                                        const ecu_config_t *config,
-                                        uint32_t now_ms,
-                                        remote_input_snapshot_t *out)
-{
     memset(out, 0, sizeof(*out));
-    out->now_ms = now_ms;
-    out->sbus_valid = sbus->valid && sbus->connected;
-    out->sbus_failsafe = sbus->failsafe;
-    out->sbus_timeout = !sbus->connected;
-    out->decode_error_limit = sbus->decode_error_count >= ECU_SBUS_DECODE_ERROR_LIMIT;
-    out->credibility_error = !sbus_ppm_channels_are_credible(sbus);
-
-    out->steering = stable_position_from_channel(sbus, ECU_SBUS_CH_STEER, config, now_ms);
-    out->clearance = stable_position_from_channel(sbus, ECU_SBUS_CH_CLEARANCE, config, now_ms);
-    out->throttle = stable_position_from_channel(sbus, ECU_SBUS_CH_THROTTLE, config, now_ms);
-    out->power = stable_position_from_channel(sbus, ECU_SBUS_CH_POWER, config, now_ms);
-    out->gear = stable_position_from_channel(sbus, ECU_SBUS_CH_GEAR, config, now_ms);
-    out->home = stable_position_from_channel(sbus, ECU_SBUS_CH_HOME, config, now_ms);
-    out->authority = stable_position_from_channel(sbus, ECU_SBUS_CH_AUTHORITY, config, now_ms);
-    out->left_indicator = stable_position_from_channel(sbus, ECU_SBUS_CH_LEFT_INDICATOR, config, now_ms);
-    out->hazard = stable_position_from_channel(sbus, ECU_SBUS_CH_HAZARD, config, now_ms);
-    out->horn = stable_position_from_channel(sbus, ECU_SBUS_CH_HORN, config, now_ms);
-    out->headlight = stable_position_from_channel(sbus, ECU_SBUS_CH_HEADLIGHT, config, now_ms);
-    out->right_indicator = stable_position_from_channel(sbus, ECU_SBUS_CH_RIGHT_INDICATOR, config, now_ms);
-    out->track = stable_position_from_channel(sbus, ECU_SBUS_CH_TRACK, config, now_ms);
-    out->r1 = stable_position_from_channel(sbus, ECU_SBUS_CH_R1, config, now_ms);
-    out->r2 = stable_position_from_channel(sbus, ECU_SBUS_CH_R2, config, now_ms);
-    out->r1_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R1].changed;
-    out->r2_changed = s_runtime.discrete_channels[ECU_SBUS_CH_R2].changed;
-
-    if (out->sbus_valid) {
-        out->steer_per_mille =
-            sbus_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_STEER],
-                                    &config->sbus_thresholds);
-        out->throttle_per_mille =
-            sbus_throttle_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_THROTTLE],
-                                             &config->sbus_thresholds);
-        out->clearance_per_mille =
-            sbus_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_CLEARANCE],
-                                    &config->sbus_thresholds);
-        out->track_per_mille =
-            sbus_per_mille_from_raw(sbus->channels[ECU_SBUS_CH_TRACK],
-                                    &config->sbus_thresholds);
+    for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
+        out->channels[channel] = service->channels[channel];
     }
-
-    /* CH13 e-stop intentionally bypasses normal event suppression. */
-    out->ch13_estop = stable_position_from_channel(sbus, ECU_SBUS_CH_ESTOP, config, now_ms);
-    if (sbus->valid &&
-        remote_discrete_position_from_raw(sbus->channels[ECU_SBUS_CH_ESTOP],
-                                          &config->sbus_thresholds) == REMOTE_POS_HIGH) {
-        out->ch13_estop = REMOTE_POS_HIGH;
-    }
+    out->valid = service->valid;
+    out->connected = service->connected;
+    out->failsafe = service->failsafe;
+    out->frame_lost = service->frame_lost;
+    out->channel17 = service->channel17;
+    out->channel18 = service->channel18;
+    out->frame_count = service->frame_count;
+    out->decode_error_count = service->decode_error_count;
+    out->uart_error_count = service->uart_error_count;
+    out->last_frame_ms = service->last_frame_ms;
 }
 
 static void build_remote_preconditions(const remote_input_snapshot_t *input,
@@ -467,10 +272,12 @@ static int32_t float_to_centi(float value)
 static void build_runtime_monitor_snapshot(uint32_t now_ms,
                                            runtime_monitor_snapshot_t *out)
 {
-    sbus_service_snapshot_t ppm_sbus;
+    remote_sbus_sample_t raw_sbus;
+    remote_sbus_sample_t ppm_sbus;
 
     memset(out, 0, sizeof(*out));
-    sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &ppm_sbus);
+    remote_sbus_sample_from_service(&s_runtime.sbus_snapshot, &raw_sbus);
+    remote_sbus_mapper_build_ppm_sample(&raw_sbus, &ppm_sbus);
     out->now_ms = now_ms;
     out->executor_sequence = s_runtime.executor.applied_sequence;
     out->sbus_valid = s_runtime.sbus_snapshot.valid;
@@ -511,6 +318,24 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
            can1_snapshot.last_rx_frame.data,
            sizeof(out->can1_last_rx_data));
 
+    can_bus_service_t can4_snapshot;
+    commissioning_debug_get_can4_snapshot(&s_runtime.commissioning_debug,
+                                          &can4_snapshot);
+    out->can4_test_tx_count = can4_snapshot.tx_count;
+    out->can4_test_rx_count = can4_snapshot.rx_count;
+    out->can4_test_error_count = can4_snapshot.error_count;
+    out->can4_test_rx_buffer_status = can4_snapshot.rx_buffer_status;
+    out->can4_test_tx_rx_flags = can4_snapshot.tx_rx_flags;
+    out->can4_test_error_flags = can4_snapshot.error_flags;
+    out->can4_test_receive_error_count = can4_snapshot.receive_error_count;
+    out->can4_test_transmit_error_count = can4_snapshot.transmit_error_count;
+    out->can4_test_last_error_kind = can4_snapshot.last_error_kind;
+    out->can4_test_last_tx_id = can4_snapshot.last_tx_frame.id;
+    out->can4_test_last_tx_size = can4_snapshot.last_tx_frame.size;
+    memcpy(out->can4_test_last_tx_data,
+           can4_snapshot.last_tx_frame.data,
+           sizeof(out->can4_test_last_tx_data));
+
     power_device_get_snapshot(&s_runtime.power_device, &out->power_snapshot);
     modbus_master_service_get_snapshot(&s_runtime.adc_modbus_master,
                                        &out->modbus_adc_master);
@@ -518,6 +343,7 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->hardware_feedback = s_runtime.hardware_feedback;
     out->link_state = s_runtime.remote_request.link_state;
     out->estop_state = s_runtime.remote_request.estop_state;
+    out->status_led_pattern = s_runtime.status_led.last_pattern;
     out->diagnostic = s_runtime.final_command.diagnostic;
     out->source = s_runtime.final_command.source;
     out->motion_mode = s_runtime.final_command.motion_mode;
@@ -529,6 +355,8 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     }
     out->brake_release = s_runtime.final_command.brake_release;
     out->high_voltage_enable = s_runtime.final_command.high_voltage_enable;
+    out->commissioning_power_debug_active =
+        s_runtime.commissioning_debug.power_debug_active;
     out->hydraulic_enable = s_runtime.final_command.hydraulic_enable;
     out->hydraulic_valve_mask = s_runtime.final_command.hydraulic_valve_mask;
     out->power_result = s_runtime.executor.power_result;
@@ -540,11 +368,24 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
 
 static status_led_pattern_t select_status_led_pattern(void)
 {
-    bool emergency_active = s_runtime.safety_snapshot.estop_latched ||
-                            s_runtime.safety_snapshot.sbus_failsafe ||
-                            s_runtime.safety_snapshot.a_class_fault;
-    if (emergency_active) {
+    /* Red must mean "do not move because of a hard safety condition", not just
+     * "a commissioning peripheral is absent".  SBUS timeout/failsafe still
+     * clamps every actuator through the safety manager, but the LED reports it
+     * as NO_REMOTE so a bench ECU with no transmitter does not look dead.
+     */
+    bool hard_fault = s_runtime.safety_snapshot.a_class_fault;
+    if (hard_fault) {
+        return STATUS_LED_PATTERN_FATAL;
+    }
+
+    bool operator_estop =
+        s_runtime.remote_request.estop_source == ECU_ESTOP_SOURCE_CH13;
+    if (operator_estop) {
         return STATUS_LED_PATTERN_ESTOP;
+    }
+
+    if (s_runtime.remote_request.link_state != REMOTE_LINK_ONLINE) {
+        return STATUS_LED_PATTERN_NO_REMOTE;
     }
 
     bool communication_warning =
@@ -557,11 +398,16 @@ static status_led_pattern_t select_status_led_pattern(void)
         return STATUS_LED_PATTERN_WARNING;
     }
 
-    if (s_runtime.remote_request.link_state == REMOTE_LINK_ONLINE) {
-        return STATUS_LED_PATTERN_READY;
+    bool active_output =
+        s_runtime.final_command.high_voltage_enable ||
+        s_runtime.final_command.brake_release ||
+        s_runtime.final_command.hydraulic_enable ||
+        s_runtime.final_command.target_speed_kph != 0.0f;
+    if (active_output) {
+        return STATUS_LED_PATTERN_ACTIVE;
     }
 
-    return STATUS_LED_PATTERN_BOOT;
+    return STATUS_LED_PATTERN_READY;
 }
 
 const ecu_task_descriptor_t *ecu_cpu0_task_descriptor(ecu_cpu0_task_id_t task_id)
@@ -592,6 +438,9 @@ void ecu_task_can2_motion_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
     canopen_master_service_process(&s_runtime.can2_motion_canopen, now_ms);
+    commissioning_debug_scan_can2(&s_runtime.commissioning_debug,
+                                  &s_runtime.can2_motion_canopen,
+                                  now_ms);
     refresh_can2_feedback();
 }
 
@@ -600,14 +449,20 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
     ecu_runtime_init_once(now_ms);
 
     const ecu_config_t *config = ecu_config_default();
-    sbus_service_snapshot_t remote_sbus;
+    remote_sbus_sample_t raw_sbus;
+    remote_sbus_sample_t remote_sbus;
     remote_input_snapshot_t remote_input;
     remote_preconditions_t preconditions;
 
     sbus_service_poll(&s_runtime.sbus, now_ms);
     sbus_service_get_snapshot(&s_runtime.sbus, &s_runtime.sbus_snapshot);
-    sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus);
-    build_remote_input_snapshot(&remote_sbus, config, now_ms, &remote_input);
+    remote_sbus_sample_from_service(&s_runtime.sbus_snapshot, &raw_sbus);
+    remote_sbus_mapper_build_ppm_sample(&raw_sbus, &remote_sbus);
+    remote_sbus_mapper_build_input(&s_runtime.remote_sbus_mapper,
+                                   &remote_sbus,
+                                   config,
+                                   now_ms,
+                                   &remote_input);
     build_remote_preconditions(&remote_input, &preconditions);
     remote_manager_update(&s_runtime.remote_manager,
                           &remote_input,
@@ -633,6 +488,10 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
                            now_ms,
                            &s_runtime.final_command);
     safety_manager_apply(&s_runtime.safety_snapshot, &s_runtime.final_command);
+    (void)commissioning_debug_apply_power_request(&s_runtime.commissioning_debug,
+                                                  &s_runtime.safety_snapshot,
+                                                  &s_runtime.final_command,
+                                                  now_ms);
     (void)vehicle_command_executor_apply(&s_runtime.executor, &executor_io,
                                          &s_runtime.final_command, now_ms);
     vehicle_state_publish(&s_runtime.vehicle_state,
@@ -663,6 +522,11 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
     canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen, now_ms);
+    commissioning_debug_scan_can3(&s_runtime.commissioning_debug,
+                                  &s_runtime.can3_lift_hydraulic_canopen,
+                                  now_ms);
+    commissioning_debug_process_can4_physical_test(&s_runtime.commissioning_debug,
+                                                   now_ms);
     refresh_lift_hydraulic_feedback();
 }
 

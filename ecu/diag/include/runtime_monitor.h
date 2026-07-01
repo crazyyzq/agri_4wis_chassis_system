@@ -19,6 +19,7 @@
 #include "modbus_master_service.h"
 #include "power_device.h"
 #include "remote_types.h"
+#include "status_led_service.h"
 
 typedef struct {
     uint32_t now_ms;
@@ -65,6 +66,18 @@ typedef struct {
     uint8_t can1_last_rx_size;
     bool can1_last_rx_extended;
     uint8_t can1_last_rx_data[8];
+    uint32_t can4_test_tx_count;
+    uint32_t can4_test_rx_count;
+    uint32_t can4_test_error_count;
+    uint8_t can4_test_rx_buffer_status;
+    uint8_t can4_test_tx_rx_flags;
+    uint8_t can4_test_error_flags;
+    uint8_t can4_test_receive_error_count;
+    uint8_t can4_test_transmit_error_count;
+    uint8_t can4_test_last_error_kind;
+    uint32_t can4_test_last_tx_id;
+    uint8_t can4_test_last_tx_size;
+    uint8_t can4_test_last_tx_data[8];
     power_device_snapshot_t power_snapshot;
     modbus_master_snapshot_t modbus_adc_master;
     analog_modbus_device_state_t analog_modbus_adc;
@@ -72,6 +85,7 @@ typedef struct {
 
     remote_link_state_t link_state;
     remote_estop_state_t estop_state;
+    status_led_pattern_t status_led_pattern;
     diag_code_t diagnostic;
 
     ecu_command_source_t source;
@@ -81,6 +95,7 @@ typedef struct {
     int32_t target_steer_centi_deg[ECU_WHEEL_COUNT];
     bool brake_release;
     bool high_voltage_enable;
+    bool commissioning_power_debug_active;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
 

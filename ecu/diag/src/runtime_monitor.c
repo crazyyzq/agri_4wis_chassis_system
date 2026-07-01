@@ -30,6 +30,20 @@ static const char *estop_state_text(remote_estop_state_t state)
     }
 }
 
+static const char *status_led_pattern_text(status_led_pattern_t pattern)
+{
+    switch (pattern) {
+    case STATUS_LED_PATTERN_BOOT: return "boot";
+    case STATUS_LED_PATTERN_NO_REMOTE: return "no_remote";
+    case STATUS_LED_PATTERN_READY: return "ready";
+    case STATUS_LED_PATTERN_ACTIVE: return "active";
+    case STATUS_LED_PATTERN_WARNING: return "warning";
+    case STATUS_LED_PATTERN_ESTOP: return "estop";
+    case STATUS_LED_PATTERN_FATAL: return "fatal";
+    default: return "unknown";
+    }
+}
+
 static const char *source_text(ecu_command_source_t source)
 {
     switch (source) {
@@ -96,10 +110,11 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         return;
     }
 
-    printf("[ECU MON] t=%lu seq=%lu sbus_valid=%s sbus_conn=%s fs=%s "
+    printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
            "frames=%lu dec_err=%lu link=%s estop=%s diag=%s\r\n",
            (unsigned long)snapshot->now_ms,
            (unsigned long)snapshot->executor_sequence,
+           status_led_pattern_text(snapshot->status_led_pattern),
            bool_text(snapshot->sbus_valid),
            bool_text(snapshot->sbus_connected),
            bool_text(snapshot->sbus_failsafe),
@@ -155,7 +170,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 
     printf("[ECU CANopen CAN2] init=%s state=%u normal=%s bitrate=%lu local=%u remote=%u "
            "proc=%lu hb=%lu hb_state=%u hb_last=%lums sdo_ok=%lu sdo_abort=%lu "
-           "last=0x%04x:%u size=%u value=0x%08lx abort=0x%08lx err=%ld\r\n",
+           "last_node=%u last=0x%04x:%u size=%u value=0x%08lx abort=0x%08lx err=%ld\r\n",
            bool_text(snapshot->can2_canopen_initialized),
            (unsigned int)snapshot->can2_canopen_snapshot.state,
            bool_text(snapshot->can2_canopen_snapshot.can_normal),
@@ -168,6 +183,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can2_canopen_snapshot.last_heartbeat_ms,
            (unsigned long)snapshot->can2_canopen_snapshot.sdo_upload_count,
            (unsigned long)snapshot->can2_canopen_snapshot.sdo_abort_count,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_sdo_node_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_sdo_index,
            (unsigned int)snapshot->can2_canopen_snapshot.last_sdo_subindex,
            (unsigned int)snapshot->can2_canopen_snapshot.last_sdo_size,
@@ -193,7 +209,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 
     printf("[ECU CANopen CAN3] init=%s state=%u normal=%s bitrate=%lu local=%u remote=%u "
            "proc=%lu sdo_ok=%lu sdo_abort=%lu dl_ok=%lu dl_abort=%lu queued=%lu dropped=%lu "
-           "last=0x%04x:%u size=%u value=%ld last_err=%ld\r\n",
+           "last_node=%u last=0x%04x:%u size=%u value=0x%08lx abort=0x%08lx last_err=%ld\r\n",
            bool_text(snapshot->can3_canopen_initialized),
            (unsigned int)snapshot->can3_canopen_snapshot.state,
            bool_text(snapshot->can3_canopen_snapshot.can_normal),
@@ -207,10 +223,12 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can3_canopen_snapshot.sdo_download_abort_count,
            (unsigned long)snapshot->can3_canopen_snapshot.queued_command_count,
            (unsigned long)snapshot->can3_canopen_snapshot.dropped_command_count,
-           (unsigned int)snapshot->can3_canopen_snapshot.last_download_index,
-           (unsigned int)snapshot->can3_canopen_snapshot.last_download_subindex,
-           (unsigned int)snapshot->can3_canopen_snapshot.last_download_size,
-           (long)snapshot->can3_canopen_snapshot.last_download_value,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_sdo_node_id,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_sdo_index,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_sdo_subindex,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_sdo_size,
+           (unsigned long)snapshot->can3_canopen_snapshot.last_sdo_value,
+           (unsigned long)snapshot->can3_canopen_snapshot.last_sdo_abort_code,
            (long)snapshot->can3_canopen_snapshot.last_error);
 
     printf("[ECU CAN1] tx=%lu rx=%lu err=%lu last_tx_id=0x%08lx ext=%s dlc=%u "
@@ -231,6 +249,29 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         printf("%02x", snapshot->can1_last_rx_data[byte]);
     }
     printf("]\r\n");
+
+#if ECU_ENABLE_CAN4_PHYSICAL_TEST_TX
+    printf("[ECU CAN4 TEST] tx=%lu rx=%lu err=%lu rbuf=%u flags=0x%02x eflags=0x%02x "
+           "rec=%u tec=%u lek=%u last_tx_id=0x%03lx dlc=%u data=[",
+           (unsigned long)snapshot->can4_test_tx_count,
+           (unsigned long)snapshot->can4_test_rx_count,
+           (unsigned long)snapshot->can4_test_error_count,
+           (unsigned int)snapshot->can4_test_rx_buffer_status,
+           (unsigned int)snapshot->can4_test_tx_rx_flags,
+           (unsigned int)snapshot->can4_test_error_flags,
+           (unsigned int)snapshot->can4_test_receive_error_count,
+           (unsigned int)snapshot->can4_test_transmit_error_count,
+           (unsigned int)snapshot->can4_test_last_error_kind,
+           (unsigned long)snapshot->can4_test_last_tx_id,
+           (unsigned int)snapshot->can4_test_last_tx_size);
+    for (uint32_t byte = 0U; byte < snapshot->can4_test_last_tx_size && byte < 8U; ++byte) {
+        if (byte > 0U) {
+            printf(" ");
+        }
+        printf("%02x", snapshot->can4_test_last_tx_data[byte]);
+    }
+    printf("]\r\n");
+#endif
 
     printf("[ECU POWER] hv_req=%s ready=%s lv_ok=%s online[bms=%s dcdc48=%s dcdc12=%s dcac=%s] "
            "bms_soc=%u.%u%% bms_v=%lumV bms_i=%lddA bms_err=%u "
@@ -307,10 +348,11 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         }
         print_centi_value(snapshot->target_steer_centi_deg[wheel]);
     }
-    printf("]deg brake=%s hv=%s hyd=%s valve=0x%08lx "
+    printf("]deg brake=%s hv=%s comm_hv=%s hyd=%s valve=0x%08lx "
            "res[pwr=%s mot=%s lift=%s io=%s warn=%s]\r\n",
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
+           bool_text(snapshot->commissioning_power_debug_active),
            bool_text(snapshot->hydraulic_enable),
            (unsigned long)snapshot->hydraulic_valve_mask,
            device_result_text(snapshot->power_result),

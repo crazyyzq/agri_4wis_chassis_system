@@ -24,8 +24,8 @@ def test_hardware_project_defaults_are_centralized(root: pathlib.Path) -> None:
         "ECU_POWER_DCDC48_COMMAND_PERIOD_MS",
         "ECU_POWER_DCDC12_COMMAND_PERIOD_MS",
         "ECU_POWER_DCAC_COMMAND_PERIOD_MS",
-        "ECU_CANOPEN_DRIVE_FL_NODE_ID",
-        "ECU_CANOPEN_STEER_FL_NODE_ID",
+        "ECU_CANOPEN_DRIVE_FR_NODE_ID",
+        "ECU_CANOPEN_STEER_FR_NODE_ID",
         "ECU_DIO_BRAKE_RELEASE_MASK",
         "ECU_DIO_HYDRAULIC_ENABLE_MASK",
         "ECU_DIO_MANAGED_OUTPUT_MASK",
@@ -303,6 +303,13 @@ def test_modbus_virtual_adc_and_rs485_master_are_structured(root: pathlib.Path) 
     assert "ECU MODBUS ADC" in monitor_c
 
 
+def test_analog_modbus_adc_marks_offline_on_master_timeout(root: pathlib.Path) -> None:
+    analog_c = read(root, "ecu/devices/src/analog_modbus_device.c")
+
+    assert "if (master_snapshot.timeout_count > previous_timeout_count)" in analog_c
+    assert "state->online = false;" in analog_c.split("if (master_snapshot.timeout_count > previous_timeout_count)", 1)[1]
+
+
 def test_canopennode_debug_commands_are_sequence_gated(root: pathlib.Path) -> None:
     service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
     service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
@@ -421,13 +428,41 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
         "ECU_CANOPEN_LEG3_STEER_NODE_ID": "0x07U",
         "ECU_CANOPEN_LEG4_STEER_NODE_ID": "0x08U",
         "ECU_CANOPEN_LIFT_LEG1_NODE_ID": "0x09U",
-        "ECU_CANOPEN_LIFT_LEG2_NODE_ID": "0x0AU",
-        "ECU_CANOPEN_LIFT_LEG3_NODE_ID": "0x0BU",
-        "ECU_CANOPEN_LIFT_LEG4_NODE_ID": "0x0CU",
+        "ECU_CANOPEN_LIFT_LEG2_NODE_ID": "0x0BU",
+        "ECU_CANOPEN_LIFT_LEG3_NODE_ID": "0x0CU",
+        "ECU_CANOPEN_LIFT_LEG4_NODE_ID": "0x0AU",
         "ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID": "0x0DU",
     }
     for name, value in expected_nodes.items():
         assert re.search(rf"#define\s+{name}\s+\({value}\)", config_h), name
+
+    expected_position_aliases = {
+        "ECU_CANOPEN_DRIVE_FR_NODE_ID": "ECU_CANOPEN_LEG1_DRIVE_NODE_ID",
+        "ECU_CANOPEN_DRIVE_FL_NODE_ID": "ECU_CANOPEN_LEG2_DRIVE_NODE_ID",
+        "ECU_CANOPEN_DRIVE_RL_NODE_ID": "ECU_CANOPEN_LEG3_DRIVE_NODE_ID",
+        "ECU_CANOPEN_DRIVE_RR_NODE_ID": "ECU_CANOPEN_LEG4_DRIVE_NODE_ID",
+        "ECU_CANOPEN_STEER_FR_NODE_ID": "ECU_CANOPEN_LEG1_STEER_NODE_ID",
+        "ECU_CANOPEN_STEER_FL_NODE_ID": "ECU_CANOPEN_LEG2_STEER_NODE_ID",
+        "ECU_CANOPEN_STEER_RL_NODE_ID": "ECU_CANOPEN_LEG3_STEER_NODE_ID",
+        "ECU_CANOPEN_STEER_RR_NODE_ID": "ECU_CANOPEN_LEG4_STEER_NODE_ID",
+        "ECU_CANOPEN_LIFT_FR_NODE_ID": "ECU_CANOPEN_LIFT_LEG1_NODE_ID",
+        "ECU_CANOPEN_LIFT_FL_NODE_ID": "ECU_CANOPEN_LIFT_LEG2_NODE_ID",
+        "ECU_CANOPEN_LIFT_RL_NODE_ID": "ECU_CANOPEN_LIFT_LEG3_NODE_ID",
+        "ECU_CANOPEN_LIFT_RR_NODE_ID": "ECU_CANOPEN_LIFT_LEG4_NODE_ID",
+    }
+    for alias, target in expected_position_aliases.items():
+        assert re.search(rf"#define\s+{alias}\s+{target}", config_h), alias
+    for token in [
+        "Leg 1: front-right",
+        "Leg 2: front-left",
+        "Leg 3: rear-left",
+        "Leg 4: rear-right",
+        "ECU_WHEEL_LEG1_FRONT_RIGHT",
+        "ECU_WHEEL_LEG2_FRONT_LEFT",
+        "ECU_WHEEL_LEG3_REAR_LEFT",
+        "ECU_WHEEL_LEG4_REAR_RIGHT",
+    ]:
+        assert token in config_h or token in config_c, token
 
     drive_block = re.search(r"\.drive_nodes\s*=\s*\{(?P<body>[\s\S]*?)\n\s*\},", config_c)
     steer_block = re.search(r"\.steer_nodes\s*=\s*\{(?P<body>[\s\S]*?)\n\s*\},", config_c)
@@ -451,6 +486,7 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
         "ECU_CANOPEN_LIFT_LEG3_NODE_ID",
         "ECU_CANOPEN_LIFT_LEG4_NODE_ID",
     ] == re.findall(r"ECU_CANOPEN_LIFT_LEG\d_NODE_ID", lift_block.group("body"))
+    assert "node 9, 11, 12 and 10 in vehicle leg order" in config_c
 
     for token in [
         "ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES",
@@ -496,10 +532,35 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
         assert phrase in requirements, phrase
 
 
+def test_servo_brake_release_is_low_level_active(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "#define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)" in config_h
+    assert "#define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (0U)" in config_h
+    assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" in motion_c
+    assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" in lift_c
+
+
+def test_servo_brakes_are_not_driven_by_pcb_dio(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    local_io_c = read(root, "ecu/devices/src/local_io_device.c")
+    local_io_h = read(root, "ecu/devices/include/local_io_device.h")
+
+    assert "#define ECU_DIO_BRAKE_RELEASE_MASK       (0UL)" in config_h
+    assert "dio_brake_release_mask = ECU_DIO_BRAKE_RELEASE_MASK" in config_c
+    assert "dio_brake_release_mask" not in local_io_c
+    assert "command->brake_release" not in local_io_c
+    assert "Servo brake outputs are intentionally excluded" in local_io_h
+
+
 def test_sbus_remote_logic_maps_protocol_raw_to_ppm_equivalent(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     config_c = read(root, "ecu/config/src/ecu_config.c")
     tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
     decoder_c = read(root, "ecu/protocol/sbus/src/sbus_decoder.c")
     monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
     monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
@@ -531,20 +592,20 @@ def test_sbus_remote_logic_maps_protocol_raw_to_ppm_equivalent(root: pathlib.Pat
         assert field in config_c, field
 
     assert "0x07FFU" in decoder_c
-    assert "sbus_protocol_raw_to_ppm_equivalent" in tasks_c
-    assert "sbus_build_ppm_snapshot" in tasks_c
-    assert "sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus)" in tasks_c
+    assert "sbus_protocol_raw_to_ppm_equivalent" in mapper_c
+    assert "remote_sbus_mapper_build_ppm_sample" in mapper_c
+    assert "remote_sbus_mapper_build_ppm_sample(&raw_sbus, &remote_sbus)" in tasks_c
     assert tasks_c.index("sbus_service_get_snapshot(&s_runtime.sbus") < tasks_c.index(
-        "sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus)"
+        "remote_sbus_mapper_build_ppm_sample(&raw_sbus, &remote_sbus)"
     )
-    assert tasks_c.index("sbus_build_ppm_snapshot(&s_runtime.sbus_snapshot, &remote_sbus)") < tasks_c.index(
-        "build_remote_input_snapshot(&remote_sbus"
+    assert tasks_c.index("remote_sbus_mapper_build_ppm_sample(&raw_sbus, &remote_sbus)") < tasks_c.index(
+        "remote_sbus_mapper_build_input(&s_runtime.remote_sbus_mapper"
     )
     assert "sbus_ppm_channels[ECU_SBUS_CHANNEL_COUNT]" in monitor_h
     assert "ECU SBUS RAW" in monitor_c
     assert "ECU SBUS PPM" in monitor_c
 
-    stick_func = re.search(r"static int16_t sbus_per_mille_from_raw[\s\S]*?\n}", tasks_c)
+    stick_func = re.search(r"static int16_t sbus_per_mille_from_ppm[\s\S]*?\n}", mapper_c)
     assert stick_func is not None
     assert "thresholds->stick_neutral" in stick_func.group(0)
     assert "thresholds->stick_max" in stick_func.group(0)
@@ -586,6 +647,97 @@ def test_can3_and_rgb_status_are_enabled_for_whole_machine(root: pathlib.Path) -
     assert "status_led_service.c" in cmake
 
 
+def test_status_led_separates_no_remote_warning_active_and_estop(root: pathlib.Path) -> None:
+    """The RGB LED must show ECU liveness without turning normal no-remote bench states red."""
+
+    led_h = read(root, "ecu/drivers/status_led/include/status_led_service.h")
+    led_c = read(root, "ecu/drivers/status_led/src/status_led_service.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    for token in [
+        "STATUS_LED_PATTERN_BOOT",
+        "STATUS_LED_PATTERN_NO_REMOTE",
+        "STATUS_LED_PATTERN_READY",
+        "STATUS_LED_PATTERN_ACTIVE",
+        "STATUS_LED_PATTERN_WARNING",
+        "STATUS_LED_PATTERN_ESTOP",
+        "STATUS_LED_PATTERN_FATAL",
+    ]:
+        assert token in led_h, token
+
+    for description in [
+        "BOOT: blue heartbeat while scheduler is starting",
+        "NO_REMOTE: blue heartbeat when SBUS/remote is not online",
+        "READY: solid green when remote and required buses are healthy",
+        "ACTIVE: cyan heartbeat when an actuator/high-voltage command is active",
+        "WARNING: yellow heartbeat for missing optional/commissioning peripherals",
+        "ESTOP/FATAL: red is reserved for operator emergency stop or fatal faults",
+    ]:
+        assert description in led_c, description
+
+    selector = re.search(
+        r"static status_led_pattern_t select_status_led_pattern\(void\)[\s\S]*?\n}",
+        tasks_c,
+    )
+    assert selector is not None, "missing CPU0 status LED selector"
+    selector_body = selector.group(0)
+    assert "ECU_ESTOP_SOURCE_CH13" in selector_body
+    assert "STATUS_LED_PATTERN_FATAL" in selector_body
+    assert "STATUS_LED_PATTERN_NO_REMOTE" in selector_body
+    assert "STATUS_LED_PATTERN_ACTIVE" in selector_body
+    assert "s_runtime.safety_snapshot.sbus_failsafe" not in selector_body
+    assert "s_runtime.safety_snapshot.estop_latched ||" not in selector_body
+    assert selector_body.index("STATUS_LED_PATTERN_FATAL") < selector_body.index(
+        "STATUS_LED_PATTERN_NO_REMOTE"
+    )
+    assert selector_body.index("STATUS_LED_PATTERN_NO_REMOTE") < selector_body.index(
+        "STATUS_LED_PATTERN_WARNING"
+    )
+
+
+def test_optional_board_peripheral_init_does_not_permanently_block_boot(root: pathlib.Path) -> None:
+    """Missing debug/optional peripherals must not hide a running ECU behind a dead boot loop."""
+
+    board_c = read(root, "ecu/ecu_isolation/board.c")
+
+    console = re.search(
+        r"void board_init_console\(void\)[\s\S]*?\n}\n\nvoid board_init_clock",
+        board_c,
+    )
+    i2c = re.search(
+        r"void board_init_i2c\(I2C_Type \*ptr\)[\s\S]*?\n}\n\nvoid board_init_can",
+        board_c,
+    )
+    assert console is not None, "missing board_init_console()"
+    assert i2c is not None, "missing board_init_i2c()"
+
+    assert "while (1)" not in console.group(0)
+    assert "while (1)" not in i2c.group(0)
+    assert "[ECU BOARD] WARN: console init failed" in console.group(0)
+    assert "[ECU BOARD] WARN: I2C init failed" in i2c.group(0)
+    assert "if (freq == 0U)" in i2c.group(0)
+    assert i2c.group(0).index("if (freq == 0U)") < i2c.group(0).index("i2c_init_master")
+    assert "return;" in i2c.group(0)
+
+
+def test_runtime_monitor_reports_status_led_pattern(root: pathlib.Path) -> None:
+    """Serial logs should explicitly report the RGB state selected by CPU0."""
+
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    assert '#include "status_led_service.h"' in monitor_h
+    assert "status_led_pattern_t status_led_pattern" in monitor_h
+    assert "status_led_pattern_text" in monitor_c
+    assert "led=%s" in monitor_c
+    assert "status_led_pattern_text(snapshot->status_led_pattern)" in monitor_c
+    assert "out->status_led_pattern = s_runtime.status_led.last_pattern" in tasks_c
+    assert tasks_c.index("status_led_service_update(&s_runtime.status_led") < tasks_c.index(
+        "build_runtime_monitor_snapshot(now_ms, &monitor_snapshot)"
+    )
+
+
 def test_motion_and_lift_canopen_outputs_are_command_gated(root: pathlib.Path) -> None:
     motion_h = read(root, "ecu/devices/include/motion_device.h")
     motion_c = read(root, "ecu/devices/src/motion_device.c")
@@ -603,11 +755,248 @@ def test_motion_and_lift_canopen_outputs_are_command_gated(root: pathlib.Path) -
         lift_c,
     ).group(0)
     assert "command_changed(state, command)" in motion_c
-    assert "lift_command_changed(state, command)" in lift_c
+    assert "can3_actuator_command_changed(state, command)" in lift_c
     assert "last_motion_command_valid" in motion_h
     assert "last_lift_command_valid" in lift_h
     assert "skipped_count" in motion_h
     assert "skipped_lift_canopen_count" in lift_h
+
+
+def test_motion_command_cache_does_not_memcmp_struct_padding(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "memcmp(&state->last_motion_command" not in motion_c
+    for token in [
+        "state->last_motion_command.source != command->source",
+        "state->last_motion_command.motion_mode != command->motion_mode",
+        "state->last_motion_command.active_gear != command->active_gear",
+        "state->last_motion_command.target_speed_kph != command->target_speed_kph",
+        "state->last_motion_command.brake_release != command->brake_release",
+        "state->last_motion_command.target_wheel_speed_kph[wheel]",
+        "command->target_wheel_speed_kph[wheel]",
+        "state->last_motion_command.target_steer_deg[wheel]",
+        "command->target_steer_deg[wheel]",
+    ]:
+        assert token in motion_c, token
+
+
+def test_canopen_command_cache_updates_only_after_successful_queueing(root: pathlib.Path) -> None:
+    """A transient full SDO queue or offline node must not suppress the next retry."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+
+    for token in [
+        "ECU_CANOPEN_MOTION_COMMAND_REFRESH_MS",
+        "ECU_CANOPEN_LIFT_COMMAND_REFRESH_MS",
+    ]:
+        assert token in config_h, token
+
+    for header_text, field in [
+        (motion_h, "last_motion_command_queue_ms"),
+        (lift_h, "last_lift_command_queue_ms"),
+    ]:
+        assert field in header_text, field
+
+    motion_success_block = re.search(
+        r"if \(ok\) \{[\s\S]*?state->last_motion_command = \*command;[\s\S]*?"
+        r"state->last_motion_command_valid = true;[\s\S]*?"
+        r"state->last_motion_command_queue_ms = now_ms;[\s\S]*?\n\s*\}",
+        motion_c,
+    )
+    lift_success_block = re.search(
+        r"if \(ok\) \{[\s\S]*?state->last_lift_command = \*command;[\s\S]*?"
+        r"state->last_lift_command_valid = true;[\s\S]*?"
+        r"state->last_lift_command_queue_ms = now_ms;[\s\S]*?\n\s*\}",
+        lift_c,
+    )
+    assert motion_success_block is not None
+    assert lift_success_block is not None
+    assert "motion_command_refresh_due(state, now_ms)" in motion_c
+    assert "lift_command_refresh_due(state, now_ms)" in lift_c
+    assert "motion_device_apply(&s_runtime.motion" in executor_c
+    assert "command,\n                                                  now_ms)" in executor_c
+    assert "lift_hydraulic_device_apply(&s_runtime.lift_hydraulic" in executor_c
+    assert "command,\n                                    now_ms)" in executor_c
+
+    motion_after_failure = motion_c.split("state->last_result = ok ? ECU_DEVICE_APPLY_OK", 1)[0]
+    lift_after_failure = lift_c.split("state->last_result = ok ? ECU_DEVICE_APPLY_OK", 1)[0]
+    assert "state->last_motion_command = *command;" not in motion_after_failure.replace(
+        motion_success_block.group(0), ""
+    )
+    assert "state->last_lift_command = *command;" not in lift_after_failure.replace(
+        lift_success_block.group(0), ""
+    )
+
+
+def test_lift_limit_blocks_axis_brake_release(root: pathlib.Path) -> None:
+    """A lift axis commanded into an active limit switch must quick-stop and keep its brake applied."""
+
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "bool *blocked_by_limit",
+        "*blocked_by_limit = false",
+        "*blocked_by_limit = true",
+        "axis_brake_release = lift_brake_release && !axis_blocked_by_limit",
+        "brake_active_mask(axis_brake_release",
+    ]:
+        assert token in lift_c, token
+
+
+def test_commissioning_power_debug_can_request_hv_without_motion(root: pathlib.Path) -> None:
+    """Bench commissioning can request high voltage without enabling actuators."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    helper_c = read(root, "ecu/diag/src/commissioning_debug.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "ECU_ENABLE_COMMISSIONING_POWER_DEBUG",
+        "ECU_COMMISSIONING_CONTROL_MAGIC",
+        "ECU_COMMISSIONING_HV_REQUEST_TIMEOUT_MS",
+        "ecu_commissioning_control_t",
+    ]:
+        assert token in config_h, token
+
+    assert "volatile ecu_commissioning_control_t g_ecu_commissioning_control" in helper_c
+    assert "commissioning_power_debug_is_allowed" in helper_c
+    assert "commissioning_debug_apply_power_request" in helper_c
+    control_step = re.search(
+        r"void ecu_task_vehicle_control_step[\s\S]*?\n}\n\nvoid ecu_task_can1_power_step",
+        tasks_c,
+    )
+    assert control_step, "missing vehicle control task body"
+    control_body = control_step.group(0)
+    assert control_body.index("safety_manager_apply(&s_runtime.safety_snapshot") < control_body.index(
+        "commissioning_debug_apply_power_request"
+    )
+    assert control_body.index("commissioning_debug_apply_power_request") < control_body.index(
+        "vehicle_command_executor_apply"
+    )
+
+    safety_block = re.search(r"commissioning_power_debug_is_allowed[\s\S]*?\n}", helper_c)
+    assert safety_block, "missing commissioning safety gate"
+    for token in [
+        "!safety->a_class_fault",
+        "!safety->shutdown_protect_active",
+    ]:
+        assert token in safety_block.group(0), token
+    assert "!safety->estop_latched" not in safety_block.group(0)
+    assert "remote/SBUS estop latch is allowed during no-remote commissioning" in helper_c
+
+    apply_block = re.search(r"commissioning_debug_apply_power_request[\s\S]*?\n}", helper_c)
+    assert apply_block, "missing commissioning apply gate"
+    for token in [
+        "command->high_voltage_enable = true",
+        "command->brake_release = false",
+        "command->hydraulic_enable = false",
+        "command->hydraulic_valve_mask = 0U",
+        "command->target_speed_kph = 0.0f",
+        "command->target_wheel_speed_kph[wheel] = 0.0f",
+    ]:
+        assert token in apply_block.group(0), token
+
+    assert "commissioning_power_debug_active" in monitor_h
+    assert "comm_hv=%s" in monitor_c
+
+
+def test_commissioning_canopen_scan_reads_all_servo_nodes(root: pathlib.Path) -> None:
+    """Whole-machine communication checkout must read every configured servo node."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    helper_c = read(root, "ecu/diag/src/commissioning_debug.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    assert "ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN" in config_h
+    assert "ECU_CANOPEN_COMMISSIONING_SCAN_PERIOD_MS" in config_h
+    assert "commissioning_debug_scan_can2" in helper_c
+    assert "commissioning_debug_scan_can3" in helper_c
+    assert "ECU_CANOPEN_OBJ_STATUSWORD" in helper_c
+    can2_step = re.search(
+        r"void ecu_task_can2_motion_step[\s\S]*?\n}\n\nvoid ecu_task_remote_manager_step",
+        tasks_c,
+    )
+    can3_step = re.search(
+        r"void ecu_task_can3_lift_hydraulic_step[\s\S]*?\n}\n\nvoid ecu_task_io_service_step",
+        tasks_c,
+    )
+    assert can2_step and can3_step
+    assert can2_step.group(0).index(
+        "canopen_master_service_process(&s_runtime.can2_motion_canopen"
+    ) < can2_step.group(0).index("commissioning_debug_scan_can2")
+    assert can3_step.group(0).index(
+        "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen"
+    ) < can3_step.group(0).index("commissioning_debug_scan_can3")
+
+    can2_func = helper_c[
+        helper_c.index("void commissioning_debug_scan_can2"):
+        helper_c.index("void commissioning_debug_scan_can3")
+    ]
+    can3_func = helper_c[
+        helper_c.index("void commissioning_debug_scan_can3"):
+        helper_c.index("void commissioning_debug_process_can4_physical_test")
+    ]
+    for token in ["drive_nodes", "steer_nodes"]:
+        assert token in can2_func, token
+    for token in ["lift_nodes", "hydraulic_pump_node"]:
+        assert token in can3_func, token
+
+    assert "last_node=%u" in monitor_c
+    assert "abort=0x%08lx" in monitor_c
+
+
+def test_commissioning_debug_helpers_are_isolated_from_cpu0_task(root: pathlib.Path) -> None:
+    """Commissioning-only debug helpers stay out of the CPU0 task orchestrator."""
+
+    helper_h = read(root, "ecu/diag/include/commissioning_debug.h")
+    helper_c = read(root, "ecu/diag/src/commissioning_debug.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "commissioning_debug_context_t",
+        "commissioning_debug_init",
+        "commissioning_debug_apply_power_request",
+        "commissioning_debug_scan_can2",
+        "commissioning_debug_scan_can3",
+        "commissioning_debug_process_can4_physical_test",
+        "commissioning_debug_get_can4_snapshot",
+    ]:
+        assert token in helper_h, token
+
+    for token in [
+        "volatile ecu_commissioning_control_t g_ecu_commissioning_control",
+        "ECU_COMMISSIONING_CONTROL_MAGIC",
+        "ECU_CAN4_PHYSICAL_TEST_FRAME_ID",
+        "can_bus_service_send_frame",
+        "canopen_master_service_request_sdo_read",
+    ]:
+        assert token in helper_c, token
+
+    for implementation_detail in [
+        "static void send_can4_physical_test_frame",
+        "static void queue_can2_commissioning_scan",
+        "static void queue_can3_commissioning_scan",
+        "static void apply_commissioning_power_debug",
+        "static bool commissioning_power_debug_is_allowed",
+    ]:
+        assert implementation_detail not in tasks_c, implementation_detail
+
+    assert '#include "commissioning_debug.h"' in tasks_c
+    assert "commissioning_debug_init(&s_runtime.commissioning_debug" in tasks_c
+    assert "commissioning_debug_scan_can2(&s_runtime.commissioning_debug" in tasks_c
+    assert "commissioning_debug_scan_can3(&s_runtime.commissioning_debug" in tasks_c
+    assert "commissioning_debug_process_can4_physical_test(&s_runtime.commissioning_debug" in tasks_c
+    assert "commissioning_debug_get_can4_snapshot(&s_runtime.commissioning_debug" in tasks_c
+    assert "commissioning_debug.c" in cmake
 
 
 def test_executor_fans_out_only_through_device_adapters(root: pathlib.Path) -> None:
@@ -659,6 +1048,18 @@ def test_dio_active_low_is_limited_to_managed_outputs(root: pathlib.Path) -> Non
     assert "config->hydraulic_managed_valve_mask, false" in lift_c
 
 
+def test_lift_hydraulic_canopen_command_cache_includes_track_and_pump_intent(root: pathlib.Path) -> None:
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "state->last_lift_command.track_rate_mm_s != command->track_rate_mm_s",
+        "state->last_lift_command.hydraulic_enable != command->hydraulic_enable",
+        "state->last_lift_command.hydraulic_valve_mask != command->hydraulic_valve_mask",
+    ]:
+        assert token in lift_c, token
+    assert "send_hydraulic_pump_command" in lift_c
+
+
 def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
 
@@ -667,8 +1068,9 @@ def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> N
         assert match, f"missing single-bit macro {name}"
         return 1 << int(match.group(1))
 
+    assert "#define ECU_DIO_BRAKE_RELEASE_MASK       (0UL)" in config_h
+
     dio_names = [
-        "ECU_DIO_BRAKE_RELEASE_MASK",
         "ECU_DIO_HYDRAULIC_ENABLE_MASK",
         "ECU_DIO_HORN_MASK",
         "ECU_DIO_HEADLIGHT_MASK",
@@ -719,6 +1121,20 @@ def test_cpu0_segger_project_uses_jlink_debug_connection(root: pathlib.Path) -> 
 
     assert 'sdk_ses_opt_debug_connection("J-Link")' in cmake
     assert "sdk_ses_opt_debug_jlink_speed(4000)" in cmake
+
+
+def test_cpu1_segger_project_uses_jlink_debug_connection(root: pathlib.Path) -> None:
+    """CPU1 should regenerate a J-Link SES project without OpenOCD manual setup."""
+
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu1/CMakeLists.txt")
+
+    for token in [
+        "HPM_SDK_BASE",
+        "GNURISCV_TOOLCHAIN_PATH",
+        'sdk_ses_opt_debug_connection("J-Link")',
+        "sdk_ses_opt_debug_jlink_speed(4000)",
+    ]:
+        assert token in cmake, token
 
 
 def test_sbus_uart1_idle_interrupt_is_bound_to_service(root: pathlib.Path) -> None:
@@ -772,17 +1188,25 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert re.search(r"#define\s+ECU_CAN1_POWER_BITRATE\s+\(250000UL\)", config_h)
     assert re.search(r"#define\s+ECU_CAN2_MOTION_BITRATE\s+\(1000000UL\)", config_h)
     assert "ECU_CAN3_LIFT_HYDRAULIC_BITRATE" in config_h
+    assert "ECU_CAN4_AUXILIARY_BITRATE" in config_h
+    assert "ECU_ENABLE_CAN4_PHYSICAL_TEST_TX" in config_h
+    assert "ECU_CAN4_PHYSICAL_TEST_FRAME_ID" in config_h
     assert "can_bus_hw_init_can2_rx_only" in can_hw_h
     assert "can_bus_hw_init_can2_motion" in can_hw_h
     assert "can_bus_hw_init_can3_lift_hydraulic" in can_hw_h
+    assert "can_bus_hw_init_can4_auxiliary" in can_hw_h
     assert "can_bus_hw_poll_can2_rx" in can_hw_h
     assert "can_bus_hw_poll_can3_rx" in can_hw_h
+    assert "can_bus_hw_poll_can4_rx" in can_hw_h
     assert "can_bus_hw_send_can2_frame" in can_hw_h
     assert "can_bus_hw_send_can3_frame" in can_hw_h
+    assert "can_bus_hw_send_can4_frame" in can_hw_h
     assert "BOARD_CAN2_BASE" in can_hw_c
     assert "BOARD_CAN2_IRQn" in can_hw_c
     assert "BOARD_CAN3_BASE" in can_hw_c
     assert "BOARD_CAN3_IRQn" in can_hw_c
+    assert "BOARD_CAN4_BASE" in can_hw_c
+    assert "BOARD_CAN4_IRQn" in can_hw_c
     assert "can_get_default_config" in can_hw_c
     assert "can_config.baudrate = bitrate" in can_hw_c
     assert "CAN_EVENT_RECEIVE" in can_hw_c
@@ -797,10 +1221,14 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "can_bus_service_set_tx_backend(service, 0)" in can_hw_c
     assert "can_bus_service_set_tx_backend(service, can_bus_hw_send_can2_frame)" in can_hw_c
     assert "can_bus_service_set_tx_backend(service, can_bus_hw_send_can3_frame)" in can_hw_c
+    assert "can_bus_service_set_tx_backend(service, can_bus_hw_send_can4_frame)" in can_hw_c
     assert "can_bus_service_note_rx_from_isr" in can_service_h
     assert "can_bus_service_note_error_from_isr" in can_service_h
     assert "can2_motion_canopen" in tasks_c
     assert "can3_lift_hydraulic_canopen" in tasks_c
+    assert "commissioning_debug" in tasks_c
+    assert "commissioning_debug_process_can4_physical_test" in tasks_c
+    assert "can_bus_hw_init_can4_auxiliary" in read(root, "ecu/diag/src/commissioning_debug.c")
     assert "CANOPEN_MASTER_BUS_CAN2" in tasks_c
     assert "CANOPEN_MASTER_BUS_CAN3" in tasks_c
     assert "ECU_ENABLE_CAN3_LIFT_CANOPEN" in config_h
@@ -810,7 +1238,10 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "can2_rx_count" in monitor_h
     assert "can2_rx_buffer_status" in monitor_h
     assert "can2_receive_error_count" in monitor_h
+    assert "can4_test_tx_count" in monitor_h
+    assert "can4_test_error_count" in monitor_h
     assert "ECU CAN2" in monitor_c
+    assert "ECU CAN4 TEST" in monitor_c
     assert "can_bus_hw.c" in cmake
 
 
@@ -926,7 +1357,7 @@ def test_dio_outputs_drive_board_gpio(root: pathlib.Path) -> None:
 def test_remote_command_generation_uses_sbus_analog_channels(root: pathlib.Path) -> None:
     remote_h = read(root, "ecu/remote/include/remote_types.h")
     manager_c = read(root, "ecu/remote/src/remote_manager.c")
-    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
     arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
     config_h = read(root, "ecu/config/include/ecu_config.h")
 
@@ -942,9 +1373,9 @@ def test_remote_command_generation_uses_sbus_analog_channels(root: pathlib.Path)
 
     assert "manager->request.steer_per_mille = input->steer_per_mille" in manager_c
     assert "manager->request.throttle_per_mille = input->throttle_per_mille" in manager_c
-    assert "sbus_per_mille_from_raw" in tasks_c
-    assert "decode_error_limit =" in tasks_c
-    assert "credibility_error =" in tasks_c
+    assert "sbus_per_mille_from_ppm" in mapper_c
+    assert "decode_error_limit =" in mapper_c
+    assert "credibility_error =" in mapper_c
     assert "motion_control_build_candidate" in arbiter_c
     assert "ECU_REMOTE_MAX_SPEED_KPH" in config_h
     assert "ECU_REMOTE_MAX_STEER_DEG" in config_h

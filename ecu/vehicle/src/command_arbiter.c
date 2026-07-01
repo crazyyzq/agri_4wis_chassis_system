@@ -12,7 +12,8 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
     out->active_gear = ECU_GEAR_REQUEST_P;
     out->target_speed_kph = 0.0f;
-    for (uint8_t i = 0U; i < 4U; ++i) {
+    for (uint8_t i = 0U; i < ECU_WHEEL_COUNT; ++i) {
+        out->target_wheel_speed_kph[i] = 0.0f;
         out->target_steer_deg[i] = 0.0f;
     }
     out->target_height_mm = 0.0f;
@@ -76,6 +77,53 @@ static float remote_speed_command_kph(const remote_control_request_t *remote)
     return speed;
 }
 
+static bool remote_requests_brake_release(const remote_control_request_t *remote)
+{
+    if (remote == 0) {
+        return false;
+    }
+
+    /* D/R arming is a two-step sequence.  The gear FSM first enters ARM_D or
+     * ARM_R while the active gear is still P and speed remains zero.  During
+     * this arming state the command layer must release the drive brakes so the
+     * next remote cycle can confirm brake release and allow the gear FSM to
+     * enter DRIVE_D/DRIVE_R.  Without this explicit arming request, active_gear
+     * stays P, brake_release stays false, and the vehicle deadlocks in ARM_*.
+     */
+    if (remote->gear_state == GEAR_STATE_ARM_D ||
+        remote->gear_state == GEAR_STATE_ARM_R) {
+        return true;
+    }
+
+    /* Track-width adjustment has the same handshake shape: the adjust FSM
+     * enters TRACK_PREPARE and waits for brake_release_confirmed before it can
+     * enter TRACK_ACTIVE.  Request the release during prepare, otherwise the
+     * FSM waits for feedback from an output that was never commanded.
+     */
+    if (remote->adjust_state == ADJUST_STATE_TRACK_PREPARE ||
+        remote->adjust_state == ADJUST_STATE_TRACK_ACTIVE) {
+        return true;
+    }
+
+    return remote->active_gear != ECU_GEAR_REQUEST_P;
+}
+
+static ecu_gear_request_t auto_gear_from_speed(float target_speed_kph)
+{
+    if (target_speed_kph > 0.0f) {
+        return ECU_GEAR_REQUEST_D;
+    }
+    if (target_speed_kph < 0.0f) {
+        return ECU_GEAR_REQUEST_R;
+    }
+    return ECU_GEAR_REQUEST_P;
+}
+
+static bool auto_requests_brake_release(const auto_control_request_t *auto_request)
+{
+    return auto_request != 0 && auto_request->target_speed_kph != 0.0f;
+}
+
 static void apply_remote_adjust_command(const remote_control_request_t *remote,
                                         vehicle_actuator_command_t *out)
 {
@@ -131,7 +179,7 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->source = COMMAND_SOURCE_REMOTE;
         out->motion_mode = remote->active_motion_mode;
         out->active_gear = remote->active_gear;
-        out->brake_release = remote->active_gear != ECU_GEAR_REQUEST_P;
+        out->brake_release = remote_requests_brake_release(remote);
         out->high_voltage_enable = remote->high_voltage_enable_request;
         out->indicator_mode = remote->indicator_mode;
         out->horn_on = remote->horn_on;
@@ -151,11 +199,13 @@ void command_arbiter_update(const remote_control_request_t *remote,
         auto_request != 0 && auto_request->valid && auto_request->request_control) {
         out->source = COMMAND_SOURCE_AUTO;
         out->motion_mode = auto_request->requested_mode;
+        out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph);
+        out->brake_release = auto_requests_brake_release(auto_request);
         out->target_speed_kph = auto_request->target_speed_kph;
-        out->target_steer_deg[0] = auto_request->target_steer_deg;
-        out->target_steer_deg[1] = auto_request->target_steer_deg;
-        out->target_steer_deg[2] = auto_request->target_steer_deg;
-        out->target_steer_deg[3] = auto_request->target_steer_deg;
+        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+            out->target_wheel_speed_kph[wheel] = auto_request->target_speed_kph;
+            out->target_steer_deg[wheel] = auto_request->target_steer_deg;
+        }
         out->high_voltage_enable = remote->high_voltage_enable_request;
     }
 }

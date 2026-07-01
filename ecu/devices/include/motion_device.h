@@ -12,6 +12,7 @@
 typedef struct {
     uint32_t apply_count;
     uint32_t skipped_count;
+    uint32_t last_motion_command_queue_ms;
     bool last_motion_command_valid;
     ecu_device_apply_result_t last_result;
     vehicle_actuator_command_t last_motion_command;
@@ -28,12 +29,15 @@ void motion_device_init(motion_device_state_t *state);
  *
  * Units: speed is kph, steering is degrees, brake_release is logical.
  * Dependencies: CAN2 service and project drive/steer CANopen mappings.
+ * Timing: unchanged commands are periodically re-queued because a successful
+ * local SDO enqueue does not guarantee the remote drive accepted the transfer.
  * Failure behavior: returns one aggregate result after attempting configured
  * wheel commands; safety decisions are not made here.
  */
 ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                               canopen_master_service_t *canopen,
                                               const ecu_hardware_config_t *config,
-                                              const vehicle_actuator_command_t *command);
+                                              const vehicle_actuator_command_t *command,
+                                              uint32_t now_ms);
 
 #endif /* MOTION_DEVICE_H */
