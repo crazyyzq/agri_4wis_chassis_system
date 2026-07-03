@@ -70,6 +70,27 @@ typedef struct {
 
 #define CANOPEN_MASTER_COMMAND_QUEUE_CAPACITY (96U)
 #define CANOPEN_MASTER_READ_QUEUE_CAPACITY (32U)
+#define CANOPEN_MASTER_PDO_QUEUE_CAPACITY (64U)
+#define CANOPEN_MASTER_PDO_TX_BURST_LIMIT (8U)
+#define CANOPEN_MASTER_PDO_TX_MAX_RETRIES (8U)
+
+typedef enum {
+    CANOPEN_MASTER_PDO_PHASE_NONE = 0,
+    CANOPEN_MASTER_PDO_PHASE_STEER_ARM,
+    CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER,
+    CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY,
+    CANOPEN_MASTER_PDO_PHASE_SAFE_STOP
+} canopen_master_pdo_phase_t;
+
+typedef struct {
+    uint16_t cob_id;
+    uint8_t size;
+    uint8_t node_id;
+    uint32_t group_sequence;
+    canopen_master_pdo_phase_t phase;
+    uint8_t retry_count;
+    uint8_t data[8];
+} canopen_master_pdo_request_t;
 
 typedef struct {
     canopen_master_state_t state;
@@ -99,6 +120,17 @@ typedef struct {
     uint32_t sdo_download_abort_count;
     uint32_t pdo_tx_count;
     uint32_t pdo_tx_error_count;
+    uint32_t pdo_queued_count;
+    uint32_t pdo_dropped_count;
+    uint32_t last_pdo_tx_group_sequence;
+    uint32_t last_pdo_failed_group_sequence;
+    uint16_t last_pdo_tx_cob_id;
+    uint16_t last_pdo_failed_cob_id;
+    uint8_t last_pdo_tx_node_id;
+    uint8_t last_pdo_failed_node_id;
+    uint8_t last_pdo_tx_phase;
+    uint8_t last_pdo_failed_phase;
+    int32_t last_pdo_error;
     uint32_t command_error_count;
     uint32_t queued_command_count;
     uint32_t dropped_command_count;
@@ -135,6 +167,10 @@ typedef struct {
     uint8_t read_queue_head;
     uint8_t read_queue_tail;
     uint8_t read_queue_count;
+    canopen_master_pdo_request_t pdo_queue[CANOPEN_MASTER_PDO_QUEUE_CAPACITY];
+    uint8_t pdo_queue_head;
+    uint8_t pdo_queue_tail;
+    uint8_t pdo_queue_count;
 } canopen_master_service_t;
 
 extern volatile canopen_master_debug_control_t g_canopen_master_debug_control;
@@ -196,10 +232,28 @@ bool canopen_master_service_request_nmt(canopen_master_service_t *service,
  * service uses the HPM CANopenNode device that was initialized for the bus, so
  * all CAN2/CAN3 CANopen traffic still passes through one owner.
  */
-bool canopen_master_service_send_pdo(canopen_master_service_t *service,
-                                     uint16_t cob_id,
-                                     const uint8_t *data,
-                                     uint8_t size);
+/* Queue one PDO for the service-owned software TX scheduler.
+ *
+ * The queue preserves group ordering.  Motion code should enqueue a complete
+ * group first, then let canopen_master_service_process() submit frames to the
+ * hardware TX mailboxes when they are available.
+ */
+bool canopen_master_service_queue_pdo(canopen_master_service_t *service,
+                                      uint16_t cob_id,
+                                      const uint8_t *data,
+                                      uint8_t size,
+                                      uint8_t node_id,
+                                      uint32_t group_sequence,
+                                      canopen_master_pdo_phase_t phase);
+bool canopen_master_service_queue_pdo_batch(canopen_master_service_t *service,
+                                            const canopen_master_pdo_request_t *requests,
+                                            uint8_t count);
+
+uint8_t canopen_master_service_pdo_queue_available(const canopen_master_service_t *service);
+bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *service,
+                                              uint32_t group_sequence);
+bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *service,
+                                             uint32_t group_sequence);
 
 void canopen_master_service_can2_isr(void);
 void canopen_master_service_can3_isr(void);

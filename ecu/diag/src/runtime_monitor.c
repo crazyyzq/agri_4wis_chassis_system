@@ -277,6 +277,23 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can2_canopen_snapshot.command_error_count,
            (long)snapshot->can2_canopen_snapshot.last_error);
 
+    printf("[ECU CANopen PDO CAN2] queued=%lu dropped=%lu tx=%lu tx_err=%lu "
+           "last_tx[group=%lu cob=0x%03x node=%u phase=%u] "
+           "last_fail[group=%lu cob=0x%03x node=%u phase=%u err=%ld]\r\n",
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_dropped_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_error_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_group_sequence,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_cob_id,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_node_id,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_phase,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_failed_group_sequence,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_cob_id,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_node_id,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_phase,
+           (long)snapshot->can2_canopen_snapshot.last_pdo_error);
+
     printf("[ECU CANopen CAN3] init=%s state=%u normal=%s bitrate=%lu local=%u remote=%u "
            "proc=%lu sdo_ok=%lu sdo_abort=%lu dl_ok=%lu dl_abort=%lu queued=%lu dropped=%lu "
            "last_node=%u last=0x%04x:%u size=%u value=0x%08lx abort=0x%08lx last_err=%ld\r\n",
@@ -300,6 +317,23 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can3_canopen_snapshot.last_sdo_value,
            (unsigned long)snapshot->can3_canopen_snapshot.last_sdo_abort_code,
            (long)snapshot->can3_canopen_snapshot.last_error);
+
+    printf("[ECU CANopen PDO CAN3] queued=%lu dropped=%lu tx=%lu tx_err=%lu "
+           "last_tx[group=%lu cob=0x%03x node=%u phase=%u] "
+           "last_fail[group=%lu cob=0x%03x node=%u phase=%u err=%ld]\r\n",
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_queued_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_dropped_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_error_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.last_pdo_tx_group_sequence,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_tx_cob_id,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_tx_node_id,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_tx_phase,
+           (unsigned long)snapshot->can3_canopen_snapshot.last_pdo_failed_group_sequence,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_failed_cob_id,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_failed_node_id,
+           (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_failed_phase,
+           (long)snapshot->can3_canopen_snapshot.last_pdo_error);
 
     printf("[ECU CAN1] tx=%lu rx=%lu err=%lu last_tx_id=0x%08lx ext=%s dlc=%u "
            "last_rx_id=0x%08lx ext=%s dlc=%u data=[",

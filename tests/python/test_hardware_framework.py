@@ -416,7 +416,7 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
     assert "servo_drive_canopen_update_target_velocity" in motion_c
     assert "servo_drive_canopen_prepare_position_mode" in motion_c
     assert "servo_drive_canopen_configure_steer_rpdo" in motion_c
-    assert "canopen_master_service_send_pdo" in motion_c
+    assert "canopen_master_service_queue_pdo" in motion_c
     assert "servo_drive_canopen_run_absolute_position_mode" in lift_c
     assert "ECU_CANOPEN_RPDO2_BASE" in config_h
     assert "ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC" in config_h
@@ -460,7 +460,7 @@ def test_servo_motion_uses_bc_canopen_command_sequences(root: pathlib.Path) -> N
     assert "servo_drive_canopen_prepare_velocity_mode(canopen" in motion_c
     assert "servo_drive_canopen_update_target_velocity(canopen" in motion_c
     assert "servo_drive_canopen_configure_steer_rpdo(canopen" in motion_c
-    assert "canopen_master_service_send_pdo(canopen" in motion_c
+    assert "canopen_master_service_queue_pdo_batch(canopen" in motion_c
     position_func = servo_c.split("static bool servo_drive_canopen_run_position_mode", 1)[1]
     assert position_func.index("ECU_CANOPEN_OBJ_TARGET_POSITION") < position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION")
     assert position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION") < position_func.index("SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION")
@@ -529,36 +529,79 @@ def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
 
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" in servo_h
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" in servo_h
-    assert "canopen_master_service_send_pdo" in service_h
+    assert "canopen_master_service_queue_pdo" in service_h
+    assert "canopen_master_service_queue_pdo_batch" in service_h
+    assert "canopen_master_service_pdo_group_pending" in service_h
+    assert "process_pdo_tx_queue" in service_c
+    assert "CANOPEN_MASTER_PDO_QUEUE_CAPACITY" in service_h
+    assert "group_sequence" in service_h
+    assert "retry_count" in service_h
     assert "hpm_can_send" in service_c
     assert "pdo_tx_count" in service_h
 
     for token in [
         "steer_pdo_configured",
         "steer_latest_target_counts",
-        "steer_pending_target",
         "steer_realtime_last_flush_ms",
         "steer_realtime_enabled",
         "steer_setup_queued_ms",
         "steer_pdo_tx_error_count",
+        "steer_active_group_sequence",
+        "steer_active_group_target_counts",
+        "steer_next_group_target_counts",
+        "steer_next_group_valid",
     ]:
         assert token in motion_h, token
 
     assert "motion_device_flush_realtime" in motion_c
     assert "steer_axis_realtime_ready" in motion_c
     assert "canopen->command_queue_count == 0U && !canopen->sdo_download_active" in motion_c
-    assert "send_steer_rpdo" in motion_c
+    assert "build_steer_rpdo_request" in motion_c
+    assert "queue_steer_group" in motion_c
+    assert "canopen_master_service_pdo_queue_available(canopen) < ECU_STEER_GROUP_PDO_FRAME_COUNT" in motion_c
+    assert "canopen_master_service_pdo_group_pending(canopen, state->steer_active_group_sequence)" in motion_c
+    assert "canopen_master_service_queue_pdo_batch(canopen" in motion_c
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" in motion_c
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" in motion_c
-    assert motion_c.index("send_steer_rpdo(canopen, node, SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM") < motion_c.index(
-        "send_steer_rpdo(canopen, node, SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER"
+    assert motion_c.index("SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM") < motion_c.index(
+        "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER"
     )
+    assert "canopen_master_service_send_pdo(canopen" not in motion_c
+    assert "bool canopen_master_service_send_pdo" not in service_h
+    assert "bool canopen_master_service_send_pdo" not in service_c
     assert "servo_drive_canopen_update_absolute_position" not in motion_c
     assert "bit10" not in motion_c.lower()
 
     assert "vehicle_command_executor_flush_can2_motion" in executor_h
     assert "motion_device_flush_realtime(&s_runtime.motion" in executor_c
     assert "vehicle_command_executor_flush_can2_motion(&s_runtime.executor" in tasks_c
+
+
+def test_canopennode_global_stack_access_is_serialized(root: pathlib.Path) -> None:
+    """The SDK global co pointer must not be switched concurrently by CAN2/CAN3 tasks."""
+
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+
+    for token in [
+        "xSemaphoreCreateMutex",
+        "xSemaphoreTake",
+        "xSemaphoreGive",
+        "canopen_master_lock",
+        "canopen_master_unlock",
+        "canopen_master_service_request_nmt_locked",
+    ]:
+        assert token in service_c, token
+
+    assert "xSemaphoreTakeRecursive" not in service_c
+    assert "xSemaphoreCreateRecursiveMutexStatic" not in service_c
+    assert "select_stack(service);" in service_c
+    process_body = service_c.split("void canopen_master_service_process", 1)[1]
+    process_body = process_body.split("void canopen_master_service_get_snapshot", 1)[0]
+    assert process_body.index("canopen_master_lock()") < process_body.index("select_stack(service);")
+    assert process_body.rindex("canopen_master_unlock()") > process_body.index("CO_process")
+    assert "co;" in service_c
+    assert "CANOPEN_MASTER_PDO_QUEUE_CAPACITY" in service_h
 
 
 def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) -> None:

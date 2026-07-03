@@ -17,6 +17,16 @@ typedef struct {
     uint32_t drive_last_target_update_ms[ECU_WHEEL_COUNT];
     uint32_t steer_last_target_update_ms[ECU_WHEEL_COUNT];
     uint32_t steer_realtime_last_flush_ms;
+    uint32_t steer_group_sequence_counter;
+    uint32_t steer_active_group_sequence;
+    uint32_t steer_active_group_submit_ms;
+    int32_t steer_active_group_target_counts[ECU_WHEEL_COUNT];
+    int32_t steer_next_group_target_counts[ECU_WHEEL_COUNT];
+    bool steer_group_active;
+    bool steer_next_group_valid;
+    bool steer_group_degraded;
+    uint32_t steer_group_complete_count;
+    uint32_t steer_group_failure_count;
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
     bool drive_brake_release_active[ECU_WHEEL_COUNT];
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
