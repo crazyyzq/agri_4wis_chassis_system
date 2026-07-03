@@ -278,12 +278,26 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (long)snapshot->can2_canopen_snapshot.last_error);
 
     printf("[ECU CANopen PDO CAN2] queued=%lu dropped=%lu tx=%lu tx_err=%lu "
+           "pdo_group_state=%u pdo_group=%lu pdo_expected_frames=%u "
+           "pdo_tx_complete_frames=%u pdo_failed_frames=%u pdo_in_flight_frames=%u "
+           "pdo_arm_complete_frames=%u pdo_trigger_complete_frames=%u "
+           "last_pdo_tx_complete_ms=%lu last_pdo_tx_timeout_ms=%lu "
            "last_tx[group=%lu cob=0x%03x node=%u phase=%u] "
            "last_fail[group=%lu cob=0x%03x node=%u phase=%u err=%ld]\r\n",
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_dropped_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_error_count,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_group_state,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_group_sequence,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_expected_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_tx_complete_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_failed_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_in_flight_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_arm_complete_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_trigger_complete_frames,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_complete_ms,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_timeout_ms,
            (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_group_sequence,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_cob_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_node_id,
@@ -319,12 +333,26 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (long)snapshot->can3_canopen_snapshot.last_error);
 
     printf("[ECU CANopen PDO CAN3] queued=%lu dropped=%lu tx=%lu tx_err=%lu "
+           "pdo_group_state=%u pdo_group=%lu pdo_expected_frames=%u "
+           "pdo_tx_complete_frames=%u pdo_failed_frames=%u pdo_in_flight_frames=%u "
+           "pdo_arm_complete_frames=%u pdo_trigger_complete_frames=%u "
+           "last_pdo_tx_complete_ms=%lu last_pdo_tx_timeout_ms=%lu "
            "last_tx[group=%lu cob=0x%03x node=%u phase=%u] "
            "last_fail[group=%lu cob=0x%03x node=%u phase=%u err=%ld]\r\n",
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_queued_count,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_dropped_count,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_count,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_error_count,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_group_state,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_group_sequence,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_expected_frames,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_tx_complete_frames,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_failed_frames,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_in_flight_frames,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_arm_complete_frames,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_trigger_complete_frames,
+           (unsigned long)snapshot->can3_canopen_snapshot.last_pdo_tx_complete_ms,
+           (unsigned long)snapshot->can3_canopen_snapshot.last_pdo_tx_timeout_ms,
            (unsigned long)snapshot->can3_canopen_snapshot.last_pdo_tx_group_sequence,
            (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_tx_cob_id,
            (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_tx_node_id,

@@ -15,6 +15,11 @@ extern int hpm_can_get_state(const struct device *dev,
  * source, that wait can starve lower-priority FreeRTOS tasks. CANopenNode does
  * not require this board adapter to wait for physical TX completion, so this
  * wrapper starts the hardware transmission and returns immediately.
+ *
+ * The realtime PDO scheduler depends on a strict one-frame FIFO.  Therefore
+ * this wrapper only uses the primary TX buffer; a busy primary buffer is
+ * reported as -EBUSY instead of spilling a later frame into another hardware
+ * queue where it could overtake an older group member.
  */
 int __wrap_hpm_can_send(const struct device *dev,
                         const struct can_frame *frame)
@@ -45,13 +50,10 @@ int __wrap_hpm_can_send(const struct device *dev,
     can_transmit_buf_t tx_buf;
     convert_can_frame_to_can_frame(frame, &tx_buf);
 
-    if (!can_is_primary_transmit_buffer_full(can)) {
-        status = can_send_high_priority_message_nonblocking(can, &tx_buf);
-    } else if (!can_is_secondary_transmit_buffer_full(can)) {
-        status = can_send_message_nonblocking(can, &tx_buf);
-    } else {
+    if (can_is_primary_transmit_buffer_full(can)) {
         return -EBUSY;
     }
 
+    status = can_send_high_priority_message_nonblocking(can, &tx_buf);
     return status == status_success ? 0 : -EIO;
 }

@@ -73,6 +73,7 @@ typedef struct {
 #define CANOPEN_MASTER_PDO_QUEUE_CAPACITY (64U)
 #define CANOPEN_MASTER_PDO_TX_BURST_LIMIT (8U)
 #define CANOPEN_MASTER_PDO_TX_MAX_RETRIES (8U)
+#define CANOPEN_MASTER_PDO_TX_TIMEOUT_MS (20U)
 
 typedef enum {
     CANOPEN_MASTER_PDO_PHASE_NONE = 0,
@@ -81,6 +82,16 @@ typedef enum {
     CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY,
     CANOPEN_MASTER_PDO_PHASE_SAFE_STOP
 } canopen_master_pdo_phase_t;
+
+typedef enum {
+    CANOPEN_MASTER_PDO_GROUP_STATE_IDLE = 0,
+    CANOPEN_MASTER_PDO_GROUP_STATE_QUEUED,
+    CANOPEN_MASTER_PDO_GROUP_STATE_ARM_IN_FLIGHT,
+    CANOPEN_MASTER_PDO_GROUP_STATE_TRIGGER_IN_FLIGHT,
+    CANOPEN_MASTER_PDO_GROUP_STATE_COMPLETE,
+    CANOPEN_MASTER_PDO_GROUP_STATE_FAILED,
+    CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED
+} canopen_master_pdo_group_state_t;
 
 typedef struct {
     uint16_t cob_id;
@@ -122,6 +133,17 @@ typedef struct {
     uint32_t pdo_tx_error_count;
     uint32_t pdo_queued_count;
     uint32_t pdo_dropped_count;
+    uint32_t pdo_group_sequence;
+    uint8_t pdo_group_state;
+    uint8_t pdo_expected_frames;
+    uint8_t pdo_submitted_frames;
+    uint8_t pdo_tx_complete_frames;
+    uint8_t pdo_failed_frames;
+    uint8_t pdo_in_flight_frames;
+    uint8_t pdo_arm_complete_frames;
+    uint8_t pdo_trigger_complete_frames;
+    uint32_t last_pdo_tx_complete_ms;
+    uint32_t last_pdo_tx_timeout_ms;
     uint32_t last_pdo_tx_group_sequence;
     uint32_t last_pdo_failed_group_sequence;
     uint16_t last_pdo_tx_cob_id;
@@ -171,6 +193,19 @@ typedef struct {
     uint8_t pdo_queue_head;
     uint8_t pdo_queue_tail;
     uint8_t pdo_queue_count;
+    canopen_master_pdo_request_t pdo_in_flight_request;
+    bool pdo_in_flight;
+    uint32_t pdo_in_flight_submit_ms;
+    uint32_t observed_pdo_tx_complete_count;
+    uint32_t active_pdo_group_sequence;
+    canopen_master_pdo_group_state_t active_pdo_group_state;
+    uint8_t active_pdo_expected_frames;
+    uint8_t active_pdo_submitted_frames;
+    uint8_t active_pdo_tx_complete_frames;
+    uint8_t active_pdo_failed_frames;
+    uint8_t active_pdo_in_flight_frames;
+    uint8_t active_pdo_arm_complete_frames;
+    uint8_t active_pdo_trigger_complete_frames;
 } canopen_master_service_t;
 
 extern volatile canopen_master_debug_control_t g_canopen_master_debug_control;

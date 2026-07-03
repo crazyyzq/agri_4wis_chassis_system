@@ -200,7 +200,9 @@ def test_canopennode_hpm_tx_path_is_nonblocking(root: pathlib.Path) -> None:
     assert "__wrap_hpm_can_send" in wrapper_c
     assert "busy-waits forever" in wrapper_c
     assert "can_send_high_priority_message_nonblocking" in wrapper_c
-    assert "can_send_message_nonblocking" in wrapper_c
+    assert "can_send_message_nonblocking" not in wrapper_c
+    assert "can_is_secondary_transmit_buffer_full" not in wrapper_c
+    assert "reported as -EBUSY" in wrapper_c
     assert "printf(" not in wrapper_c
     assert "Transmit failed" not in wrapper_c
     assert "while (!data->has_sent_out)" not in wrapper_c
@@ -575,6 +577,77 @@ def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
     assert "vehicle_command_executor_flush_can2_motion" in executor_h
     assert "motion_device_flush_realtime(&s_runtime.motion" in executor_c
     assert "vehicle_command_executor_flush_can2_motion(&s_runtime.executor" in tasks_c
+
+
+def test_canopen_pdo_scheduler_waits_for_hardware_tx_complete(root: pathlib.Path) -> None:
+    """Realtime PDO groups must complete by hardware TX-complete, not mailbox enqueue."""
+
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    wrap_c = read(root, "ecu/drivers/canopen/src/hpm_can_send_nonblocking_wrap.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    assert "can_send_high_priority_message_nonblocking" in wrap_c
+    assert "can_send_message_nonblocking" not in wrap_c
+    assert "can_is_secondary_transmit_buffer_full" not in wrap_c
+
+    for token in [
+        "CANOPEN_MASTER_PDO_TX_TIMEOUT_MS",
+        "canopen_master_pdo_group_state_t",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_QUEUED",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_ARM_IN_FLIGHT",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_TRIGGER_IN_FLIGHT",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_COMPLETE",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_FAILED",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED",
+        "pdo_in_flight",
+        "active_pdo_group_state",
+        "active_pdo_expected_frames",
+        "active_pdo_tx_complete_frames",
+        "active_pdo_in_flight_frames",
+        "active_pdo_arm_complete_frames",
+        "active_pdo_trigger_complete_frames",
+        "last_pdo_tx_complete_ms",
+        "last_pdo_tx_timeout_ms",
+    ]:
+        assert token in service_h, token
+
+    for token in [
+        "s_canopen_pdo_tx_complete_count",
+        "note_canopen_tx_flags_from_isr",
+        "CAN_EVENT_TX_PRIMARY_BUF",
+        "complete_in_flight_pdo",
+        "fail_active_pdo_group",
+        "process_pdo_tx_complete_events",
+        "cancel_queued_pdo_group",
+        "start_next_pdo_frame",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_ARM_IN_FLIGHT",
+        "CANOPEN_MASTER_PDO_GROUP_STATE_TRIGGER_IN_FLIGHT",
+    ]:
+        assert token in service_c, token
+
+    process_body = service_c.split("static void process_pdo_tx_queue", 1)[1]
+    process_body = process_body.split("static bool start_sdo_upload", 1)[0]
+    assert process_body.index("process_pdo_tx_complete_events") < process_body.index(
+        "start_next_pdo_frame"
+    )
+    assert "drop_current_pdo_queue_item(service);" not in process_body.split(
+        "complete_in_flight_pdo", 1
+    )[0]
+
+    for token in [
+        "pdo_group_state",
+        "pdo_expected_frames",
+        "pdo_tx_complete_frames",
+        "pdo_failed_frames",
+        "pdo_in_flight_frames",
+        "pdo_arm_complete_frames",
+        "pdo_trigger_complete_frames",
+        "last_pdo_tx_complete_ms",
+        "last_pdo_tx_timeout_ms",
+    ]:
+        assert token in service_h, token
+        assert token in monitor_c, token
 
 
 def test_canopennode_global_stack_access_is_serialized(root: pathlib.Path) -> None:
