@@ -93,6 +93,18 @@ typedef enum {
     CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED
 } canopen_master_pdo_group_state_t;
 
+typedef enum {
+    CANOPEN_MASTER_PDO_FAIL_NONE = 0,
+    CANOPEN_MASTER_PDO_FAIL_SUBMIT_BUSY,
+    CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR,
+    CANOPEN_MASTER_PDO_FAIL_TX_TIMEOUT,
+    CANOPEN_MASTER_PDO_FAIL_TX_ERROR_EVENT,
+    CANOPEN_MASTER_PDO_FAIL_GROUP_CANCELLED,
+    CANOPEN_MASTER_PDO_FAIL_SAFETY_INHIBITED,
+    CANOPEN_MASTER_PDO_FAIL_GROUP_CONFLICT,
+    CANOPEN_MASTER_PDO_FAIL_QUEUE_FULL
+} canopen_master_pdo_fail_reason_t;
+
 typedef struct {
     uint16_t cob_id;
     uint8_t size;
@@ -146,6 +158,7 @@ typedef struct {
     uint32_t last_pdo_tx_timeout_ms;
     uint32_t last_pdo_tx_group_sequence;
     uint32_t last_pdo_failed_group_sequence;
+    uint32_t last_pdo_failed_group_id;
     uint16_t last_pdo_tx_cob_id;
     uint16_t last_pdo_failed_cob_id;
     uint8_t last_pdo_tx_node_id;
@@ -153,6 +166,14 @@ typedef struct {
     uint8_t last_pdo_tx_phase;
     uint8_t last_pdo_failed_phase;
     int32_t last_pdo_error;
+    int32_t last_pdo_current_error;
+    int32_t last_pdo_failed_error;
+    uint32_t last_pdo_failed_ms;
+    uint8_t last_pdo_failed_reason;
+    uint32_t pdo_queue_full_drop_count;
+    uint32_t pdo_group_conflict_drop_count;
+    uint32_t pdo_safety_inhibit_count;
+    uint32_t pdo_same_target_coalesce_count;
     uint32_t command_error_count;
     uint32_t queued_command_count;
     uint32_t dropped_command_count;
@@ -169,6 +190,9 @@ typedef struct {
     uint8_t can_index;
     uint32_t last_process_ms;
     uint32_t next_sdo_ms;
+    uint32_t sdo_retry_backoff_ms;
+    uint32_t sdo_next_retry_ms;
+    uint32_t sdo_offline_since_ms;
     uint8_t active_sdo_node_id;
     uint16_t active_sdo_index;
     uint8_t active_sdo_subindex;
@@ -289,6 +313,14 @@ bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *se
                                               uint32_t group_sequence);
 bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *service,
                                              uint32_t group_sequence);
+bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
+                                             uint32_t group_sequence);
+void canopen_master_service_note_pdo_safety_inhibit(canopen_master_service_t *service);
+void canopen_master_service_note_pdo_same_target_coalesced(canopen_master_service_t *service);
+bool canopen_master_service_has_node_evidence(const canopen_master_service_t *service,
+                                              uint8_t node_id);
+bool canopen_master_service_diagnostic_scan_allowed(const canopen_master_service_t *service,
+                                                    uint32_t now_ms);
 
 void canopen_master_service_can2_isr(void);
 void canopen_master_service_can3_isr(void);

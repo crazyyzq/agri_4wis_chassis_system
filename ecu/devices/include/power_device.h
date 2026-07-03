@@ -26,6 +26,9 @@ typedef struct {
     uint32_t dcac_last_rx_ms;
     uint32_t last_rx_ms;
     uint32_t last_tx_ms;
+    uint32_t offline_since_ms;
+    uint32_t retry_backoff_ms;
+    uint32_t next_retry_ms;
     uint32_t command_tx_count;
     ecu_can_frame_t last_rx_frame;
     ecu_can_frame_t last_tx_frame;

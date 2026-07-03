@@ -370,6 +370,18 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.commissioning_debug.power_debug_active;
     out->hydraulic_enable = s_runtime.final_command.hydraulic_enable;
     out->hydraulic_valve_mask = s_runtime.final_command.hydraulic_valve_mask;
+    out->steer_normal_pdo_allowed =
+        s_runtime.executor.steer_normal_pdo_allowed;
+    out->steer_safety_inhibited =
+        s_runtime.executor.steer_safety_inhibited;
+    out->steer_inhibit_reason =
+        s_runtime.executor.steer_inhibit_reason;
+    out->steer_safety_inhibit_count =
+        s_runtime.executor.steer_safety_inhibit_count;
+    out->steer_last_allowed_to_inhibited_ms =
+        s_runtime.executor.steer_last_allowed_to_inhibited_ms;
+    out->steer_safe_stop_pending =
+        s_runtime.executor.steer_safe_stop_pending;
     out->power_result = s_runtime.executor.power_result;
     out->motion_result = s_runtime.executor.motion_result;
     out->lift_hydraulic_result = s_runtime.executor.lift_hydraulic_result;

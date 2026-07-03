@@ -58,10 +58,41 @@ static bool analog_modbus_response_handler(void *context,
                                                typed->now_ms);
 }
 
+static uint32_t analog_modbus_next_backoff_ms(uint32_t current_ms)
+{
+    if (current_ms < ECU_OFFLINE_BACKOFF_MIN_MS) {
+        return ECU_OFFLINE_BACKOFF_MIN_MS;
+    }
+    if (current_ms < ECU_OFFLINE_BACKOFF_STEP1_MS) {
+        return ECU_OFFLINE_BACKOFF_STEP1_MS;
+    }
+    if (current_ms < ECU_OFFLINE_BACKOFF_STEP2_MS) {
+        return ECU_OFFLINE_BACKOFF_STEP2_MS;
+    }
+    return ECU_OFFLINE_BACKOFF_MAX_MS;
+}
+
+static void analog_modbus_note_timeout(analog_modbus_device_state_t *state,
+                                       uint32_t now_ms)
+{
+    if (state == 0) {
+        return;
+    }
+
+    state->online = false;
+    if (state->offline_since_ms == 0U) {
+        state->offline_since_ms = now_ms;
+    }
+    state->retry_backoff_ms =
+        analog_modbus_next_backoff_ms(state->retry_backoff_ms);
+    state->next_retry_ms = now_ms + state->retry_backoff_ms;
+}
+
 void analog_modbus_device_init(analog_modbus_device_state_t *state)
 {
     if (state != 0) {
         memset(state, 0, sizeof(*state));
+        state->retry_backoff_ms = ECU_OFFLINE_BACKOFF_MIN_MS;
     }
 }
 
@@ -114,7 +145,7 @@ bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
     if (adu == 0 || adu_size > sizeof(read_buffer) ||
         !analog_modbus_init_context(&rtu, send_buffer, read_buffer, config)) {
         state->error_count++;
-        state->online = false;
+        analog_modbus_note_timeout(state, now_ms);
         return false;
     }
 
@@ -127,7 +158,7 @@ bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
                                                            registers);
     if (result < 0) {
         state->error_count++;
-        state->online = false;
+        analog_modbus_note_timeout(state, now_ms);
         return false;
     }
 
@@ -142,6 +173,9 @@ bool analog_modbus_device_apply_response(analog_modbus_device_state_t *state,
 
     state->response_count++;
     state->last_response_ms = now_ms;
+    state->offline_since_ms = 0U;
+    state->retry_backoff_ms = ECU_OFFLINE_BACKOFF_MIN_MS;
+    state->next_retry_ms = now_ms + ECU_MODBUS_ADC_POLL_PERIOD_MS;
     state->online = true;
     return true;
 }
@@ -163,9 +197,14 @@ void analog_modbus_device_process(analog_modbus_device_state_t *state,
         return;
     }
 
+    if (!state->online && state->next_retry_ms != 0U &&
+        now_ms < state->next_retry_ms) {
+        return;
+    }
+
     if (!analog_modbus_device_build_request(config, &request)) {
         state->error_count++;
-        state->online = false;
+        analog_modbus_note_timeout(state, now_ms);
         return;
     }
 
@@ -188,7 +227,7 @@ void analog_modbus_device_process(analog_modbus_device_state_t *state,
     modbus_master_service_get_snapshot(master, &master_snapshot);
     state->request_count = master_snapshot.tx_count;
     if (master_snapshot.timeout_count > previous_timeout_count) {
-        state->online = false;
+        analog_modbus_note_timeout(state, now_ms);
     }
     if (master_snapshot.error_count > state->error_count) {
         state->error_count = master_snapshot.error_count;

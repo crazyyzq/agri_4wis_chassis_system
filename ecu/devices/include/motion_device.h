@@ -9,9 +9,32 @@
 #include "ecu_types.h"
 #include "vehicle_types.h"
 
+typedef enum {
+    MOTION_STEER_INHIBIT_NONE = 0,
+    MOTION_STEER_INHIBIT_ESTOP_LATCHED,
+    MOTION_STEER_INHIBIT_SBUS_OFFLINE,
+    MOTION_STEER_INHIBIT_REMOTE_DISARMED,
+    MOTION_STEER_INHIBIT_GEAR_PARK,
+    MOTION_STEER_INHIBIT_AXIS_NOT_READY,
+    MOTION_STEER_INHIBIT_GROUP_DEGRADED,
+    MOTION_STEER_INHIBIT_COMMAND_SOURCE_NOT_AUTHORIZED,
+    MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED
+} motion_steer_inhibit_reason_t;
+
+typedef enum {
+    MOTION_STEER_AXIS_UNSEEN = 0,
+    MOTION_STEER_AXIS_SDO_PENDING,
+    MOTION_STEER_AXIS_SDO_TIMEOUT,
+    MOTION_STEER_AXIS_SDO_ABORT,
+    MOTION_STEER_AXIS_CONFIG_UNVERIFIED,
+    MOTION_STEER_AXIS_READY,
+    MOTION_STEER_AXIS_FAULT
+} motion_steer_axis_config_state_t;
+
 typedef struct {
     uint32_t apply_count;
     uint32_t skipped_count;
+    uint32_t last_motion_command_sequence;
     uint32_t last_motion_command_queue_ms;
     uint32_t last_target_update_ms;
     uint32_t drive_last_target_update_ms[ECU_WHEEL_COUNT];
@@ -25,6 +48,12 @@ typedef struct {
     bool steer_group_active;
     bool steer_next_group_valid;
     bool steer_group_degraded;
+    bool steer_normal_pdo_allowed;
+    bool steer_safety_inhibited;
+    motion_steer_inhibit_reason_t steer_inhibit_reason;
+    uint32_t steer_safety_inhibit_count;
+    uint32_t steer_last_allowed_to_inhibited_ms;
+    bool steer_safe_stop_pending;
     uint32_t steer_group_complete_count;
     uint32_t steer_group_failure_count;
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
@@ -33,6 +62,8 @@ typedef struct {
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];
     bool steer_pdo_configured[ECU_WHEEL_COUNT];
     bool steer_position_mode_ready[ECU_WHEEL_COUNT];
+    motion_steer_axis_config_state_t steer_axis_config_state[ECU_WHEEL_COUNT];
+    bool steer_axis_remote_verified[ECU_WHEEL_COUNT];
     uint32_t steer_setup_queued_ms[ECU_WHEEL_COUNT];
     bool steer_realtime_enabled[ECU_WHEEL_COUNT];
     bool steer_latest_target_valid[ECU_WHEEL_COUNT];
@@ -71,6 +102,7 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                               canopen_master_service_t *canopen,
                                               const ecu_hardware_config_t *config,
                                               const vehicle_actuator_command_t *command,
+                                              uint32_t command_sequence,
                                               uint32_t now_ms);
 
 /* Flush realtime steering PDOs from the latest cached motion command.

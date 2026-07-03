@@ -242,11 +242,26 @@
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_COUNTS_PER_SEC  (1000000)
 #define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (500000)
 #define ECU_CANOPEN_STEER_SETUP_SETTLE_MS                   (100U)
+/* Analyzer-only PDO capture switch.  Default is disabled because real drives
+ * have not yet confirmed their RPDO mapping/readback.  Setting this to 1 is
+ * only for a bounded CAN analyzer capture on an unpopulated actuator bus; it is
+ * not evidence that any servo accepted or executed the command.
+ */
+#define ECU_CAN2_BENCH_PDO_CAPTURE_MODE (0)
 /* Whole-machine commissioning switch.  Keep the drive-wheel command path built
  * and tested, but force walking motors to zero/braked while steering is being
  * tuned on the real vehicle.  Set to 0 after steering response is verified.
  */
 #define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)
+
+/* Shared offline retry backoff for no-device bench bring-up.  Missing BMS,
+ * CANopen nodes or Modbus devices must stay diagnostic-visible without causing
+ * high-rate timeout floods in periodic tasks.
+ */
+#define ECU_OFFLINE_BACKOFF_MIN_MS    (100U)
+#define ECU_OFFLINE_BACKOFF_STEP1_MS  (500U)
+#define ECU_OFFLINE_BACKOFF_STEP2_MS  (2000U)
+#define ECU_OFFLINE_BACKOFF_MAX_MS    (5000U)
 
 /* CANopen object indexes used by the BC/BC2 servo adapter.  0x2190 reports
  * drive terminal input states; 0x2194 writes outputs configured for program

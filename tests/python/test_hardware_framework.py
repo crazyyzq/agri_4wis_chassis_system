@@ -319,7 +319,9 @@ def test_analog_modbus_adc_marks_offline_on_master_timeout(root: pathlib.Path) -
     analog_c = read(root, "ecu/devices/src/analog_modbus_device.c")
 
     assert "if (master_snapshot.timeout_count > previous_timeout_count)" in analog_c
-    assert "state->online = false;" in analog_c.split("if (master_snapshot.timeout_count > previous_timeout_count)", 1)[1]
+    assert "analog_modbus_note_timeout(state, now_ms);" in analog_c.split(
+        "if (master_snapshot.timeout_count > previous_timeout_count)", 1
+    )[1]
 
 
 def test_canopennode_debug_commands_are_sequence_gated(root: pathlib.Path) -> None:
@@ -557,7 +559,8 @@ def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
 
     assert "motion_device_flush_realtime" in motion_c
     assert "steer_axis_realtime_ready" in motion_c
-    assert "canopen->command_queue_count == 0U && !canopen->sdo_download_active" in motion_c
+    assert "canopen_master_service_has_node_evidence" in motion_c
+    assert "MOTION_STEER_AXIS_READY" in motion_c
     assert "build_steer_rpdo_request" in motion_c
     assert "queue_steer_group" in motion_c
     assert "canopen_master_service_pdo_queue_available(canopen) < ECU_STEER_GROUP_PDO_FRAME_COUNT" in motion_c
@@ -648,6 +651,228 @@ def test_canopen_pdo_scheduler_waits_for_hardware_tx_complete(root: pathlib.Path
     ]:
         assert token in service_h, token
         assert token in monitor_c, token
+
+
+def test_v4_can2_safety_inhibit_blocks_normal_steering_pdo(root: pathlib.Path) -> None:
+    """Safety, park, disarm and unverified axes must not create normal 2F/3F groups."""
+
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "ECU_CAN2_BENCH_PDO_CAPTURE_MODE",
+        "#define ECU_CAN2_BENCH_PDO_CAPTURE_MODE (0)",
+        "#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "motion_steer_inhibit_reason_t",
+        "MOTION_STEER_INHIBIT_ESTOP_LATCHED",
+        "MOTION_STEER_INHIBIT_SBUS_OFFLINE",
+        "MOTION_STEER_INHIBIT_REMOTE_DISARMED",
+        "MOTION_STEER_INHIBIT_GEAR_PARK",
+        "MOTION_STEER_INHIBIT_AXIS_NOT_READY",
+        "MOTION_STEER_INHIBIT_GROUP_DEGRADED",
+        "MOTION_STEER_INHIBIT_COMMAND_SOURCE_NOT_AUTHORIZED",
+        "MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED",
+        "steer_normal_pdo_allowed",
+        "steer_safety_inhibited",
+        "steer_inhibit_reason",
+        "steer_safety_inhibit_count",
+        "steer_last_allowed_to_inhibited_ms",
+        "steer_safe_stop_pending",
+    ]:
+        assert token in motion_h, token
+
+    for token in [
+        "motion_device_update_steer_safety_gate",
+        "canopen_master_service_note_pdo_safety_inhibit",
+        "canopen_master_service_cancel_pdo_group",
+        "state->steer_next_group_valid = false;",
+        "state->steer_safe_stop_pending = true;",
+    ]:
+        assert token in motion_c, token
+
+    source_body = motion_c.split("static bool command_source_allows_motion_output", 1)[1]
+    source_body = source_body.split("static bool command_changed", 1)[0]
+    assert "COMMAND_SOURCE_SAFETY" not in source_body
+
+    queue_call = motion_c.split("queue_steer_group(canopen", 1)[0]
+    assert "state->steer_normal_pdo_allowed" in queue_call
+
+    assert "canopen_master_service_note_pdo_safety_inhibit" in service_h
+    assert "canopen_master_service_cancel_pdo_group" in service_h
+    assert "pdo_safety_inhibit_count" in service_h
+    assert "CANOPEN_MASTER_PDO_FAIL_SAFETY_INHIBITED" in service_h
+    assert "CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED" in service_c
+
+    for token in [
+        "steer_normal_pdo_allowed",
+        "steer_safety_inhibited",
+        "steer_inhibit_reason",
+        "steer_safety_inhibit_count",
+        "steer_safe_stop_pending",
+    ]:
+        assert token in monitor_c, token
+
+
+def test_v4_vehicle_motion_command_mailbox_owns_can2_runtime(root: pathlib.Path) -> None:
+    """Vehicle task must publish one coherent command; CAN2 task owns motion runtime."""
+
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    executor_h = read(root, "ecu/vehicle/include/vehicle_command_executor.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    for token in [
+        "vehicle_motion_command_mailbox_t",
+        "publish_motion_command_snapshot",
+        "read_motion_command_snapshot",
+        "publish_sequence",
+        "read_sequence_before",
+        "read_sequence_after",
+        "sequence is even",
+    ]:
+        assert token in executor_c or token in executor_h, token
+
+    apply_body = executor_c.split("bool vehicle_command_executor_apply", 1)[1]
+    apply_body = apply_body.split("bool vehicle_command_executor_flush_can2_motion", 1)[0]
+    assert "motion_device_apply(&s_runtime.motion" not in apply_body
+    assert "publish_motion_command_snapshot" in apply_body
+
+    flush_body = executor_c.split("bool vehicle_command_executor_flush_can2_motion", 1)[1]
+    flush_body = flush_body.split("void vehicle_command_executor_get_state", 1)[0]
+    assert "read_motion_command_snapshot" in flush_body
+    assert "motion_device_apply(&s_runtime.motion" in flush_body
+    assert "motion_device_flush_realtime(&s_runtime.motion" in flush_body
+
+    assert "motion_device_apply(motion_device_state_t *state" in motion_c
+    assert "uint32_t command_sequence" in motion_c
+
+
+def test_v4_unverified_steering_axes_are_not_realtime_ready(root: pathlib.Path) -> None:
+    """SDO enqueue or queue-drain must not mark a steering axis realtime-ready."""
+
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "motion_steer_axis_config_state_t",
+        "MOTION_STEER_AXIS_UNSEEN",
+        "MOTION_STEER_AXIS_SDO_PENDING",
+        "MOTION_STEER_AXIS_SDO_TIMEOUT",
+        "MOTION_STEER_AXIS_SDO_ABORT",
+        "MOTION_STEER_AXIS_CONFIG_UNVERIFIED",
+        "MOTION_STEER_AXIS_READY",
+        "MOTION_STEER_AXIS_FAULT",
+        "steer_axis_config_state",
+        "steer_axis_remote_verified",
+    ]:
+        assert token in motion_h, token
+
+    assert "canopen_master_service_has_node_evidence" in service_h
+    assert "#define ECU_CAN2_BENCH_PDO_CAPTURE_MODE (0)" in config_h
+
+    ready_body = motion_c.split("static bool steer_axis_realtime_ready", 1)[1]
+    ready_body = ready_body.split("static bool all_steer_axes_realtime_ready", 1)[0]
+    assert "canopen_master_service_has_node_evidence" in ready_body
+    assert "steer_axis_remote_verified" in ready_body
+    assert "MOTION_STEER_AXIS_READY" in ready_body
+    assert "command_queue_count == 0U && !canopen->sdo_download_active" not in ready_body
+    assert "state->steer_realtime_enabled[wheel] = true;" not in ready_body
+
+    setup_body = motion_c.split("static bool prepare_steer_axis_once", 1)[1]
+    setup_body = setup_body.split("static bool send_steer_command", 1)[0]
+    assert "MOTION_STEER_AXIS_CONFIG_UNVERIFIED" in setup_body
+    assert "state->steer_pdo_configured[wheel] = true;" not in setup_body
+    assert "state->steer_position_mode_ready[wheel] = true;" not in setup_body
+
+
+def test_v4_pdo_failure_diagnostics_keep_history_and_reasons(root: pathlib.Path) -> None:
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "canopen_master_pdo_fail_reason_t",
+        "CANOPEN_MASTER_PDO_FAIL_SUBMIT_BUSY",
+        "CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR",
+        "CANOPEN_MASTER_PDO_FAIL_TX_TIMEOUT",
+        "CANOPEN_MASTER_PDO_FAIL_TX_ERROR_EVENT",
+        "CANOPEN_MASTER_PDO_FAIL_GROUP_CANCELLED",
+        "CANOPEN_MASTER_PDO_FAIL_SAFETY_INHIBITED",
+        "CANOPEN_MASTER_PDO_FAIL_GROUP_CONFLICT",
+        "CANOPEN_MASTER_PDO_FAIL_QUEUE_FULL",
+        "last_pdo_current_error",
+        "last_pdo_failed_error",
+        "last_pdo_failed_ms",
+        "last_pdo_failed_group_id",
+        "last_pdo_failed_reason",
+        "pdo_queue_full_drop_count",
+        "pdo_group_conflict_drop_count",
+        "pdo_safety_inhibit_count",
+        "pdo_same_target_coalesce_count",
+    ]:
+        assert token in service_h, token
+        assert token in monitor_c or token.startswith("CANOPEN_MASTER_") or token == "canopen_master_pdo_fail_reason_t"
+
+    assert "note_pdo_failure(service, request, error, reason, now_ms)" in service_c
+    assert "service->snapshot.last_pdo_failed_error = error;" in service_c
+    assert "service->snapshot.last_pdo_current_error = 0;" in service_c
+    assert "service->snapshot.last_pdo_failed_error = 0;" not in service_c.split(
+        "void canopen_master_service_process", 1
+    )[1]
+
+
+def test_v4_offline_bringup_paths_are_backed_off(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    commissioning_c = read(root, "ecu/diag/src/commissioning_debug.c")
+    analog_h = read(root, "ecu/devices/include/analog_modbus_device.h")
+    analog_c = read(root, "ecu/devices/src/analog_modbus_device.c")
+    power_h = read(root, "ecu/devices/include/power_device.h")
+
+    for token in [
+        "ECU_OFFLINE_BACKOFF_MIN_MS",
+        "ECU_OFFLINE_BACKOFF_STEP1_MS",
+        "ECU_OFFLINE_BACKOFF_STEP2_MS",
+        "ECU_OFFLINE_BACKOFF_MAX_MS",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "sdo_retry_backoff_ms",
+        "sdo_next_retry_ms",
+        "sdo_offline_since_ms",
+        "canopen_master_service_diagnostic_scan_allowed",
+    ]:
+        assert token in service_h, token
+        assert token in service_c, token
+
+    assert "canopen_master_service_diagnostic_scan_allowed" in commissioning_c
+    assert "ECU_CANOPEN_COMMISSIONING_SCAN_PERIOD_MS" in commissioning_c
+
+    for token in [
+        "offline_since_ms",
+        "retry_backoff_ms",
+        "next_retry_ms",
+        "analog_modbus_note_timeout",
+    ]:
+        assert token in analog_h or token in analog_c, token
+
+    for token in [
+        "offline_since_ms",
+        "retry_backoff_ms",
+        "next_retry_ms",
+    ]:
+        assert token in power_h, token
 
 
 def test_canopennode_global_stack_access_is_serialized(root: pathlib.Path) -> None:
@@ -1165,8 +1390,9 @@ def test_canopen_command_cache_updates_only_after_successful_queueing(root: path
     assert lift_success_block is not None
     assert "motion_command_refresh_due(state, now_ms)" in motion_c
     assert "lift_command_refresh_due(state, now_ms)" in lift_c
-    assert "motion_device_apply(&s_runtime.motion" in executor_c
-    assert "command,\n                                                  now_ms)" in executor_c
+    assert "publish_motion_command_snapshot" in executor_c
+    assert "read_motion_command_snapshot" in executor_c
+    assert "command,\n                                                  command_sequence,\n                                                  now_ms)" in executor_c
     assert "lift_hydraulic_device_apply(&s_runtime.lift_hydraulic" in executor_c
     assert "command,\n                                    now_ms)" in executor_c
 

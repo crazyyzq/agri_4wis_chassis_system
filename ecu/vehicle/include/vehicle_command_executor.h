@@ -1,6 +1,7 @@
 #ifndef VEHICLE_COMMAND_EXECUTOR_H
 #define VEHICLE_COMMAND_EXECUTOR_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "canopen_master_service.h"
@@ -16,6 +17,13 @@ typedef struct {
     uart_rs485_hw_t *warning_light_uart;
     modbus_master_service_t *warning_light_modbus;
 } vehicle_executor_io_t;
+
+typedef struct {
+    volatile uint32_t publish_sequence;
+    vehicle_actuator_command_t command;
+    uint32_t timestamp_ms;
+    bool valid;
+} vehicle_motion_command_mailbox_t;
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor);
 bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,

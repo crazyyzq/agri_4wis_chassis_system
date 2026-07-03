@@ -8,6 +8,22 @@ static const char *bool_text(bool value)
     return value ? "1" : "0";
 }
 
+static const char *steer_inhibit_reason_text(uint8_t reason)
+{
+    switch (reason) {
+    case 0U: return "none";
+    case 1U: return "estop_latched";
+    case 2U: return "sbus_offline";
+    case 3U: return "remote_disarmed";
+    case 4U: return "gear_park";
+    case 5U: return "axis_not_ready";
+    case 6U: return "group_degraded";
+    case 7U: return "command_source_not_authorized";
+    case 8U: return "bench_mode_disabled";
+    default: return "unknown";
+    }
+}
+
 static const char *link_state_text(remote_link_state_t state)
 {
     switch (state) {
@@ -283,7 +299,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "pdo_arm_complete_frames=%u pdo_trigger_complete_frames=%u "
            "last_pdo_tx_complete_ms=%lu last_pdo_tx_timeout_ms=%lu "
            "last_tx[group=%lu cob=0x%03x node=%u phase=%u] "
-           "last_fail[group=%lu cob=0x%03x node=%u phase=%u err=%ld]\r\n",
+           "last_fail[group=%lu group_id=%lu cob=0x%03x node=%u phase=%u err=%ld "
+           "hist_err=%ld reason=%u failed_ms=%lu] drops[qfull=%lu conflict=%lu "
+           "safety=%lu coalesce=%lu]\r\n",
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_dropped_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_count,
@@ -303,10 +321,31 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_node_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_phase,
            (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_failed_group_sequence,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_failed_group_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_cob_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_node_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_phase,
-           (long)snapshot->can2_canopen_snapshot.last_pdo_error);
+           (long)snapshot->can2_canopen_snapshot.last_pdo_current_error,
+           (long)snapshot->can2_canopen_snapshot.last_pdo_failed_error,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_reason,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_failed_ms,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_queue_full_drop_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_group_conflict_drop_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_safety_inhibit_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_same_target_coalesce_count);
+
+    printf("[ECU STEER SAFETY] steer_normal_pdo_allowed=%s "
+           "steer_safety_inhibited=%s steer_inhibit_reason=%u(%s) "
+           "steer_safety_inhibit_count=%lu "
+           "steer_last_allowed_to_inhibited_ms=%lu "
+           "steer_safe_stop_pending=%s\r\n",
+           bool_text(snapshot->steer_normal_pdo_allowed),
+           bool_text(snapshot->steer_safety_inhibited),
+           (unsigned int)snapshot->steer_inhibit_reason,
+           steer_inhibit_reason_text(snapshot->steer_inhibit_reason),
+           (unsigned long)snapshot->steer_safety_inhibit_count,
+           (unsigned long)snapshot->steer_last_allowed_to_inhibited_ms,
+           bool_text(snapshot->steer_safe_stop_pending));
 
     printf("[ECU CANopen CAN3] init=%s state=%u normal=%s bitrate=%lu local=%u remote=%u "
            "proc=%lu sdo_ok=%lu sdo_abort=%lu dl_ok=%lu dl_abort=%lu queued=%lu dropped=%lu "

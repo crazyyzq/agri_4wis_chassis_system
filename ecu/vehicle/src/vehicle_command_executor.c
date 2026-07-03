@@ -16,9 +16,61 @@ typedef struct {
     lift_hydraulic_device_state_t lift_hydraulic;
     local_io_device_state_t local_io;
     warning_light_device_state_t warning_light;
+    vehicle_motion_command_mailbox_t motion_mailbox;
 } vehicle_executor_runtime_t;
 
 static vehicle_executor_runtime_t s_runtime;
+
+static void publish_motion_command_snapshot(vehicle_motion_command_mailbox_t *mailbox,
+                                            const vehicle_actuator_command_t *command,
+                                            uint32_t now_ms)
+{
+    if (mailbox == 0 || command == 0) {
+        return;
+    }
+
+    /* Odd sequence means a writer is copying the multi-field command.  Readers
+     * only accept the snapshot when the sequence is even and unchanged across
+     * the copy.
+     */
+    mailbox->publish_sequence++;
+    if ((mailbox->publish_sequence & 1U) == 0U) {
+        mailbox->publish_sequence++;
+    }
+    mailbox->command = *command;
+    mailbox->timestamp_ms = now_ms;
+    mailbox->valid = true;
+    mailbox->publish_sequence++;
+}
+
+static bool read_motion_command_snapshot(const vehicle_motion_command_mailbox_t *mailbox,
+                                         vehicle_actuator_command_t *command,
+                                         uint32_t *sequence,
+                                         uint32_t *timestamp_ms)
+{
+    uint32_t read_sequence_before;
+    uint32_t read_sequence_after;
+
+    if (mailbox == 0 || command == 0 || sequence == 0 || timestamp_ms == 0) {
+        return false;
+    }
+
+    read_sequence_before = mailbox->publish_sequence;
+    if ((read_sequence_before & 1U) != 0U || !mailbox->valid) {
+        return false;
+    }
+    *command = mailbox->command;
+    *timestamp_ms = mailbox->timestamp_ms;
+    read_sequence_after = mailbox->publish_sequence;
+
+    if (read_sequence_before != read_sequence_after ||
+        (read_sequence_after & 1U) != 0U) {
+        return false;
+    }
+
+    *sequence = read_sequence_after;
+    return true;
+}
 
 static void vehicle_executor_runtime_init_once(void)
 {
@@ -30,6 +82,26 @@ static void vehicle_executor_runtime_init_once(void)
     local_io_device_init(&s_runtime.local_io);
     warning_light_device_init(&s_runtime.warning_light);
     s_runtime.initialized = true;
+}
+
+static void update_executor_motion_diagnostics(vehicle_executor_state_t *executor)
+{
+    if (executor == 0) {
+        return;
+    }
+
+    executor->steer_normal_pdo_allowed =
+        s_runtime.motion.steer_normal_pdo_allowed;
+    executor->steer_safety_inhibited =
+        s_runtime.motion.steer_safety_inhibited;
+    executor->steer_inhibit_reason =
+        (uint8_t)s_runtime.motion.steer_inhibit_reason;
+    executor->steer_safety_inhibit_count =
+        s_runtime.motion.steer_safety_inhibit_count;
+    executor->steer_last_allowed_to_inhibited_ms =
+        s_runtime.motion.steer_last_allowed_to_inhibited_ms;
+    executor->steer_safe_stop_pending =
+        s_runtime.motion.steer_safe_stop_pending;
 }
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor)
@@ -46,6 +118,7 @@ void vehicle_command_executor_init(vehicle_executor_state_t *executor)
     executor->warning_light_result = ECU_DEVICE_APPLY_OK;
     memset(&s_runtime, 0, sizeof(s_runtime));
     vehicle_executor_runtime_init_once();
+    update_executor_motion_diagnostics(executor);
 }
 
 bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
@@ -56,18 +129,15 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
 
     if (executor == 0 || io == 0 || command == 0 ||
-        io->can2_motion_canopen == 0 || io->can3_lift_hydraulic_canopen == 0 ||
+        io->can3_lift_hydraulic_canopen == 0 ||
         io->dio == 0 || io->warning_light_uart == 0 ||
         io->warning_light_modbus == 0) {
         return false;
     }
 
     vehicle_executor_runtime_init_once();
-    executor->motion_result = motion_device_apply(&s_runtime.motion,
-                                                  io->can2_motion_canopen,
-                                                  config,
-                                                  command,
-                                                  now_ms);
+    publish_motion_command_snapshot(&s_runtime.motion_mailbox, command, now_ms);
+    executor->motion_result = ECU_DEVICE_APPLY_OK;
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
                                     io->can3_lift_hydraulic_canopen,
@@ -100,17 +170,40 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
                                                 uint32_t now_ms)
 {
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
+    vehicle_actuator_command_t command;
+    uint32_t command_sequence;
+    uint32_t command_timestamp_ms;
 
     if (executor == 0 || can2_motion_canopen == 0) {
         return false;
     }
 
     vehicle_executor_runtime_init_once();
+    if (!read_motion_command_snapshot(&s_runtime.motion_mailbox,
+                                      &command,
+                                      &command_sequence,
+                                      &command_timestamp_ms)) {
+        executor->motion_result = ECU_DEVICE_APPLY_OK;
+        return true;
+    }
+    (void)command_timestamp_ms;
+
+    executor->motion_result = motion_device_apply(&s_runtime.motion,
+                                                  can2_motion_canopen,
+                                                  config,
+                                                  &command,
+                                                  command_sequence,
+                                                  now_ms);
+    update_executor_motion_diagnostics(executor);
+    if (executor->motion_result != ECU_DEVICE_APPLY_OK) {
+        return false;
+    }
     executor->motion_result =
         motion_device_flush_realtime(&s_runtime.motion,
                                      can2_motion_canopen,
                                      config,
                                      now_ms);
+    update_executor_motion_diagnostics(executor);
     return executor->motion_result == ECU_DEVICE_APPLY_OK;
 }
 

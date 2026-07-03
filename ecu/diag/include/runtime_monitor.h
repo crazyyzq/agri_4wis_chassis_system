@@ -103,6 +103,12 @@ typedef struct {
     bool commissioning_power_debug_active;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
+    bool steer_normal_pdo_allowed;
+    bool steer_safety_inhibited;
+    uint8_t steer_inhibit_reason;
+    uint32_t steer_safety_inhibit_count;
+    uint32_t steer_last_allowed_to_inhibited_ms;
+    bool steer_safe_stop_pending;
 
     ecu_device_apply_result_t power_result;
     ecu_device_apply_result_t motion_result;

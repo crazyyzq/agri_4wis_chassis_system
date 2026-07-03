@@ -118,6 +118,7 @@ void commissioning_debug_scan_can2(commissioning_debug_context_t *context,
 {
 #if ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN
     if (context == 0 || canopen == 0 ||
+        !canopen_master_service_diagnostic_scan_allowed(canopen, now_ms) ||
         !commissioning_scan_due(now_ms, &context->last_can2_scan_ms)) {
         return;
     }
@@ -147,6 +148,7 @@ void commissioning_debug_scan_can3(commissioning_debug_context_t *context,
 {
 #if ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN
     if (context == 0 || canopen == 0 ||
+        !canopen_master_service_diagnostic_scan_allowed(canopen, now_ms) ||
         !commissioning_scan_due(now_ms, &context->last_can3_scan_ms)) {
         return;
     }

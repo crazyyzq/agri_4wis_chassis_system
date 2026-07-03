@@ -57,6 +57,12 @@ typedef struct {
     ecu_device_apply_result_t lift_hydraulic_result;
     ecu_device_apply_result_t local_io_result;
     ecu_device_apply_result_t warning_light_result;
+    bool steer_normal_pdo_allowed;
+    bool steer_safety_inhibited;
+    uint8_t steer_inhibit_reason;
+    uint32_t steer_safety_inhibit_count;
+    uint32_t steer_last_allowed_to_inhibited_ms;
+    bool steer_safe_stop_pending;
 } vehicle_executor_state_t;
 
 #endif /* VEHICLE_TYPES_H */

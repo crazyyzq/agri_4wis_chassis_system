@@ -17,6 +17,9 @@ typedef struct {
     uint16_t raw[ECU_ADC_CHANNEL_COUNT];
     uint32_t millivolt[ECU_ADC_CHANNEL_COUNT];
     uint32_t last_response_ms;
+    uint32_t offline_since_ms;
+    uint32_t retry_backoff_ms;
+    uint32_t next_retry_ms;
     bool online;
 } analog_modbus_device_state_t;
 

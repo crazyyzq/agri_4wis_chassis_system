@@ -28,6 +28,7 @@ static void power_device_init_timestamps(power_device_state_t *state)
     state->snapshot.dcac_last_rx_ms = POWER_DEVICE_TIMESTAMP_INVALID;
     state->snapshot.last_rx_ms = POWER_DEVICE_TIMESTAMP_INVALID;
     state->snapshot.last_tx_ms = POWER_DEVICE_TIMESTAMP_INVALID;
+    state->snapshot.retry_backoff_ms = ECU_OFFLINE_BACKOFF_MIN_MS;
 }
 
 static bool power_device_send_frame(power_device_state_t *state,
@@ -98,6 +99,25 @@ static void power_device_refresh_online(power_device_state_t *state,
                             snapshot->bms.valid &&
                             bms_fault_free &&
                             hv_feedback_ok;
+    if (snapshot->can1_online && snapshot->bms_online) {
+        snapshot->offline_since_ms = 0U;
+        snapshot->retry_backoff_ms = ECU_OFFLINE_BACKOFF_MIN_MS;
+        snapshot->next_retry_ms = now_ms + ECU_POWER_BMS_COMMAND_PERIOD_MS;
+    } else {
+        if (snapshot->offline_since_ms == 0U) {
+            snapshot->offline_since_ms = now_ms;
+        }
+        if (snapshot->retry_backoff_ms < ECU_OFFLINE_BACKOFF_MIN_MS) {
+            snapshot->retry_backoff_ms = ECU_OFFLINE_BACKOFF_MIN_MS;
+        } else if (snapshot->retry_backoff_ms < ECU_OFFLINE_BACKOFF_STEP1_MS) {
+            snapshot->retry_backoff_ms = ECU_OFFLINE_BACKOFF_STEP1_MS;
+        } else if (snapshot->retry_backoff_ms < ECU_OFFLINE_BACKOFF_STEP2_MS) {
+            snapshot->retry_backoff_ms = ECU_OFFLINE_BACKOFF_STEP2_MS;
+        } else {
+            snapshot->retry_backoff_ms = ECU_OFFLINE_BACKOFF_MAX_MS;
+        }
+        snapshot->next_retry_ms = now_ms + snapshot->retry_backoff_ms;
+    }
 }
 
 static void power_device_process_bms_frame(power_device_state_t *state,
