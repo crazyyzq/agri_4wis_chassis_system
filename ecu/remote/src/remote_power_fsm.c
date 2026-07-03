@@ -10,8 +10,6 @@ static bool power_on_preconditions_ok(const remote_preconditions_t *precondition
            preconditions->arm_ready &&
            !preconditions->estop_latched &&
            !preconditions->a_class_fault &&
-           preconditions->power_ready &&
-           preconditions->low_voltage_ok &&
            preconditions->can1_power_online;
 }
 
@@ -62,6 +60,7 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
     if (input->power != REMOTE_POS_HIGH && input->power != REMOTE_POS_LOW) {
         fsm->hold_position = input->power;
         fsm->hold_since_ms = input->now_ms;
+        fsm->state = fsm->high_voltage_enable_request ? REMOTE_POWER_ON : REMOTE_POWER_OFF;
         fsm->diagnostic = DIAG_OK;
         return;
     }
@@ -90,9 +89,9 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
             fsm->diagnostic = DIAG_REJECT_POWER_PRECONDITION;
         }
     } else {
+        fsm->high_voltage_enable_request = false;
         if (power_down_preconditions_ok(preconditions)) {
             fsm->state = REMOTE_POWER_OFF;
-            fsm->high_voltage_enable_request = false;
             fsm->orderly_shutdown_request = true;
             fsm->diagnostic = DIAG_OK;
         } else {

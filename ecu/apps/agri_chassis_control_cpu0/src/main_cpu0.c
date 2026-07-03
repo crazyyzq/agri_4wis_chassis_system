@@ -18,8 +18,22 @@ static void run_periodic_task(void (*step)(uint32_t), uint32_t period_ms)
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t period_ticks = pdMS_TO_TICKS(period_ms);
     for (;;) {
-        step((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
-        vTaskDelayUntil(&last_wake, period_ticks);
+        TickType_t before_step = xTaskGetTickCount();
+        step((uint32_t)(before_step * portTICK_PERIOD_MS));
+        TickType_t after_step = xTaskGetTickCount();
+
+        /* If a hardware task overruns its own period, vTaskDelayUntil() would
+         * not block and the high-priority task could immediately run again.
+         * Force a one-tick delay after an overrun so diagnostics, remote input
+         * and safety housekeeping still get CPU time when a CAN/RS485 device is
+         * absent or unhealthy during field commissioning.
+         */
+        if ((after_step - before_step) >= period_ticks) {
+            last_wake = after_step;
+            vTaskDelay(1U);
+        } else {
+            vTaskDelayUntil(&last_wake, period_ticks);
+        }
     }
 }
 

@@ -64,15 +64,21 @@ typedef struct {
 
 static ecu_runtime_context_t s_runtime;
 
+/* Keep this table in ecu_cpu0_task_id_t order.  ecu_cpu0_task_descriptor()
+ * indexes it directly when main_cpu0.c creates FreeRTOS tasks.  Priorities are
+ * intentionally not sorted here: safety runs first; remote and vehicle command
+ * generation stay ahead of field buses; diagnostics stay high enough to keep
+ * COM9 visible even when a CAN bus is offline or retransmitting.
+ */
 static const ecu_task_descriptor_t s_cpu0_tasks[ECU_TASK_CPU0_COUNT] = {
     { "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 512U },
-    { "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 29U, 512U },
+    { "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 512U },
     { "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 768U },
     { "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 768U },
     { "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 512U },
     { "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 512U },
     { "io", ECU_CPU0_IO_PERIOD_MS, 16U, 512U },
-    { "diag", ECU_CPU0_DIAG_PERIOD_MS, 8U, 512U }
+    { "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 1536U }
 };
 
 void ecu_task_runtime_init(uint32_t now_ms)
@@ -342,7 +348,12 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->analog_modbus_adc = s_runtime.analog_modbus_adc;
     out->hardware_feedback = s_runtime.hardware_feedback;
     out->link_state = s_runtime.remote_request.link_state;
+    out->arm_state = s_runtime.remote_request.arm_state;
     out->estop_state = s_runtime.remote_request.estop_state;
+    out->gear_state = s_runtime.remote_request.gear_state;
+    out->power_state = s_runtime.remote_request.power_state;
+    out->authority_state = s_runtime.remote_request.authority_state;
+    out->adjust_state = s_runtime.remote_request.adjust_state;
     out->status_led_pattern = s_runtime.status_led.last_pattern;
     out->diagnostic = s_runtime.final_command.diagnostic;
     out->source = s_runtime.final_command.source;
@@ -438,6 +449,9 @@ void ecu_task_can2_motion_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
     canopen_master_service_process(&s_runtime.can2_motion_canopen, now_ms);
+    (void)vehicle_command_executor_flush_can2_motion(&s_runtime.executor,
+                                                     &s_runtime.can2_motion_canopen,
+                                                     now_ms);
     commissioning_debug_scan_can2(&s_runtime.commissioning_debug,
                                   &s_runtime.can2_motion_canopen,
                                   now_ms);

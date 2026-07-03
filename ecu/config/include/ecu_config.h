@@ -104,12 +104,13 @@
 #define ECU_CAN3_TERMINATION_ENABLE      (1)
 #define ECU_CAN4_TERMINATION_ENABLE      (1)
 
-/* Bench-only CAN4 physical-layer test.  When enabled, CPU0 initializes the
- * auxiliary CAN4 controller and sends a harmless standard CAN frame at a fixed
- * period.  The payload is intentionally not a CANopen, BMS or actuator command.
+/* Bench-only CAN4 physical-layer test.  Keep disabled for whole-vehicle runs so
+ * an unconnected CAN4 transceiver does not create continuous transmit errors.
+ * Define ECU_ENABLE_CAN4_PHYSICAL_TEST_TX=1 only when CAN4 is under test.  The
+ * payload is intentionally not a CANopen, BMS or actuator command.
  */
 #ifndef ECU_ENABLE_CAN4_PHYSICAL_TEST_TX
-#define ECU_ENABLE_CAN4_PHYSICAL_TEST_TX (1)
+#define ECU_ENABLE_CAN4_PHYSICAL_TEST_TX (0)
 #endif
 #define ECU_CAN4_PHYSICAL_TEST_TX_PERIOD_MS (500U)
 #define ECU_CAN4_PHYSICAL_TEST_FRAME_ID     (0x444UL)
@@ -224,6 +225,28 @@
  */
 #define ECU_CANOPEN_MOTION_COMMAND_REFRESH_MS (500U)
 #define ECU_CANOPEN_LIFT_COMMAND_REFRESH_MS   (500U)
+/* Joystick commands are calculated faster than SDO downloads can be completed.
+ * Device adapters therefore push only meaningful target changes and cap the
+ * fastest target-update cadence.  Safety stop/brake commands bypass this limit.
+ */
+#define ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS (50U)
+#define ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS (1000)
+#define ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS (1000)
+/* Steering joystick following is transmitted by RPDO at a fixed, moderate
+ * cadence.  The vehicle/control layer owns target generation; the CAN2 motion
+ * task owns all realtime CAN2 steering PDO traffic.
+ */
+#define ECU_CANOPEN_STEER_PDO_PERIOD_MS  (20U)
+#define ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS (1000)
+#define ECU_CANOPEN_STEER_POSITION_NEUTRAL_DEADBAND_COUNTS  (1500)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_COUNTS_PER_SEC  (1000000)
+#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (500000)
+#define ECU_CANOPEN_STEER_SETUP_SETTLE_MS                   (100U)
+/* Whole-machine commissioning switch.  Keep the drive-wheel command path built
+ * and tested, but force walking motors to zero/braked while steering is being
+ * tuned on the real vehicle.  Set to 0 after steering response is verified.
+ */
+#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)
 
 /* CANopen object indexes used by the BC/BC2 servo adapter.  0x2190 reports
  * drive terminal input states; 0x2194 writes outputs configured for program
@@ -235,11 +258,23 @@
 #define ECU_CANOPEN_OBJ_CONTROLWORD      (0x6040U)
 #define ECU_CANOPEN_OBJ_MODES_OF_OPERATION (0x6060U)
 #define ECU_CANOPEN_OBJ_MODES_OF_OPERATION_DISPLAY (0x6061U)
-#define ECU_CANOPEN_OBJ_TARGET_TORQUE    (0x6071U)
+#define ECU_CANOPEN_OBJ_PROFILE_VELOCITY (0x6081U)
+#define ECU_CANOPEN_OBJ_COMMAND_CURRENT_RAMP (0x2113U)
+#define ECU_CANOPEN_OBJ_COMMAND_CURRENT  (0x2340U)
 #define ECU_CANOPEN_OBJ_TARGET_POSITION  (0x607AU)
 #define ECU_CANOPEN_OBJ_TARGET_VELOCITY  (0x60FFU)
 #define ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES (0x2190U)
 #define ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL (0x2194U)
+#define ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM (0x1400U)
+#define ECU_CANOPEN_OBJ_RPDO1_MAPPING    (0x1600U)
+#define ECU_CANOPEN_OBJ_PDO_COB_ID_SUBINDEX (0x01U)
+#define ECU_CANOPEN_OBJ_PDO_TRANSMISSION_TYPE_SUBINDEX (0x02U)
+#define ECU_CANOPEN_OBJ_PDO_MAPPING_COUNT_SUBINDEX (0x00U)
+#define ECU_CANOPEN_OBJ_PDO_MAPPING_FIRST_SUBINDEX (0x01U)
+#define ECU_CANOPEN_OBJ_PDO_MAPPING_SECOND_SUBINDEX (0x02U)
+#define ECU_CANOPEN_PDO_MAP_CONTROLWORD_16       (0x60400010UL)
+#define ECU_CANOPEN_PDO_MAP_TARGET_POSITION_32   (0x607A0020UL)
+#define ECU_CANOPEN_RPDO_TRANSMISSION_ASYNC      (0xFFU)
 
 /* Brake output polarity.
  *
@@ -249,13 +284,24 @@
  * compile-time change instead of a logic edit in the device layer. */
 #define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)
 #define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (0U)
-#define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_COUNTS_PER_SEC (1000)
+#define ECU_BC_SERVO_ENCODER_COUNTS_PER_REV          (10000.0f)
+#define ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM \
+    (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV / 0.1f / 60.0f)
+#define ECU_DRIVE_MAX_RPM_AT_REMOTE_MAX_SPEED        (200.0f)
+#define ECU_STEER_POSITION_SPEED_UNITS               (1666667)
+#define ECU_LIFT_POSITION_SPEED_UNITS                (833333)
+#define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS     (833333)
+#define ECU_SERVO_COMMAND_CURRENT_RAMP_MA_PER_SEC    (1000)
 
 /* Commissioning scale factors.  These convert high-level vehicle commands into
  * drive counts and remain centralized for motor/gearbox calibration updates on
  * the complete machine. */
-#define ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC (100.0f)
-#define ECU_STEER_DEG_TO_COUNTS               (100.0f)
+#define ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC \
+    ((ECU_DRIVE_MAX_RPM_AT_REMOTE_MAX_SPEED * ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) / \
+     ECU_REMOTE_MAX_SPEED_KPH)
+/* Field calibration: steering target +500000 counts is +45 degrees (left),
+ * and -500000 counts is -45 degrees (right). */
+#define ECU_STEER_DEG_TO_COUNTS               (11111.111f)
 #define ECU_LIFT_MM_TO_COUNTS                 (100.0f)
 
 /* Local digital outputs stay limited to board-level loads.  Servo brakes are
@@ -301,7 +347,7 @@
 #define ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH (0x0022U)
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
 #define ECU_REMOTE_MAX_SPEED_KPH          (6.0f)
-#define ECU_REMOTE_MAX_STEER_DEG          (35.0f)
+#define ECU_REMOTE_MAX_STEER_DEG          (45.0f)
 /* Vehicle geometry used by four-wheel kinematics.
  *
  * Wheelbase is the longitudinal distance between front and rear axle centers.
@@ -330,21 +376,21 @@
 
 typedef enum {
     ECU_SBUS_CH_STEER = 0,
-    ECU_SBUS_CH_CLEARANCE,
-    ECU_SBUS_CH_THROTTLE,
-    ECU_SBUS_CH_POWER,
-    ECU_SBUS_CH_GEAR,
-    ECU_SBUS_CH_HOME,
-    ECU_SBUS_CH_AUTHORITY,
-    ECU_SBUS_CH_LEFT_INDICATOR,
-    ECU_SBUS_CH_HAZARD,
-    ECU_SBUS_CH_HORN,
-    ECU_SBUS_CH_HEADLIGHT,
-    ECU_SBUS_CH_RIGHT_INDICATOR,
-    ECU_SBUS_CH_ESTOP,
-    ECU_SBUS_CH_TRACK,
-    ECU_SBUS_CH_R1,
-    ECU_SBUS_CH_R2,
+    ECU_SBUS_CH_CLEARANCE = 1,
+    ECU_SBUS_CH_THROTTLE = 2,
+    ECU_SBUS_CH_POWER = 3,
+    ECU_SBUS_CH_GEAR = 4,
+    ECU_SBUS_CH_RIGHT_INDICATOR = 5,
+    ECU_SBUS_CH_AUTHORITY = 6,
+    ECU_SBUS_CH_HOME = 7,
+    ECU_SBUS_CH_HAZARD = 8,
+    ECU_SBUS_CH_HORN = 9,
+    ECU_SBUS_CH_HEADLIGHT = 10,
+    ECU_SBUS_CH_LEFT_INDICATOR = 11,
+    ECU_SBUS_CH_ESTOP = 12,
+    ECU_SBUS_CH_TRACK = 13,
+    ECU_SBUS_CH_R1 = 14,
+    ECU_SBUS_CH_R2 = 15,
     ECU_SBUS_CHANNEL_COUNT
 } ecu_sbus_channel_role_t;
 

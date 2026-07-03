@@ -7,6 +7,18 @@ static ecu_gear_request_t gear_from_position(remote_position_t position)
     return ECU_GEAR_REQUEST_P;
 }
 
+static bool gear_request_matches_active_drive(const remote_gear_fsm_t *fsm)
+{
+    return fsm != 0 &&
+           fsm->requested_gear != ECU_GEAR_REQUEST_P &&
+           fsm->active_gear == fsm->requested_gear;
+}
+
+static remote_gear_state_t drive_state_from_gear(ecu_gear_request_t gear)
+{
+    return gear == ECU_GEAR_REQUEST_D ? GEAR_STATE_DRIVE_D : GEAR_STATE_DRIVE_R;
+}
+
 void remote_gear_fsm_init(remote_gear_fsm_t *fsm)
 {
     if (fsm == 0) {
@@ -41,6 +53,18 @@ void remote_gear_fsm_update(remote_gear_fsm_t *fsm,
         fsm->diagnostic = DIAG_OK;
         return;
     }
+
+    if (gear_request_matches_active_drive(fsm)) {
+        /* Entry guards below are for shifting from P into D/R only.  Once the
+         * requested drive gear is already active, the operator is allowed to
+         * raise the throttle; otherwise the FSM would immediately fall back to
+         * ARM_D/ARM_R on the first non-zero speed command.
+         */
+        fsm->state = drive_state_from_gear(fsm->active_gear);
+        fsm->diagnostic = DIAG_OK;
+        return;
+    }
+
     if (!preconditions->zero_speed && fsm->active_gear != fsm->requested_gear) {
         fsm->state = GEAR_STATE_SHIFT_REJECTED;
         fsm->request_rejected = true;
@@ -60,7 +84,7 @@ void remote_gear_fsm_update(remote_gear_fsm_t *fsm,
         return;
     }
     fsm->active_gear = fsm->requested_gear;
-    fsm->state = fsm->active_gear == ECU_GEAR_REQUEST_D ? GEAR_STATE_DRIVE_D : GEAR_STATE_DRIVE_R;
+    fsm->state = drive_state_from_gear(fsm->active_gear);
     fsm->diagnostic = DIAG_OK;
 }
 

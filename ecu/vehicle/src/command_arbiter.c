@@ -122,6 +122,25 @@ static bool remote_requests_brake_release(const remote_control_request_t *remote
     return remote->active_gear != ECU_GEAR_REQUEST_P;
 }
 
+static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_command_t *out,
+                                                         float steer_deg)
+{
+#if ECU_COMMISSIONING_STEER_ONLY_MODE
+    if (out == 0) {
+        return;
+    }
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->target_wheel_speed_kph[wheel] = 0.0f;
+        out->target_steer_deg[wheel] = steer_deg;
+    }
+    out->target_speed_kph = 0.0f;
+    out->brake_release = false;
+#else
+    (void)out;
+    (void)steer_deg;
+#endif
+}
+
 static ecu_gear_request_t auto_gear_from_speed(float target_speed_kph)
 {
     if (target_speed_kph > 0.0f) {
@@ -214,12 +233,14 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->horn_on = remote->horn_on;
         out->headlight_on = remote->headlight_on;
         out->diagnostic = remote->diagnostic;
+        float steer_deg = scale_signed_per_mille(remote->steer_per_mille,
+                                                 ECU_REMOTE_MAX_STEER_DEG);
         motion_control_build_candidate(remote->active_motion_mode,
                                        remote_speed_command_kph(remote, remote->active_motion_mode),
-                                       scale_signed_per_mille(remote->steer_per_mille,
-                                                              ECU_REMOTE_MAX_STEER_DEG),
+                                       steer_deg,
                                        &limits,
                                        out);
+        apply_commissioning_steer_only_direct_targets(out, steer_deg);
         apply_remote_adjust_command(remote, out);
         return;
     }

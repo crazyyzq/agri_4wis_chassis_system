@@ -193,6 +193,7 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
 def test_canopennode_hpm_tx_path_is_nonblocking(root: pathlib.Path) -> None:
     cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
     wrapper_c = read(root, "ecu/drivers/canopen/src/hpm_can_send_nonblocking_wrap.c")
+    sdk_hal_c = read(root, "ecu/sdk_env_v1.11.0/hpm_sdk/middleware/CANopenNode/hal/hpm_canopen_can.c")
 
     assert "sdk_ld_options(\"-Wl,--wrap=hpm_can_send\")" in cmake
     assert "sdk_app_src(../../drivers/canopen/src/hpm_can_send_nonblocking_wrap.c)" in cmake
@@ -203,6 +204,11 @@ def test_canopennode_hpm_tx_path_is_nonblocking(root: pathlib.Path) -> None:
     assert "printf(" not in wrapper_c
     assert "Transmit failed" not in wrapper_c
     assert "while (!data->has_sent_out)" not in wrapper_c
+    assert "while (!data->has_sent_out" not in sdk_hal_c
+    assert "CANOPEN_HPM_TX_WAIT_LIMIT" in sdk_hal_c
+    assert "CANOPEN_HPM_IRQ_RX_DRAIN_LIMIT" in sdk_hal_c
+    assert "rx_drained < CANOPEN_HPM_IRQ_RX_DRAIN_LIMIT" in sdk_hal_c
+    assert "CAN_EVENT_TX_SECONDARY_BUF" in sdk_hal_c.split("can_clear_tx_rx_flags(can,", 1)[1]
 
 
 def test_canopennode_can2_diagnostic_service_is_safe(root: pathlib.Path) -> None:
@@ -336,7 +342,7 @@ def test_canopennode_debug_commands_are_sequence_gated(root: pathlib.Path) -> No
         "ECU_CANOPEN_OBJ_MODES_OF_OPERATION",
         "ECU_CANOPEN_OBJ_TARGET_POSITION",
         "ECU_CANOPEN_OBJ_TARGET_VELOCITY",
-        "ECU_CANOPEN_OBJ_TARGET_TORQUE",
+        "ECU_CANOPEN_OBJ_COMMAND_CURRENT",
     ]:
         assert token in config_h, token
 
@@ -397,6 +403,8 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
         "servo_drive_canopen_set_target_position",
         "servo_drive_canopen_set_target_velocity",
         "servo_drive_canopen_set_target_torque",
+        "servo_drive_canopen_run_velocity_mode",
+        "servo_drive_canopen_run_absolute_position_mode",
         "SERVO_DRIVE_CONTROL_ENABLE_OPERATION",
         "SERVO_DRIVE_MODE_PROFILE_POSITION",
         "SERVO_DRIVE_MODE_PROFILE_VELOCITY",
@@ -404,13 +412,166 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
         assert token in servo_h or token in servo_c, token
 
     assert "servo_drive_canopen.c" in cmake
-    assert "servo_drive_canopen_set_target_velocity" in motion_c
-    assert "servo_drive_canopen_set_target_position" in motion_c
-    assert "servo_drive_canopen_set_target_position" in lift_c
+    assert "servo_drive_canopen_prepare_velocity_mode" in motion_c
+    assert "servo_drive_canopen_update_target_velocity" in motion_c
+    assert "servo_drive_canopen_prepare_position_mode" in motion_c
+    assert "servo_drive_canopen_configure_steer_rpdo" in motion_c
+    assert "canopen_master_service_send_pdo" in motion_c
+    assert "servo_drive_canopen_run_absolute_position_mode" in lift_c
     assert "ECU_CANOPEN_RPDO2_BASE" in config_h
     assert "ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC" in config_h
     assert "ECU_STEER_DEG_TO_COUNTS" in config_h
     assert "ECU_LIFT_MM_TO_COUNTS" in config_h
+
+
+def test_canopen_controlword_sequence_is_not_coalesced(root: pathlib.Path) -> None:
+    """CiA 402 control-word transitions are ordered writes, not final-value settings."""
+
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+
+    assert "preserve_order" in service_h
+    assert "request.preserve_order = canopen_master_sdo_write_requires_order" in service_c
+    assert "queued->preserve_order || request.preserve_order" in service_c
+    assert "queued->value != request.value" in service_c
+    assert "queued->node_id == node_id" in service_c
+    assert "queued->index == index" in service_c
+
+
+def test_servo_motion_uses_bc_canopen_command_sequences(root: pathlib.Path) -> None:
+    """BC/BC2 commands must match the field-proven CANopen examples."""
+
+    servo_h = read(root, "ecu/devices/include/servo_drive_canopen.h")
+    servo_c = read(root, "ecu/devices/src/servo_drive_canopen.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "servo_drive_canopen_run_velocity_mode",
+        "servo_drive_canopen_run_absolute_position_mode",
+        "servo_drive_canopen_run_current_mode",
+        "SERVO_DRIVE_CONTROL_ENABLE_OPERATION",
+        "SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION",
+        "ECU_CANOPEN_OBJ_PROFILE_VELOCITY",
+        "ECU_CANOPEN_OBJ_COMMAND_CURRENT",
+    ]:
+        assert token in servo_h or token in servo_c or token in config_h, token
+
+    assert "servo_drive_canopen_prepare_velocity_mode(canopen" in motion_c
+    assert "servo_drive_canopen_update_target_velocity(canopen" in motion_c
+    assert "servo_drive_canopen_configure_steer_rpdo(canopen" in motion_c
+    assert "canopen_master_service_send_pdo(canopen" in motion_c
+    position_func = servo_c.split("static bool servo_drive_canopen_run_position_mode", 1)[1]
+    assert position_func.index("ECU_CANOPEN_OBJ_TARGET_POSITION") < position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION")
+    assert position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION") < position_func.index("SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION")
+
+
+def test_motion_device_separates_servo_setup_from_realtime_targets(root: pathlib.Path) -> None:
+    """Remote motion must not flood the SDO queue with full servo setup every 5 ms."""
+
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    servo_h = read(root, "ecu/devices/include/servo_drive_canopen.h")
+    servo_c = read(root, "ecu/devices/src/servo_drive_canopen.c")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "drive_velocity_mode_ready",
+        "drive_last_velocity_units",
+        "drive_last_target_update_ms",
+        "steer_position_mode_ready",
+        "steer_last_position_counts",
+        "steer_last_target_update_ms",
+    ]:
+        assert token in motion_h, token
+
+    for token in [
+        "ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS",
+        "ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS",
+        "ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS",
+    ]:
+        assert token in config_h, token
+
+    assert "servo_drive_canopen_update_target_velocity" in servo_h
+    assert "servo_drive_canopen_update_relative_position" not in servo_h
+    assert "servo_drive_canopen_update_relative_position" not in servo_c
+    assert "ECU_CANOPEN_OBJ_TARGET_VELOCITY" in servo_c
+    assert "send_drive_target_update" in motion_c
+    assert "motion_device_flush_realtime" in motion_h
+    assert "motion_device_flush_realtime" in motion_c
+    assert "state->steer_last_target_update_ms[wheel]" in motion_c
+    assert "state->drive_last_target_update_ms[wheel]" in motion_c
+
+
+def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
+    """Four steering axes must be updated by one non-blocking 50 Hz PDO scheduler."""
+
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    servo_h = read(root, "ecu/devices/include/servo_drive_canopen.h")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    executor_h = read(root, "ecu/vehicle/include/vehicle_command_executor.h")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    for token in [
+        "ECU_CANOPEN_STEER_PDO_PERIOD_MS",
+        "ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_RPDO1_MAPPING",
+        "ECU_CANOPEN_PDO_MAP_CONTROLWORD_16",
+        "ECU_CANOPEN_PDO_MAP_TARGET_POSITION_32",
+        "ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS",
+        "ECU_CANOPEN_STEER_SETUP_SETTLE_MS",
+    ]:
+        assert token in config_h, token
+
+    assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" in servo_h
+    assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" in servo_h
+    assert "canopen_master_service_send_pdo" in service_h
+    assert "hpm_can_send" in service_c
+    assert "pdo_tx_count" in service_h
+
+    for token in [
+        "steer_pdo_configured",
+        "steer_latest_target_counts",
+        "steer_pending_target",
+        "steer_realtime_last_flush_ms",
+        "steer_realtime_enabled",
+        "steer_setup_queued_ms",
+        "steer_pdo_tx_error_count",
+    ]:
+        assert token in motion_h, token
+
+    assert "motion_device_flush_realtime" in motion_c
+    assert "steer_axis_realtime_ready" in motion_c
+    assert "canopen->command_queue_count == 0U && !canopen->sdo_download_active" in motion_c
+    assert "send_steer_rpdo" in motion_c
+    assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" in motion_c
+    assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" in motion_c
+    assert motion_c.index("send_steer_rpdo(canopen, node, SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM") < motion_c.index(
+        "send_steer_rpdo(canopen, node, SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER"
+    )
+    assert "servo_drive_canopen_update_absolute_position" not in motion_c
+    assert "bit10" not in motion_c.lower()
+
+    assert "vehicle_command_executor_flush_can2_motion" in executor_h
+    assert "motion_device_flush_realtime(&s_runtime.motion" in executor_c
+    assert "vehicle_command_executor_flush_can2_motion(&s_runtime.executor" in tasks_c
+
+
+def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) -> None:
+    """Steering bring-up should isolate steering drives from Ackermann geometry."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    command_arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+
+    assert "#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)" in config_h
+    assert "#define ECU_REMOTE_MAX_STEER_DEG          (45.0f)" in config_h
+    assert "#define ECU_STEER_POSITION_SPEED_UNITS               (1666667)" in config_h
+    assert "apply_commissioning_steer_only_direct_targets" in command_arbiter_c
+    assert "out->target_steer_deg[wheel] = steer_deg" in command_arbiter_c
 
 
 def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.Path) -> None:
@@ -617,6 +778,39 @@ def test_sbus_remote_logic_maps_protocol_raw_to_ppm_equivalent(root: pathlib.Pat
     assert "thresholds->high_min" not in stick_func.group(0)
     assert "thresholds->low_max" not in stick_func.group(0)
 
+
+def test_sbus_channel_roles_match_field_remote_controller(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    requirements = read(root, "doc/ECU_Project_Implementation_v1.4.md")
+
+    expected_roles = {
+        "ECU_SBUS_CH_STEER": 0,
+        "ECU_SBUS_CH_CLEARANCE": 1,
+        "ECU_SBUS_CH_THROTTLE": 2,
+        "ECU_SBUS_CH_POWER": 3,
+        "ECU_SBUS_CH_GEAR": 4,
+        "ECU_SBUS_CH_RIGHT_INDICATOR": 5,
+        "ECU_SBUS_CH_AUTHORITY": 6,
+        "ECU_SBUS_CH_HOME": 7,
+        "ECU_SBUS_CH_HAZARD": 8,
+        "ECU_SBUS_CH_HORN": 9,
+        "ECU_SBUS_CH_HEADLIGHT": 10,
+        "ECU_SBUS_CH_LEFT_INDICATOR": 11,
+        "ECU_SBUS_CH_ESTOP": 12,
+        "ECU_SBUS_CH_TRACK": 13,
+        "ECU_SBUS_CH_R1": 14,
+        "ECU_SBUS_CH_R2": 15,
+    }
+    for name, value in expected_roles.items():
+        assert re.search(rf"\b{name}\s*=\s*{value}\b", config_h), name
+
+    for text in [
+        "| CH8 | HOME 键 | HOME 模式域选择 |",
+        "| CH6 | 右肩按键 | 右转向灯请求 |",
+        "| CH14 | 右肩波轮 | 变行距输入 |",
+    ]:
+        assert text in requirements
+
 def test_can3_and_rgb_status_are_enabled_for_whole_machine(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
@@ -740,6 +934,39 @@ def test_runtime_monitor_reports_status_led_pattern(root: pathlib.Path) -> None:
     assert tasks_c.index("status_led_service_update(&s_runtime.status_led") < tasks_c.index(
         "build_runtime_monitor_snapshot(now_ms, &monitor_snapshot)"
     )
+
+
+def test_runtime_monitor_reports_remote_fsm_states(root: pathlib.Path) -> None:
+    """Remote-drive debugging needs the FSM state that rejected the command."""
+
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    for field in [
+        "remote_arm_state_t arm_state;",
+        "remote_gear_state_t gear_state;",
+        "remote_power_state_t power_state;",
+        "remote_authority_state_t authority_state;",
+        "remote_adjust_state_t adjust_state;",
+    ]:
+        assert field in monitor_h, field
+
+    for helper in [
+        "arm_state_text",
+        "gear_state_text",
+        "power_state_text",
+        "authority_state_text",
+        "adjust_state_text",
+    ]:
+        assert helper in monitor_c, helper
+
+    assert "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s" in monitor_c
+    assert "out->arm_state = s_runtime.remote_request.arm_state;" in tasks_c
+    assert "out->gear_state = s_runtime.remote_request.gear_state;" in tasks_c
+    assert "out->power_state = s_runtime.remote_request.power_state;" in tasks_c
+    assert "out->authority_state = s_runtime.remote_request.authority_state;" in tasks_c
+    assert "out->adjust_state = s_runtime.remote_request.adjust_state;" in tasks_c
 
 
 def test_motion_and_lift_canopen_outputs_are_command_gated(root: pathlib.Path) -> None:
@@ -1194,6 +1421,7 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "ECU_CAN3_LIFT_HYDRAULIC_BITRATE" in config_h
     assert "ECU_CAN4_AUXILIARY_BITRATE" in config_h
     assert "ECU_ENABLE_CAN4_PHYSICAL_TEST_TX" in config_h
+    assert "#define ECU_ENABLE_CAN4_PHYSICAL_TEST_TX (0)" in config_h
     assert "ECU_CAN4_PHYSICAL_TEST_FRAME_ID" in config_h
     assert "can_bus_hw_init_can2_rx_only" in can_hw_h
     assert "can_bus_hw_init_can2_motion" in can_hw_h
@@ -1479,3 +1707,45 @@ def test_cpu0_startup_and_fatal_hooks_are_visible_on_debug_console(root: pathlib
     assert "FATAL malloc failed" in main_c
     assert "FATAL stack overflow" in main_c
     assert "\\r\\n" in main_c
+
+
+def test_cpu0_periodic_tasks_yield_after_overrun(root: pathlib.Path) -> None:
+    main_c = read(root, "ecu/apps/agri_chassis_control_cpu0/src/main_cpu0.c")
+
+    runner = main_c.split("static void run_periodic_task", 1)[1]
+    runner = runner.split("typedef struct", 1)[0]
+
+    assert "TickType_t before_step" in runner
+    assert "TickType_t after_step" in runner
+    assert "if ((after_step - before_step) >= period_ticks)" in runner
+    assert "vTaskDelay(1U)" in runner
+    assert runner.index("step(") < runner.index("vTaskDelayUntil")
+
+
+def test_cpu0_diagnostic_task_has_priority_over_field_buses(root: pathlib.Path) -> None:
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    # The descriptor table is indexed directly by ecu_cpu0_task_id_t.  The
+    # entries must therefore stay in enum order; sorting this list by priority
+    # silently assigns the wrong priority/name to each created FreeRTOS task.
+    expected = [
+        '{ "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 512U }',
+        '{ "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 512U }',
+        '{ "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 768U }',
+        '{ "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 768U }',
+        '{ "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 512U }',
+        '{ "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 512U }',
+        '{ "io", ECU_CPU0_IO_PERIOD_MS, 16U, 512U }',
+        '{ "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 1536U }',
+    ]
+
+    table_start = tasks_c.index("static const ecu_task_descriptor_t s_cpu0_tasks")
+    table_end = tasks_c.index("};", table_start)
+    table = tasks_c[table_start:table_end]
+
+    last_position = -1
+    for item in expected:
+        position = table.find(item)
+        assert position >= 0, item
+        assert position > last_position, item
+        last_position = position

@@ -59,6 +59,7 @@ typedef struct {
     uint8_t subindex;
     uint8_t size;
     int32_t value;
+    bool preserve_order;
 } canopen_master_sdo_write_request_t;
 
 typedef struct {
@@ -67,7 +68,7 @@ typedef struct {
     uint8_t subindex;
 } canopen_master_sdo_read_request_t;
 
-#define CANOPEN_MASTER_COMMAND_QUEUE_CAPACITY (32U)
+#define CANOPEN_MASTER_COMMAND_QUEUE_CAPACITY (96U)
 #define CANOPEN_MASTER_READ_QUEUE_CAPACITY (32U)
 
 typedef struct {
@@ -96,6 +97,8 @@ typedef struct {
     uint32_t nmt_command_count;
     uint32_t sdo_download_count;
     uint32_t sdo_download_abort_count;
+    uint32_t pdo_tx_count;
+    uint32_t pdo_tx_error_count;
     uint32_t command_error_count;
     uint32_t queued_command_count;
     uint32_t dropped_command_count;
@@ -186,6 +189,17 @@ bool canopen_master_service_request_sdo_read(canopen_master_service_t *service,
 bool canopen_master_service_request_nmt(canopen_master_service_t *service,
                                         uint8_t node_id,
                                         canopen_master_debug_command_t command);
+
+/* Send one already-mapped PDO frame on this CANopen bus.
+ *
+ * This is intentionally a raw PDO transmitter, not a second CAN driver.  The
+ * service uses the HPM CANopenNode device that was initialized for the bus, so
+ * all CAN2/CAN3 CANopen traffic still passes through one owner.
+ */
+bool canopen_master_service_send_pdo(canopen_master_service_t *service,
+                                     uint16_t cob_id,
+                                     const uint8_t *data,
+                                     uint8_t size);
 
 void canopen_master_service_can2_isr(void);
 void canopen_master_service_can3_isr(void);

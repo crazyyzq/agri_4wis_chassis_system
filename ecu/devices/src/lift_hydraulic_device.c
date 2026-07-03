@@ -48,7 +48,7 @@ static bool send_lift_command(canopen_master_service_t *canopen,
                               bool *blocked_by_limit)
 {
     uint16_t control_word = (height_rate_mm_s == 0.0f) ?
-                            SERVO_DRIVE_CONTROL_QUICK_STOP :
+                            SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE :
                             SERVO_DRIVE_CONTROL_ENABLE_OPERATION;
     uint16_t input_states = 0U;
     if (blocked_by_limit != 0) {
@@ -65,21 +65,22 @@ static bool send_lift_command(canopen_master_service_t *canopen,
             }
             (void)servo_drive_canopen_send_control_word(canopen,
                                                         node,
-                                                        SERVO_DRIVE_CONTROL_QUICK_STOP);
+                                                        SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE);
             return false;
         }
     }
 
     int32_t height_counts = scaled_float_to_i32(height_mm, lift_scale);
 
-    return servo_drive_canopen_select_mode(canopen,
-                                           node,
-                                           control_word,
-                                           SERVO_DRIVE_MODE_PROFILE_POSITION) &&
-           servo_drive_canopen_set_target_position(canopen,
-                                                   node,
-                                                   control_word,
-                                                   height_counts);
+    if (height_rate_mm_s == 0.0f) {
+        return servo_drive_canopen_send_control_word(canopen, node, control_word);
+    }
+
+    return servo_drive_canopen_run_absolute_position_mode(
+        canopen,
+        node,
+        ECU_LIFT_POSITION_SPEED_UNITS,
+        height_counts);
 }
 
 /* Command the hydraulic station motor through the BC drive on CAN3.
@@ -90,21 +91,13 @@ static bool send_hydraulic_pump_command(canopen_master_service_t *canopen,
                                         const ecu_canopen_node_config_t *node,
                                         bool hydraulic_enable)
 {
-    uint16_t control_word = hydraulic_enable ?
-                            SERVO_DRIVE_CONTROL_ENABLE_OPERATION :
-                            SERVO_DRIVE_CONTROL_QUICK_STOP;
     int32_t velocity_counts = hydraulic_enable ?
-                              ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_COUNTS_PER_SEC :
+                              ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS :
                               0;
 
-    return servo_drive_canopen_select_mode(canopen,
-                                           node,
-                                           control_word,
-                                           SERVO_DRIVE_MODE_PROFILE_VELOCITY) &&
-           servo_drive_canopen_set_target_velocity(canopen,
-                                                   node,
-                                                   control_word,
-                                                   velocity_counts);
+    return hydraulic_enable ?
+           servo_drive_canopen_run_velocity_mode(canopen, node, velocity_counts) :
+           servo_drive_canopen_stop_velocity_mode(canopen, node);
 }
 
 /* Translate the vehicle-level "brake release requested" flag into the active

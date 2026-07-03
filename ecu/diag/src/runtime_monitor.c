@@ -30,6 +30,69 @@ static const char *estop_state_text(remote_estop_state_t state)
     }
 }
 
+static const char *arm_state_text(remote_arm_state_t state)
+{
+    switch (state) {
+    case REMOTE_ARM_DISARMED: return "disarmed";
+    case REMOTE_ARM_WAIT_NEUTRAL: return "wait_neutral";
+    case REMOTE_ARM_READY: return "ready";
+    default: return "unknown";
+    }
+}
+
+static const char *gear_state_text(remote_gear_state_t state)
+{
+    switch (state) {
+    case GEAR_STATE_PARKED_BRAKED: return "parked";
+    case GEAR_STATE_ARM_D: return "arm_d";
+    case GEAR_STATE_ARM_R: return "arm_r";
+    case GEAR_STATE_DRIVE_D: return "drive_d";
+    case GEAR_STATE_DRIVE_R: return "drive_r";
+    case GEAR_STATE_STOPPING: return "stopping";
+    case GEAR_STATE_TRACK_COMPLIANT: return "track_compliant";
+    case GEAR_STATE_SHIFT_REJECTED: return "shift_rejected";
+    default: return "unknown";
+    }
+}
+
+static const char *power_state_text(remote_power_state_t state)
+{
+    switch (state) {
+    case REMOTE_POWER_OFF: return "off";
+    case REMOTE_POWER_ON_REQUESTED: return "on_req";
+    case REMOTE_POWER_ON: return "on";
+    case REMOTE_POWER_DOWN_REQUESTED: return "down_req";
+    case REMOTE_POWER_SHUTDOWN_PROTECT: return "shutdown_protect";
+    case REMOTE_POWER_REJECTED: return "rejected";
+    default: return "unknown";
+    }
+}
+
+static const char *authority_state_text(remote_authority_state_t state)
+{
+    switch (state) {
+    case REMOTE_AUTHORITY_MANUAL: return "manual";
+    case REMOTE_AUTHORITY_AUTO_REQUESTED: return "auto_req";
+    case REMOTE_AUTHORITY_AUTO_ACTIVE: return "auto";
+    case REMOTE_AUTHORITY_TAKEOVER_WAIT_NEUTRAL: return "takeover_wait";
+    case REMOTE_AUTHORITY_REJECTED: return "rejected";
+    default: return "unknown";
+    }
+}
+
+static const char *adjust_state_text(remote_adjust_state_t state)
+{
+    switch (state) {
+    case ADJUST_STATE_IDLE: return "idle";
+    case ADJUST_STATE_CLEARANCE_ACTIVE: return "clearance";
+    case ADJUST_STATE_TRACK_PREPARE: return "track_prepare";
+    case ADJUST_STATE_TRACK_ACTIVE: return "track";
+    case ADJUST_STATE_TRACK_EXITING: return "track_exiting";
+    case ADJUST_STATE_ABORTED: return "aborted";
+    default: return "unknown";
+    }
+}
+
 static const char *status_led_pattern_text(status_led_pattern_t pattern)
 {
     switch (pattern) {
@@ -111,7 +174,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
     }
 
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
-           "frames=%lu dec_err=%lu link=%s estop=%s diag=%s\r\n",
+           "frames=%lu dec_err=%lu link=%s "
+           "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s "
+           "estop=%s diag=%s\r\n",
            (unsigned long)snapshot->now_ms,
            (unsigned long)snapshot->executor_sequence,
            status_led_pattern_text(snapshot->status_led_pattern),
@@ -121,6 +186,11 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->sbus_frame_count,
            (unsigned long)snapshot->sbus_decode_error_count,
            link_state_text(snapshot->link_state),
+           arm_state_text(snapshot->arm_state),
+           gear_state_text(snapshot->gear_state),
+           power_state_text(snapshot->power_state),
+           authority_state_text(snapshot->authority_state),
+           adjust_state_text(snapshot->adjust_state),
            estop_state_text(snapshot->estop_state),
            diag_code_name(snapshot->diagnostic));
 

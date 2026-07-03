@@ -95,6 +95,25 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
            executor->warning_light_result == ECU_DEVICE_APPLY_OK;
 }
 
+bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *executor,
+                                                canopen_master_service_t *can2_motion_canopen,
+                                                uint32_t now_ms)
+{
+    const ecu_hardware_config_t *config = ecu_hardware_config_default();
+
+    if (executor == 0 || can2_motion_canopen == 0) {
+        return false;
+    }
+
+    vehicle_executor_runtime_init_once();
+    executor->motion_result =
+        motion_device_flush_realtime(&s_runtime.motion,
+                                     can2_motion_canopen,
+                                     config,
+                                     now_ms);
+    return executor->motion_result == ECU_DEVICE_APPLY_OK;
+}
+
 void vehicle_command_executor_get_state(const vehicle_executor_state_t *executor,
                                         vehicle_executor_state_t *out)
 {

@@ -22,6 +22,13 @@
 #define SERVO_DRIVE_CONTROL_SHUTDOWN          (0x0006U)
 #define SERVO_DRIVE_CONTROL_SWITCH_ON         (0x0007U)
 #define SERVO_DRIVE_CONTROL_ENABLE_OPERATION  (0x000FU)
+#define SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION (0x001FU)
+/* Continuous absolute-position following uses the BC/BC2 immediate-update
+ * sequence verified with the CAN analyzer: keep bit4 low with 0x002F, then
+ * raise bit4 with 0x003F after all axes have received the latest target.
+ */
+#define SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM     (0x002FU)
+#define SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER (0x003FU)
 #define SERVO_DRIVE_CONTROL_QUICK_STOP        (0x0002U)
 
 #define SERVO_DRIVE_OUTPUT_OUT1_MASK          (1U << 0)
@@ -56,6 +63,81 @@ bool servo_drive_canopen_select_mode(canopen_master_service_t *canopen,
                                      const ecu_canopen_node_config_t *node,
                                      uint16_t control_word,
                                      servo_drive_mode_t mode);
+
+/* Queue one-time velocity-mode preparation.  Call this when a node first enters
+ * drive mode or after a drive reset; steady joystick changes should then update
+ * only the target-velocity object through
+ * servo_drive_canopen_update_target_velocity().
+ */
+bool servo_drive_canopen_prepare_velocity_mode(canopen_master_service_t *canopen,
+                                               const ecu_canopen_node_config_t *node);
+
+/* Queue the BC/BC2 velocity-mode sequence verified during commissioning:
+ * NMT operational, mode=velocity, enable operation, then target velocity.
+ *
+ * Units: target_velocity_units uses the drive manual's 0.1 count/s unit.
+ */
+bool servo_drive_canopen_run_velocity_mode(canopen_master_service_t *canopen,
+                                           const ecu_canopen_node_config_t *node,
+                                           int32_t target_velocity_units);
+
+/* Queue only the velocity target object.  This is the responsive path for
+ * joystick motion after velocity mode and enable-operation have been prepared.
+ */
+bool servo_drive_canopen_update_target_velocity(canopen_master_service_t *canopen,
+                                                const ecu_canopen_node_config_t *node,
+                                                int32_t target_velocity_units);
+
+/* Queue a normal BC/BC2 velocity stop: target velocity zero, then output off. */
+bool servo_drive_canopen_stop_velocity_mode(canopen_master_service_t *canopen,
+                                            const ecu_canopen_node_config_t *node);
+
+/* Queue one-time position-mode preparation.  Steady steering commands should
+ * then update only target position plus the 0x000F -> 0x001F trigger edge.
+ */
+bool servo_drive_canopen_prepare_position_mode(canopen_master_service_t *canopen,
+                                               const ecu_canopen_node_config_t *node,
+                                               int32_t profile_velocity_units);
+
+/* Queue RPDO1 mapping for realtime steering:
+ *   byte 0..1: ECU_CANOPEN_OBJ_CONTROLWORD
+ *   byte 2..5: ECU_CANOPEN_OBJ_TARGET_POSITION
+ *
+ * The motion task sends this RPDO after startup.  This configuration is queued
+ * during initialization only; joystick following must not use SDOs.
+ */
+bool servo_drive_canopen_configure_steer_rpdo(canopen_master_service_t *canopen,
+                                              const ecu_canopen_node_config_t *node);
+
+/* Queue the BC/BC2 absolute-position trigger sequence:
+ * NMT operational, mode=position, profile speed, target position, enable
+ * operation, then the absolute-position trigger control word.
+ */
+bool servo_drive_canopen_run_absolute_position_mode(canopen_master_service_t *canopen,
+                                                    const ecu_canopen_node_config_t *node,
+                                                    int32_t profile_velocity_units,
+                                                    int32_t target_position_counts);
+
+/* Queue one absolute steering target after position mode is ready.  The BC/BC2
+ * drive requires a fresh bit4 edge for every new position command, so this
+ * function writes the target-position object, then the enable-operation
+ * control word, then the absolute-position trigger control word.
+ */
+bool servo_drive_canopen_update_absolute_position(canopen_master_service_t *canopen,
+                                                  const ecu_canopen_node_config_t *node,
+                                                  int32_t target_position_counts);
+
+/* Queue BC/BC2 current mode.  The drive manual names it torque mode, but the
+ * command is the configured run-current object in 10 mA units.
+ */
+bool servo_drive_canopen_run_current_mode(canopen_master_service_t *canopen,
+                                          const ecu_canopen_node_config_t *node,
+                                          int32_t current_ramp_ma_per_sec,
+                                          int16_t current_10ma);
+
+/* Queue current zero and disable the drive output. */
+bool servo_drive_canopen_stop_current_mode(canopen_master_service_t *canopen,
+                                           const ecu_canopen_node_config_t *node);
 
 /* Queue target-position SDO writes through CANopenNode.
  *

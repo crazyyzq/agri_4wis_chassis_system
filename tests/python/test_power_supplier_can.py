@@ -150,3 +150,37 @@ def test_power_can_online_uses_current_bus_state_not_cumulative_errors(root: pat
 
     assert "snapshot->can1_online = can1 != 0 && can1->online;" in power_c
     assert "snapshot->can1_online = can1 != 0 && can1->online && can1->error_count == 0U;" not in power_c
+
+
+def test_remote_power_request_does_not_require_outputs_that_it_starts(root: pathlib.Path) -> None:
+    power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+
+    precondition_body = power_fsm_c.split("static bool power_on_preconditions_ok", 1)[1]
+    precondition_body = precondition_body.split("static bool power_down_preconditions_ok", 1)[0]
+
+    assert "preconditions->can1_power_online" in precondition_body
+    assert "preconditions->power_ready" not in precondition_body
+    assert "preconditions->low_voltage_ok" not in precondition_body
+
+
+def test_remote_power_down_request_always_clears_hv_intent(root: pathlib.Path) -> None:
+    power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+
+    low_position_block = power_fsm_c.split("} else {", 1)[1]
+    assert "fsm->high_voltage_enable_request = false;" in low_position_block
+    assert low_position_block.index("fsm->high_voltage_enable_request = false;") < low_position_block.index(
+        "power_down_preconditions_ok(preconditions)"
+    )
+
+
+def test_remote_power_center_releases_shutdown_protect_after_fault_clears(root: pathlib.Path) -> None:
+    power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+
+    neutral_block = power_fsm_c.split(
+        "if (input->power != REMOTE_POS_HIGH && input->power != REMOTE_POS_LOW)", 1
+    )[1].split("if (input->power != fsm->hold_position)", 1)[0]
+
+    assert (
+        "fsm->state = fsm->high_voltage_enable_request ? REMOTE_POWER_ON : REMOTE_POWER_OFF;"
+        in neutral_block
+    )

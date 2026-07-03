@@ -123,6 +123,25 @@ def test_remote_source_has_required_safety_logic_names(root: pathlib.Path) -> No
         assert token in combined, token
 
 
+def test_gear_fsm_holds_active_drive_before_shift_entry_checks(root: pathlib.Path) -> None:
+    gear_c = read(root, "ecu/remote/src/remote_gear_fsm.c")
+
+    required_tokens = [
+        "gear_request_matches_active_drive",
+        "fsm->active_gear == fsm->requested_gear",
+        "GEAR_STATE_DRIVE_D",
+        "GEAR_STATE_DRIVE_R",
+    ]
+    for token in required_tokens:
+        assert token in gear_c, token
+
+    hold_active_drive_index = gear_c.index("gear_request_matches_active_drive")
+    throttle_entry_check_index = gear_c.index("!preconditions->throttle_low")
+    brake_entry_check_index = gear_c.index("!preconditions->brake_release_confirmed")
+    assert hold_active_drive_index < throttle_entry_check_index
+    assert hold_active_drive_index < brake_entry_check_index
+
+
 def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> None:
     types = read(root, "ecu/remote/include/remote_types.h")
     for token in [

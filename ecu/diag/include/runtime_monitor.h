@@ -84,7 +84,12 @@ typedef struct {
     ecu_hardware_feedback_snapshot_t hardware_feedback;
 
     remote_link_state_t link_state;
+    remote_arm_state_t arm_state;
     remote_estop_state_t estop_state;
+    remote_gear_state_t gear_state;
+    remote_power_state_t power_state;
+    remote_authority_state_t authority_state;
+    remote_adjust_state_t adjust_state;
     status_led_pattern_t status_led_pattern;
     diag_code_t diagnostic;
 

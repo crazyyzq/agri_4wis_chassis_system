@@ -22,6 +22,9 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
                                     const vehicle_executor_io_t *io,
                                     const vehicle_actuator_command_t *command,
                                     uint32_t now_ms);
+bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *executor,
+                                                canopen_master_service_t *can2_motion_canopen,
+                                                uint32_t now_ms);
 void vehicle_command_executor_get_state(const vehicle_executor_state_t *executor,
                                         vehicle_executor_state_t *out);
 

@@ -131,6 +131,23 @@ static bool valid_sdo_size(uint8_t size)
     return size == 1U || size == 2U || size == 4U;
 }
 
+static bool canopen_master_sdo_write_requires_order(uint16_t index)
+{
+    /* CiA 402 control-word writes encode state transitions.  A sequence such as
+     * shutdown -> switch on -> enable operation must reach the drive exactly in
+     * that order; replacing it with only the final value can leave a drive in
+     * Switch On Disabled.
+     *
+     * PDO mapping also contains value-dependent state transitions: map count
+     * must be written to zero before new map entries are written, then restored
+     * to the final count.  Coalescing those writes would silently leave the old
+     * mapping active, which is unacceptable for the realtime steering RPDO.
+     */
+    return index == ECU_CANOPEN_OBJ_CONTROLWORD ||
+           index == ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM ||
+           index == ECU_CANOPEN_OBJ_RPDO1_MAPPING;
+}
+
 static bool debug_command_to_nmt(canopen_master_debug_command_t command,
                                  CO_NMT_command_t *out)
 {
@@ -194,7 +211,7 @@ static bool make_debug_sdo_request(const canopen_master_service_t *service,
         out->value = control->target_velocity;
         return true;
     case CANOPEN_MASTER_DEBUG_COMMAND_SDO_WRITE_TARGET_TORQUE:
-        out->index = ECU_CANOPEN_OBJ_TARGET_TORQUE;
+        out->index = ECU_CANOPEN_OBJ_COMMAND_CURRENT;
         out->size = 2U;
         out->value = (int32_t)control->target_torque;
         return true;
@@ -273,6 +290,7 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
     request.subindex = subindex;
     request.size = size;
     request.value = value;
+    request.preserve_order = canopen_master_sdo_write_requires_order(index);
 
     taskENTER_CRITICAL();
     for (uint8_t i = 0U; i < service->command_queue_count; ++i) {
@@ -283,6 +301,15 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
         if (queued->node_id == node_id &&
             queued->index == index &&
             queued->subindex == subindex) {
+            /* Control-word edges such as 0x000F -> 0x001F must remain ordered,
+             * but repeated identical control words are just backlog.  Replacing
+             * the older identical value preserves the required edge semantics
+             * while keeping the field bus responsive during joystick motion.
+             */
+            if ((queued->preserve_order || request.preserve_order) &&
+                queued->value != request.value) {
+                continue;
+            }
             *queued = request;
             taskEXIT_CRITICAL();
             return true;
@@ -370,6 +397,39 @@ bool canopen_master_service_request_nmt(canopen_master_service_t *service,
 
     service->snapshot.command_error_count++;
     service->snapshot.last_error = (int32_t)result;
+    return false;
+}
+
+bool canopen_master_service_send_pdo(canopen_master_service_t *service,
+                                     uint16_t cob_id,
+                                     const uint8_t *data,
+                                     uint8_t size)
+{
+    struct can_frame frame;
+
+    if (service == NULL || data == NULL || size > CAN_MAX_DLC ||
+        !service->snapshot.initialized || !service->snapshot.can_normal ||
+        service->can_index >= CANOPEN_MASTER_BUS_COUNT ||
+        cob_id == 0U || (cob_id & 0xF800U) != 0U) {
+        return false;
+    }
+
+    memset(&frame, 0, sizeof(frame));
+    frame.id = cob_id;
+    frame.dlc = size;
+    memcpy(frame.data, data, size);
+
+    int result = hpm_can_send((struct device *)&hpm_canopen_dev[service->can_index],
+                              &frame);
+    if (result == 0) {
+        service->snapshot.pdo_tx_count++;
+        service->snapshot.last_error = 0;
+        return true;
+    }
+
+    service->snapshot.pdo_tx_error_count++;
+    service->snapshot.command_error_count++;
+    service->snapshot.last_error = result;
     return false;
 }
 

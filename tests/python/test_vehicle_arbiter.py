@@ -252,6 +252,16 @@ def test_four_wheel_ackermann_kinematics_uses_vehicle_geometry(root: pathlib.Pat
     assert 'sdk_ld_options("-lm")' in cmake
 
 
+def test_servo_steering_scale_matches_field_calibration(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_device_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "#define ECU_STEER_DEG_TO_COUNTS               (11111.111f)" in config_h
+    assert "send_steer_command(canopen" in motion_device_c
+    assert "command->target_steer_deg[wheel]" in motion_device_c
+    assert "config->steer_deg_to_counts" in motion_device_c
+
+
 def test_safety_manager_clamps_dangerous_outputs(root: pathlib.Path) -> None:
     text = read(root, "ecu/vehicle/src/safety_manager.c")
     required = [
