@@ -387,6 +387,14 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.steer_last_allowed_to_inhibited_ms;
     out->steer_safe_stop_pending =
         s_runtime.executor.steer_safe_stop_pending;
+    out->steer_commission_state =
+        (uint8_t)s_runtime.executor.steer_commission_state;
+    out->steer_commission_axis_mask =
+        s_runtime.executor.steer_commission_axis_mask;
+    out->steer_commission_nmt_sent_mask =
+        s_runtime.executor.steer_commission_nmt_sent_mask;
+    out->steer_commission_authorization_clear_count =
+        s_runtime.executor.steer_commission_authorization_clear_count;
     out->power_result = s_runtime.executor.power_result;
     out->motion_result = s_runtime.executor.motion_result;
     out->lift_hydraulic_result = s_runtime.executor.lift_hydraulic_result;

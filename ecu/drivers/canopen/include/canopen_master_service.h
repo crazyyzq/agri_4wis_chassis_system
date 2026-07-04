@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ecu_config.h"
+
 typedef enum {
     CANOPEN_MASTER_BUS_CAN2 = 0,
     CANOPEN_MASTER_BUS_CAN3 = 1,
@@ -118,6 +120,33 @@ typedef struct {
 } canopen_master_pdo_request_t;
 
 typedef struct {
+    uint8_t expected_frames;
+    uint8_t arm_frame_count;
+    uint8_t trigger_frame_count;
+    uint8_t axis_mask;
+    bool position_group;
+} canopen_master_pdo_group_descriptor_t;
+
+typedef struct {
+    bool tpdo0_valid;
+    bool tpdo1_valid;
+    bool feedback_fresh;
+    uint32_t last_tpdo0_ms;
+    uint32_t last_tpdo1_ms;
+    uint32_t tpdo0_rx_count;
+    uint32_t tpdo1_rx_count;
+    uint32_t malformed_tpdo_count;
+    uint32_t unexpected_tpdo_count;
+    int32_t actual_position_counts; /* Actual position, count units from the drive. */
+    int32_t actual_velocity_units;  /* Actual velocity, vendor velocity units. */
+    uint32_t fault_latched;         /* Vendor latched-fault word. */
+    uint16_t statusword;            /* CiA-402 stateword. */
+    int16_t actual_current_raw;     /* Vendor raw current feedback. */
+} canopen_node_feedback_t;
+
+#define CANOPEN_MASTER_NODE_FEEDBACK_SLOTS (14U)
+
+typedef struct {
     canopen_master_state_t state;
     bool initialized;
     bool can_normal;
@@ -156,6 +185,10 @@ typedef struct {
     uint8_t pdo_in_flight_frames;
     uint8_t pdo_arm_complete_frames;
     uint8_t pdo_trigger_complete_frames;
+    uint8_t pdo_arm_frame_count;
+    uint8_t pdo_trigger_frame_count;
+    uint8_t pdo_axis_mask;
+    bool pdo_position_group;
     uint32_t last_pdo_tx_complete_ms;
     uint32_t last_pdo_tx_timeout_ms;
     uint32_t last_pdo_tx_group_sequence;
@@ -185,6 +218,11 @@ typedef struct {
     int32_t last_download_value;
     uint32_t last_download_abort_code;
     int32_t last_error;
+    uint32_t sync_tx_count;
+    uint32_t sync_tx_error_count;
+    uint32_t last_sync_tx_ms;
+    int32_t last_sync_error;
+    canopen_node_feedback_t node_feedback[CANOPEN_MASTER_NODE_FEEDBACK_SLOTS];
 } canopen_master_snapshot_t;
 
 typedef struct {
@@ -232,6 +270,7 @@ typedef struct {
     uint8_t active_pdo_in_flight_frames;
     uint8_t active_pdo_arm_complete_frames;
     uint8_t active_pdo_trigger_complete_frames;
+    canopen_master_pdo_group_descriptor_t active_pdo_group_descriptor;
     bool active_pdo_cancel_requested;
     bool active_pdo_cancel_after_inflight;
     bool active_pdo_trigger_started;
@@ -313,6 +352,16 @@ bool canopen_master_service_queue_pdo(canopen_master_service_t *service,
 bool canopen_master_service_queue_pdo_batch(canopen_master_service_t *service,
                                             const canopen_master_pdo_request_t *requests,
                                             uint8_t count);
+bool canopen_master_service_queue_pdo_batch_with_descriptor(
+    canopen_master_service_t *service,
+    const canopen_master_pdo_request_t *requests,
+    uint8_t count,
+    const canopen_master_pdo_group_descriptor_t *descriptor);
+bool canopen_master_service_send_sync(canopen_master_service_t *service,
+                                      uint32_t now_ms);
+bool canopen_master_service_get_node_feedback(const canopen_master_service_t *service,
+                                              uint8_t node_id,
+                                              canopen_node_feedback_t *out);
 
 uint8_t canopen_master_service_pdo_queue_available(const canopen_master_service_t *service);
 bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *service,

@@ -146,7 +146,47 @@ static const ecu_hardware_config_t s_hardware_config = {
     .rs232_baudrate = ECU_RS232_BAUDRATE,
     .drive_speed_kph_to_counts_per_sec = ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC,
     .steer_deg_to_counts = ECU_STEER_DEG_TO_COUNTS,
-    .lift_mm_to_counts = ECU_LIFT_MM_TO_COUNTS
+    .lift_mm_to_counts = ECU_LIFT_MM_TO_COUNTS,
+
+    /* V8 remote steering commissioning is fail-closed until each axis is
+     * measured on the real machine.  The user must enter the confirmed sign,
+     * straight-zero offset, and safe count window before that axis can be
+     * authorized by the J-Link commissioning control.
+     */
+    .steer_axis_calibration = {
+        {
+            .valid = false,
+            .direction_sign = 1,
+            .straight_zero_offset_counts = 0,
+            .minimum_position_counts = -ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .maximum_position_counts = ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .commissioning_max_abs_deg = ECU_STEER_REMOTE_COMMISSION_MAX_DEG
+        },
+        {
+            .valid = false,
+            .direction_sign = 1,
+            .straight_zero_offset_counts = 0,
+            .minimum_position_counts = -ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .maximum_position_counts = ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .commissioning_max_abs_deg = ECU_STEER_REMOTE_COMMISSION_MAX_DEG
+        },
+        {
+            .valid = false,
+            .direction_sign = 1,
+            .straight_zero_offset_counts = 0,
+            .minimum_position_counts = -ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .maximum_position_counts = ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .commissioning_max_abs_deg = ECU_STEER_REMOTE_COMMISSION_MAX_DEG
+        },
+        {
+            .valid = false,
+            .direction_sign = 1,
+            .straight_zero_offset_counts = 0,
+            .minimum_position_counts = -ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .maximum_position_counts = ECU_CANOPEN_STEER_MAX_POSITION_COUNTS,
+            .commissioning_max_abs_deg = ECU_STEER_REMOTE_COMMISSION_MAX_DEG
+        }
+    }
 };
 
 const ecu_config_t *ecu_config_default(void)

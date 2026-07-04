@@ -109,6 +109,10 @@ typedef struct {
     uint32_t steer_safety_inhibit_count;
     uint32_t steer_last_allowed_to_inhibited_ms;
     bool steer_safe_stop_pending;
+    uint8_t steer_commission_state;
+    uint8_t steer_commission_axis_mask;
+    uint8_t steer_commission_nmt_sent_mask;
+    uint32_t steer_commission_authorization_clear_count;
 
     ecu_device_apply_result_t power_result;
     ecu_device_apply_result_t motion_result;

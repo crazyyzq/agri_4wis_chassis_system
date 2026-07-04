@@ -243,6 +243,18 @@
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_COUNTS_PER_SEC  (1000000)
 #define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (500000)
 #define ECU_CANOPEN_STEER_SETUP_SETTLE_MS                   (100U)
+/* V8 remote steering commissioning starts with a deliberately slow, small and
+ * explicitly-authorized control envelope.  These values are independent from
+ * the normal ±45 degree vehicle steering envelope so first-motion tests cannot
+ * accidentally inherit production steering authority.
+ */
+#define ECU_STEER_REMOTE_COMMISSION_AUTH_MAGIC              (0x53544552UL)
+#define ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL           (0x0FU)
+#define ECU_STEER_REMOTE_COMMISSION_MAX_DEG                 (5.0f)
+#define ECU_STEER_REMOTE_COMMISSION_PERIOD_MS               (100U)
+#define ECU_STEER_REMOTE_COMMISSION_TRIGGER_THRESHOLD_COUNTS (5000)
+#define ECU_STEER_REMOTE_COMMISSION_NEUTRAL_MS              (300U)
+#define ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS     (250U)
 /* Analyzer-only PDO capture switch.  Default is disabled because real drives
  * have not yet confirmed their RPDO mapping/readback.  Setting this to 1 is
  * only for a bounded CAN analyzer capture on an unpopulated actuator bus; it is
@@ -254,6 +266,7 @@
 #define ECU_CANOPEN_COMMISSIONING_POLICY_TPDO_MONITOR_ONLY    (1U)
 #define ECU_CANOPEN_COMMISSIONING_POLICY_NODE5_STEER_PDO_ONLY (2U)
 #define ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED   (3U)
+#define ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING (4U)
 
 #ifndef ECU_CANOPEN_COMMISSIONING_POLICY
 #define ECU_CANOPEN_COMMISSIONING_POLICY \
@@ -464,6 +477,22 @@ typedef struct {
 } ecu_commissioning_control_t;
 
 typedef struct {
+    uint32_t magic;
+    bool steer_remote_commission_enable;
+    uint8_t enabled_axis_mask; /* bit0=Node5, bit1=Node6, bit2=Node7, bit3=Node8. */
+    uint32_t expiry_ms;
+} ecu_steer_commissioning_control_t;
+
+typedef struct {
+    bool valid;
+    int8_t direction_sign; /* +1 means positive steering command increases counts. */
+    int32_t straight_zero_offset_counts;
+    int32_t minimum_position_counts;
+    int32_t maximum_position_counts;
+    float commissioning_max_abs_deg;
+} steer_axis_calibration_t;
+
+typedef struct {
     uint16_t low_max;
     uint16_t center_min;
     uint16_t center_max;
@@ -571,6 +600,7 @@ typedef struct {
     float drive_speed_kph_to_counts_per_sec;
     float steer_deg_to_counts;
     float lift_mm_to_counts;
+    steer_axis_calibration_t steer_axis_calibration[ECU_WHEEL_COUNT];
 } ecu_hardware_config_t;
 
 const ecu_config_t *ecu_config_default(void);

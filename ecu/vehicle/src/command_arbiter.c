@@ -122,6 +122,7 @@ static bool remote_requests_brake_release(const remote_control_request_t *remote
 }
 
 static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_command_t *out,
+                                                         const remote_control_request_t *remote,
                                                          float steer_deg)
 {
 #if ECU_COMMISSIONING_STEER_ONLY_MODE
@@ -133,9 +134,21 @@ static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_comma
         out->target_steer_deg[wheel] = steer_deg;
     }
     out->target_speed_kph = 0.0f;
+#if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
+    out->active_gear = ECU_GEAR_REQUEST_P;
+    out->brake_release = remote != 0 &&
+                         remote->active_gear == ECU_GEAR_REQUEST_P &&
+                         remote->throttle_per_mille == 0;
+    out->hydraulic_enable = false;
+    out->hydraulic_valve_mask = 0U;
+    out->height_rate_mm_s = 0.0f;
+    out->track_rate_mm_s = 0.0f;
+#else
     out->brake_release = false;
+#endif
 #else
     (void)out;
+    (void)remote;
     (void)steer_deg;
 #endif
 }
@@ -239,8 +252,18 @@ void command_arbiter_update(const remote_control_request_t *remote,
                                        steer_deg,
                                        &limits,
                                        out);
-        apply_commissioning_steer_only_direct_targets(out, steer_deg);
+        apply_commissioning_steer_only_direct_targets(out, remote, steer_deg);
         apply_remote_adjust_command(remote, out);
+#if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
+        out->target_speed_kph = 0.0f;
+        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+            out->target_wheel_speed_kph[wheel] = 0.0f;
+        }
+        out->hydraulic_enable = false;
+        out->hydraulic_valve_mask = 0U;
+        out->height_rate_mm_s = 0.0f;
+        out->track_rate_mm_s = 0.0f;
+#endif
         return;
     }
 

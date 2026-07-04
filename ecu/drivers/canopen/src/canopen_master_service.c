@@ -14,6 +14,8 @@
 #include "user_config.h"
 #include "OD.h"
 
+uint16_t CO_CANrxMsg_readIdent(CO_CANrxMsg_t *rxMsg);
+
 #define CANOPEN_MASTER_CAN2_INDEX (0U)
 #define CANOPEN_MASTER_CAN3_INDEX (1U)
 #define CANOPEN_MASTER_FIRST_HB_TIME_MS (0U)
@@ -21,6 +23,7 @@
 #define CANOPEN_MASTER_SDO_CLIENT_TIMEOUT_MS (500U)
 #define CANOPEN_MASTER_NMT_CONTROL (CO_NMT_ERR_ON_ERR_REG | CO_ERR_REG_GENERIC_ERR | CO_ERR_REG_COMMUNICATION)
 #define CANOPEN_MASTER_PDO_TX_COMPLETE_POLL_US (300U)
+#define CANOPEN_MASTER_SYNC_COB_ID (0x080U)
 
 typedef struct {
     uint16_t index;
@@ -40,6 +43,7 @@ static const canopen_master_sdo_query_t s_sdo_queries[] = {
 
 static bool debug_command_to_nmt(canopen_master_debug_command_t command,
                                  CO_NMT_command_t *out);
+static void steer_tpdo_rx_callback(void *object, void *message);
 
 /* HPM SDK CO_driver.c reports driver errors through this symbol. The service
  * selects the active stack before calling any CANopenNode API that may use it.
@@ -70,6 +74,32 @@ static can_info_t s_can_info[CANOPEN_MASTER_BUS_COUNT] = {
 };
 
 static volatile uint32_t s_canopen_pdo_tx_complete_count[CANOPEN_MASTER_BUS_COUNT];
+
+static int32_t canopen_read_le_i32(const uint8_t *data)
+{
+    return (int32_t)((uint32_t)data[0] |
+                     ((uint32_t)data[1] << 8) |
+                     ((uint32_t)data[2] << 16) |
+                     ((uint32_t)data[3] << 24));
+}
+
+static uint16_t canopen_read_le_u16(const uint8_t *data)
+{
+    return (uint16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8));
+}
+
+static uint32_t canopen_read_le_u32_exact(const uint8_t *data)
+{
+    return (uint32_t)data[0] |
+           ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) |
+           ((uint32_t)data[3] << 24);
+}
+
+static int16_t canopen_read_le_i16(const uint8_t *data)
+{
+    return (int16_t)canopen_read_le_u16(data);
+}
 
 static void note_canopen_tx_flags_from_isr(uint8_t can_index)
 {
@@ -297,6 +327,14 @@ static void sync_pdo_group_snapshot(canopen_master_service_t *service)
     service->snapshot.pdo_in_flight_frames = service->active_pdo_in_flight_frames;
     service->snapshot.pdo_arm_complete_frames = service->active_pdo_arm_complete_frames;
     service->snapshot.pdo_trigger_complete_frames = service->active_pdo_trigger_complete_frames;
+    service->snapshot.pdo_arm_frame_count =
+        service->active_pdo_group_descriptor.arm_frame_count;
+    service->snapshot.pdo_trigger_frame_count =
+        service->active_pdo_group_descriptor.trigger_frame_count;
+    service->snapshot.pdo_axis_mask =
+        service->active_pdo_group_descriptor.axis_mask;
+    service->snapshot.pdo_position_group =
+        service->active_pdo_group_descriptor.position_group;
 }
 
 static bool pdo_group_is_active(const canopen_master_service_t *service)
@@ -312,11 +350,20 @@ static bool pdo_group_is_active(const canopen_master_service_t *service)
 
 static void begin_pdo_group(canopen_master_service_t *service,
                             uint32_t group_sequence,
-                            uint8_t expected_frames)
+                            uint8_t expected_frames,
+                            const canopen_master_pdo_group_descriptor_t *descriptor)
 {
     if (service == NULL || group_sequence == 0U || expected_frames == 0U) {
         return;
     }
+
+    canopen_master_pdo_group_descriptor_t default_descriptor = {
+        .expected_frames = expected_frames,
+        .arm_frame_count = expected_frames,
+        .trigger_frame_count = 0U,
+        .axis_mask = 0U,
+        .position_group = false
+    };
 
     service->active_pdo_group_sequence = group_sequence;
     service->active_pdo_group_state = CANOPEN_MASTER_PDO_GROUP_STATE_QUEUED;
@@ -331,6 +378,8 @@ static void begin_pdo_group(canopen_master_service_t *service,
     service->active_pdo_cancel_after_inflight = false;
     service->active_pdo_trigger_started = false;
     service->active_pdo_trigger_complete_frames_at_cancel = 0U;
+    service->active_pdo_group_descriptor =
+        descriptor != NULL ? *descriptor : default_descriptor;
     sync_pdo_group_snapshot(service);
 }
 
@@ -651,7 +700,7 @@ bool canopen_master_service_queue_pdo(canopen_master_service_t *service,
         return false;
     }
     if (!pdo_group_is_active(service)) {
-        begin_pdo_group(service, group_sequence, 1U);
+        begin_pdo_group(service, group_sequence, 1U, NULL);
     }
     service->pdo_queue[service->pdo_queue_head] = request;
     service->pdo_queue_head =
@@ -672,14 +721,30 @@ static bool pdo_request_is_valid(const canopen_master_pdo_request_t *request)
            request->phase != CANOPEN_MASTER_PDO_PHASE_NONE;
 }
 
-bool canopen_master_service_queue_pdo_batch(canopen_master_service_t *service,
-                                            const canopen_master_pdo_request_t *requests,
-                                            uint8_t count)
+static bool pdo_group_descriptor_is_valid(const canopen_master_pdo_group_descriptor_t *descriptor,
+                                          uint8_t count)
+{
+    if (descriptor == NULL) {
+        return true;
+    }
+
+    return descriptor->expected_frames == count &&
+           descriptor->expected_frames != 0U &&
+           (uint8_t)(descriptor->arm_frame_count +
+                     descriptor->trigger_frame_count) == descriptor->expected_frames;
+}
+
+bool canopen_master_service_queue_pdo_batch_with_descriptor(
+    canopen_master_service_t *service,
+    const canopen_master_pdo_request_t *requests,
+    uint8_t count,
+    const canopen_master_pdo_group_descriptor_t *descriptor)
 {
     if (service == NULL || requests == NULL || count == 0U ||
         count > CANOPEN_MASTER_PDO_QUEUE_CAPACITY ||
         !service->snapshot.initialized || !service->snapshot.can_normal ||
-        service->can_index >= CANOPEN_MASTER_BUS_COUNT) {
+        service->can_index >= CANOPEN_MASTER_BUS_COUNT ||
+        !pdo_group_descriptor_is_valid(descriptor, count)) {
         return false;
     }
 
@@ -708,7 +773,7 @@ bool canopen_master_service_queue_pdo_batch(canopen_master_service_t *service,
         return false;
     }
     if (!pdo_group_is_active(service)) {
-        begin_pdo_group(service, requests[0].group_sequence, count);
+        begin_pdo_group(service, requests[0].group_sequence, count, descriptor);
     }
 
     for (uint8_t i = 0U; i < count; ++i) {
@@ -720,6 +785,17 @@ bool canopen_master_service_queue_pdo_batch(canopen_master_service_t *service,
     service->snapshot.pdo_queued_count = service->pdo_queue_count;
     taskEXIT_CRITICAL();
     return true;
+}
+
+bool canopen_master_service_queue_pdo_batch(canopen_master_service_t *service,
+                                            const canopen_master_pdo_request_t *requests,
+                                            uint8_t count)
+{
+    return canopen_master_service_queue_pdo_batch_with_descriptor(
+        service,
+        requests,
+        count,
+        NULL);
 }
 
 uint8_t canopen_master_service_pdo_queue_available(const canopen_master_service_t *service)
@@ -1131,7 +1207,7 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
     taskEXIT_CRITICAL();
 
     if (!pdo_group_is_active(service)) {
-        begin_pdo_group(service, request.group_sequence, 1U);
+        begin_pdo_group(service, request.group_sequence, 1U, NULL);
     }
 
     if (service->active_pdo_group_sequence != request.group_sequence) {
@@ -1140,8 +1216,8 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
 
     if (pdo_phase_is_trigger(request.phase)) {
         uint8_t required_arms =
-            service->active_pdo_expected_frames == (ECU_WHEEL_COUNT * 2U) ?
-            ECU_WHEEL_COUNT : 1U;
+            service->active_pdo_group_descriptor.arm_frame_count != 0U ?
+            service->active_pdo_group_descriptor.arm_frame_count : 1U;
         if (service->active_pdo_arm_complete_frames < required_arms) {
             fail_active_pdo_group(service, &request, -EIO, now_ms);
             return false;
@@ -1507,6 +1583,144 @@ static void handle_debug_command(canopen_master_service_t *service)
     }
 }
 
+static bool steer_tpdo_node_from_cob_id(uint16_t cob_id,
+                                        bool *is_tpdo1,
+                                        uint8_t *node_id)
+{
+    if (is_tpdo1 == NULL || node_id == NULL) {
+        return false;
+    }
+
+    if (cob_id >= (uint16_t)(ECU_CANOPEN_TPDO1_BASE + ECU_CANOPEN_STEER_FR_NODE_ID) &&
+        cob_id <= (uint16_t)(ECU_CANOPEN_TPDO1_BASE + ECU_CANOPEN_STEER_RR_NODE_ID)) {
+        *is_tpdo1 = false;
+        *node_id = (uint8_t)(cob_id - ECU_CANOPEN_TPDO1_BASE);
+        return true;
+    }
+
+    if (cob_id >= (uint16_t)(ECU_CANOPEN_TPDO2_BASE + ECU_CANOPEN_STEER_FR_NODE_ID) &&
+        cob_id <= (uint16_t)(ECU_CANOPEN_TPDO2_BASE + ECU_CANOPEN_STEER_RR_NODE_ID)) {
+        *is_tpdo1 = true;
+        *node_id = (uint8_t)(cob_id - ECU_CANOPEN_TPDO2_BASE);
+        return true;
+    }
+
+    return false;
+}
+
+static void steer_tpdo_rx_callback(void *object, void *message)
+{
+    canopen_master_service_t *service = (canopen_master_service_t *)object;
+    CO_CANrxMsg_t *rx_msg = (CO_CANrxMsg_t *)message;
+    bool is_tpdo1 = false;
+    uint8_t node_id = 0U;
+
+    if (service == NULL || rx_msg == NULL) {
+        return;
+    }
+
+    uint16_t cob_id = CO_CANrxMsg_readIdent(rx_msg);
+    if (!steer_tpdo_node_from_cob_id(cob_id, &is_tpdo1, &node_id) ||
+        node_id >= CANOPEN_MASTER_NODE_FEEDBACK_SLOTS) {
+        service->snapshot.node_feedback[0].unexpected_tpdo_count++;
+        return;
+    }
+
+    canopen_node_feedback_t *feedback = &service->snapshot.node_feedback[node_id];
+    uint8_t dlc = CO_CANrxMsg_readDLC(rx_msg);
+    uint8_t *data = CO_CANrxMsg_readData(rx_msg);
+    if (dlc != 8U || data == NULL) {
+        feedback->malformed_tpdo_count++;
+        return;
+    }
+
+    if (!is_tpdo1) {
+        feedback->actual_position_counts = canopen_read_le_i32(&data[0]);
+        feedback->actual_velocity_units = canopen_read_le_i32(&data[4]);
+        feedback->last_tpdo0_ms = service->last_process_ms;
+        feedback->tpdo0_rx_count++;
+        feedback->tpdo0_valid = true;
+    } else {
+        feedback->fault_latched = canopen_read_le_u32_exact(&data[0]);
+        feedback->statusword = canopen_read_le_u16(&data[4]);
+        feedback->actual_current_raw = canopen_read_le_i16(&data[6]);
+        feedback->last_tpdo1_ms = service->last_process_ms;
+        feedback->tpdo1_rx_count++;
+        feedback->tpdo1_valid = true;
+    }
+}
+
+static uint16_t find_free_canopen_rx_slot(CO_CANmodule_t *module, uint16_t start_index)
+{
+    if (module == NULL || module->rxArray == NULL) {
+        return 0xFFFFU;
+    }
+
+    for (uint16_t i = start_index; i < module->rxSize; ++i) {
+        if (module->rxArray[i].CANrx_callback == NULL) {
+            return i;
+        }
+    }
+    return 0xFFFFU;
+}
+
+static void register_steer_tpdo_observers(canopen_master_service_t *service)
+{
+    if (service == NULL || service->snapshot.bus != CANOPEN_MASTER_BUS_CAN2 ||
+        co == NULL || co->CANmodule == NULL) {
+        return;
+    }
+
+    uint16_t slot = find_free_canopen_rx_slot(co->CANmodule, 0U);
+    for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID;
+         node <= ECU_CANOPEN_STEER_RR_NODE_ID && slot != 0xFFFFU;
+         ++node) {
+        (void)CO_CANrxBufferInit(co->CANmodule,
+                                 slot,
+                                 (uint16_t)(ECU_CANOPEN_TPDO1_BASE + node),
+                                 0x7FFU,
+                                 false,
+                                 service,
+                                 steer_tpdo_rx_callback);
+        slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
+        if (slot == 0xFFFFU) {
+            break;
+        }
+        (void)CO_CANrxBufferInit(co->CANmodule,
+                                 slot,
+                                 (uint16_t)(ECU_CANOPEN_TPDO2_BASE + node),
+                                 0x7FFU,
+                                 false,
+                                 service,
+                                 steer_tpdo_rx_callback);
+        slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
+    }
+}
+
+static void refresh_tpdo_freshness(canopen_master_service_t *service,
+                                   uint32_t now_ms)
+{
+    if (service == NULL) {
+        return;
+    }
+
+    for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID;
+         node <= ECU_CANOPEN_STEER_RR_NODE_ID &&
+         node < CANOPEN_MASTER_NODE_FEEDBACK_SLOTS;
+         ++node) {
+        canopen_node_feedback_t *feedback = &service->snapshot.node_feedback[node];
+        bool tpdo0_fresh =
+            feedback->tpdo0_valid &&
+            (uint32_t)(now_ms - feedback->last_tpdo0_ms) <=
+                ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS;
+        bool tpdo1_fresh =
+            feedback->tpdo1_valid &&
+            (uint32_t)(now_ms - feedback->last_tpdo1_ms) <=
+                ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS;
+        feedback->feedback_fresh = tpdo0_fresh && tpdo1_fresh;
+    }
+}
+
 bool canopen_master_service_init(canopen_master_service_t *service,
                                  canopen_master_bus_t bus,
                                  uint32_t bitrate,
@@ -1588,6 +1802,7 @@ bool canopen_master_service_init(canopen_master_service_t *service,
         return false;
     }
 
+    register_steer_tpdo_observers(service);
     CO_CANsetNormalMode(co->CANmodule);
     service->snapshot.initialized = true;
     service->snapshot.can_normal = true;
@@ -1616,6 +1831,7 @@ void canopen_master_service_process(canopen_master_service_t *service,
     }
 
     process_pdo_tx_queue(service, now_ms);
+    refresh_tpdo_freshness(service, now_ms);
     if (service->pdo_in_flight) {
         /* TX-complete flags are controller-level, not PDO-specific.  While a
          * realtime PDO is in-flight, do not start unrelated CANopenNode SDO/NMT
@@ -1667,6 +1883,48 @@ void canopen_master_service_process(canopen_master_service_t *service,
         }
     }
     canopen_master_unlock();
+}
+
+bool canopen_master_service_send_sync(canopen_master_service_t *service,
+                                      uint32_t now_ms)
+{
+    if (service == NULL || !service->snapshot.initialized ||
+        !service->snapshot.can_normal ||
+        service->can_index >= CANOPEN_MASTER_BUS_COUNT ||
+        service->pdo_in_flight) {
+        return false;
+    }
+
+    struct can_frame frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.id = CANOPEN_MASTER_SYNC_COB_ID;
+    frame.dlc = 0U;
+
+    int result = hpm_can_send((struct device *)&hpm_canopen_dev[service->can_index],
+                              &frame);
+    if (result == 0) {
+        service->snapshot.sync_tx_count++;
+        service->snapshot.last_sync_tx_ms = now_ms;
+        service->snapshot.last_sync_error = 0;
+        return true;
+    }
+
+    service->snapshot.sync_tx_error_count++;
+    service->snapshot.last_sync_error = result;
+    service->snapshot.last_error = result;
+    return false;
+}
+
+bool canopen_master_service_get_node_feedback(const canopen_master_service_t *service,
+                                              uint8_t node_id,
+                                              canopen_node_feedback_t *out)
+{
+    if (service == NULL || out == NULL ||
+        node_id >= CANOPEN_MASTER_NODE_FEEDBACK_SLOTS) {
+        return false;
+    }
+    *out = service->snapshot.node_feedback[node_id];
+    return true;
 }
 
 void canopen_master_service_get_snapshot(const canopen_master_service_t *service,

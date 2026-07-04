@@ -118,6 +118,14 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.steer_last_allowed_to_inhibited_ms;
     executor->steer_safe_stop_pending =
         s_runtime.motion.steer_safe_stop_pending;
+    executor->steer_commission_state =
+        (uint8_t)s_runtime.motion.steer_commission_state;
+    executor->steer_commission_axis_mask =
+        s_runtime.motion.selected_axis_mask;
+    executor->steer_commission_nmt_sent_mask =
+        s_runtime.motion.steer_commission_nmt_sent_mask;
+    executor->steer_commission_authorization_clear_count =
+        s_runtime.motion.steer_commission_authorization_clear_count;
 }
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor)

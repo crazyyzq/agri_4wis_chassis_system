@@ -31,6 +31,16 @@ typedef enum {
     MOTION_STEER_AXIS_FAULT
 } motion_steer_axis_config_state_t;
 
+typedef enum {
+    STEER_REMOTE_COMMISSION_DISABLED = 0,
+    STEER_REMOTE_COMMISSION_WAIT_AUTH,
+    STEER_REMOTE_COMMISSION_WAIT_NEUTRAL,
+    STEER_REMOTE_COMMISSION_TPDO_MONITOR,
+    STEER_REMOTE_COMMISSION_AXIS_READY,
+    STEER_REMOTE_COMMISSION_ACTIVE,
+    STEER_REMOTE_COMMISSION_FAULT
+} steer_remote_commission_state_t;
+
 typedef struct {
     uint32_t apply_count;
     uint32_t skipped_count;
@@ -45,6 +55,7 @@ typedef struct {
     uint32_t steer_active_group_submit_ms;
     int32_t steer_active_group_target_counts[ECU_WHEEL_COUNT];
     int32_t steer_next_group_target_counts[ECU_WHEEL_COUNT];
+    uint8_t steer_active_group_axis_mask;
     bool steer_group_active;
     bool steer_active_group_node5_only;
     bool steer_next_group_valid;
@@ -61,6 +72,12 @@ typedef struct {
     bool steer_group_trigger_partial_failure;
     uint32_t steer_last_clean_cancel_ms;
     uint32_t steer_last_partial_failure_ms;
+    steer_remote_commission_state_t steer_commission_state;
+    uint8_t selected_axis_mask;
+    uint32_t steer_commission_neutral_since_ms;
+    uint32_t steer_commission_last_sync_ms;
+    uint32_t steer_commission_authorization_clear_count;
+    uint8_t steer_commission_nmt_sent_mask;
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];
@@ -92,6 +109,16 @@ typedef struct {
  * ISR: not safe.
  */
 void motion_device_init(motion_device_state_t *state);
+
+/* Convert one remote steering angle into per-axis absolute target counts for
+ * V8 remote steering commissioning.  Selected axes require valid calibration;
+ * unselected axes are left at zero by this pure helper and are not transmitted.
+ */
+bool steer_commissioning_build_targets(
+    const steer_axis_calibration_t calibration[ECU_WHEEL_COUNT],
+    uint8_t enabled_axis_mask,
+    float remote_steer_deg,
+    int32_t out_target_counts[ECU_WHEEL_COUNT]);
 
 /* Apply final drive, steering and brake intent to CAN2 motion nodes.
  *
