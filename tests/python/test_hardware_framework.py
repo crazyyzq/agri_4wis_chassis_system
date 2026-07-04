@@ -421,7 +421,7 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
     assert "servo_drive_canopen_configure_steer_rpdo(canopen" not in motion_c
     assert "servo_drive_canopen_prepare_position_mode(canopen" not in motion_c
     assert "canopen_master_service_queue_pdo" in motion_c
-    assert "servo_drive_canopen_run_absolute_position_mode" in lift_c
+    assert "servo_drive_canopen_run_absolute_position_mode" not in lift_c
     assert "ECU_CANOPEN_RPDO2_BASE" in config_h
     assert "ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC" in config_h
     assert "ECU_STEER_DEG_TO_COUNTS" in config_h
@@ -1014,11 +1014,10 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
     assert "servo_drive_canopen_read_input_states" in motion_c
     assert "SERVO_DRIVE_INPUT_IN2_MASK" in motion_c
     assert "SERVO_DRIVE_INPUT_IN3_MASK" in motion_c
-    assert "servo_drive_canopen_set_output_state" in lift_c
-    assert "SERVO_DRIVE_OUTPUT_OUT1_MASK" in lift_c
-    assert "BC2_AXIS_OUTPUT_BRAKE_MASK" in lift_c
-    assert "BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK" in lift_c
-    assert "BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK" in lift_c
+    assert "servo_drive_canopen_set_output_state" not in lift_c
+    assert "BC2_AXIS_OUTPUT_BRAKE_MASK" not in lift_c
+    assert "BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK" not in lift_c
+    assert "BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK" not in lift_c
     assert "SERVO_DRIVE_OUTPUT_OUT4_MASK" not in lift_c
     assert "SERVO_DRIVE_INPUT_IN7_MASK" not in lift_c
     assert "SERVO_DRIVE_INPUT_IN8_MASK" not in lift_c
@@ -1046,7 +1045,8 @@ def test_servo_brake_release_is_low_level_active(root: pathlib.Path) -> None:
     assert "#define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)" in config_h
     assert "#define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (0U)" in config_h
     assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" in motion_c
-    assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" in lift_c
+    assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" not in lift_c
+    assert "CAN3 servo outputs are disabled in the V7 static-contract commit" in lift_c
 
 
 def test_servo_brakes_are_not_driven_by_pcb_dio(root: pathlib.Path) -> None:
@@ -1317,14 +1317,10 @@ def test_motion_and_lift_canopen_outputs_are_command_gated(root: pathlib.Path) -
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
     assert "command_source_allows_motion_output" in motion_c
-    assert "command_source_allows_lift_output" in lift_c
+    assert "command_source_allows_lift_output" not in lift_c
     assert "COMMAND_SOURCE_NONE" not in re.search(
         r"command_source_allows_motion_output[\s\S]*?\n}",
         motion_c,
-    ).group(0)
-    assert "COMMAND_SOURCE_NONE" not in re.search(
-        r"command_source_allows_lift_output[\s\S]*?\n}",
-        lift_c,
     ).group(0)
     assert "command_changed(state, command)" in motion_c
     assert "can3_actuator_command_changed(state, command)" in lift_c
@@ -1381,7 +1377,8 @@ def test_canopen_command_cache_updates_only_after_successful_queueing(root: path
         motion_c,
     )
     lift_success_block = re.search(
-        r"if \(ok\) \{[\s\S]*?state->last_lift_command = \*command;[\s\S]*?"
+        r"if \(can3_actuator_command_changed\(state, command\)\) \{[\s\S]*?"
+        r"state->last_lift_command = \*command;[\s\S]*?"
         r"state->last_lift_command_valid = true;[\s\S]*?"
         r"state->last_lift_command_queue_ms = now_ms;[\s\S]*?\n\s*\}",
         lift_c,
@@ -1389,7 +1386,7 @@ def test_canopen_command_cache_updates_only_after_successful_queueing(root: path
     assert motion_success_block is not None
     assert lift_success_block is not None
     assert "motion_command_refresh_due(state, now_ms)" in motion_c
-    assert "lift_command_refresh_due(state, now_ms)" in lift_c
+    assert "lift_command_refresh_due(state, now_ms)" not in lift_c
     assert "publish_motion_command_snapshot" in executor_c
     assert "read_motion_command_snapshot" in executor_c
     assert "command,\n                                                  command_sequence,\n                                                  now_ms)" in executor_c
@@ -1416,19 +1413,22 @@ def test_canopen_command_cache_updates_only_after_successful_queueing(root: path
     )
 
 
-def test_lift_limit_blocks_axis_brake_release(root: pathlib.Path) -> None:
-    """A lift axis commanded into an active limit switch must quick-stop and keep its brake applied."""
+def test_lift_can3_legacy_sdo_output_is_disabled_for_static_pdo_contract(root: pathlib.Path) -> None:
+    """V7 removes normal CAN3 servo SDO motion until standard PDO output is implemented."""
 
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
-    for token in [
-        "bool *blocked_by_limit",
-        "*blocked_by_limit = false",
-        "*blocked_by_limit = true",
-        "axis_brake_release = lift_brake_release && !axis_blocked_by_limit",
-        "brake_active_mask(axis_brake_release",
+    for forbidden in [
+        "servo_drive_canopen_run_absolute_position_mode",
+        "servo_drive_canopen_run_velocity_mode",
+        "servo_drive_canopen_stop_velocity_mode",
+        "servo_drive_canopen_send_control_word",
+        "servo_drive_canopen_set_output_state",
+        "servo_drive_canopen_read_input_states",
     ]:
-        assert token in lift_c, token
+        assert forbidden not in lift_c, forbidden
+
+    assert "CAN3 servo outputs are disabled in the V7 static-contract commit" in lift_c
 
 
 def test_commissioning_power_debug_can_request_hv_without_motion(root: pathlib.Path) -> None:
@@ -1640,7 +1640,8 @@ def test_lift_hydraulic_canopen_command_cache_includes_track_and_pump_intent(roo
         "state->last_lift_command.hydraulic_valve_mask != command->hydraulic_valve_mask",
     ]:
         assert token in lift_c, token
-    assert "send_hydraulic_pump_command" in lift_c
+    assert "send_hydraulic_pump_command" not in lift_c
+    assert "servo_drive_canopen_run_velocity_mode" not in lift_c
 
 
 def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> None:

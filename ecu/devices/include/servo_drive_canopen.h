@@ -99,16 +99,6 @@ bool servo_drive_canopen_prepare_position_mode(canopen_master_service_t *canopen
                                                const ecu_canopen_node_config_t *node,
                                                int32_t profile_velocity_units);
 
-/* Queue RPDO1 mapping for realtime steering:
- *   byte 0..1: ECU_CANOPEN_OBJ_CONTROLWORD
- *   byte 2..5: ECU_CANOPEN_OBJ_TARGET_POSITION
- *
- * The motion task sends this RPDO after startup.  This configuration is queued
- * during initialization only; joystick following must not use SDOs.
- */
-bool servo_drive_canopen_configure_steer_rpdo(canopen_master_service_t *canopen,
-                                              const ecu_canopen_node_config_t *node);
-
 /* Queue the BC/BC2 absolute-position trigger sequence:
  * NMT operational, mode=position, profile speed, target position, enable
  * operation, then the absolute-position trigger control word.

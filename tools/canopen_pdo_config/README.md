@@ -2,6 +2,12 @@
 
 独立工具，用 USB-CAN 分析仪配置 BC/BC2 驱动器 Node1~13 的标准 RPDO/TPDO 映射。
 
+## Current vehicle status
+
+当前整车 Node1~13 的 PDO 已经配置并保存。该工具仅用于离线维护、
+替换新驱动器、恢复出厂或明确人工批准的重配。禁止在 ECU 接入总线、
+车辆可运动或普通调试时运行。
+
 ## Physical wiring
 
 - Analyzer CAN1 -> ECU physical CAN2 -> Node 1..8

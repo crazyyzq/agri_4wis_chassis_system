@@ -33,12 +33,38 @@ typedef struct {
     int8_t required_mode;  /* 0x03 velocity or 0x01 position. */
 } canopen_node_pdo_profile_t;
 
+typedef struct {
+    canopen_master_bus_t bus;
+    uint8_t node_id;
+    uint8_t leg_index;
+    canopen_axis_role_t role;
+    uint16_t rpdo0_cob_id;
+    uint16_t rpdo1_cob_id;
+    uint16_t tpdo0_cob_id;
+    uint16_t tpdo1_cob_id;
+    int8_t required_mode;
+    const char *name;
+} canopen_node_pdo_contract_t;
+
+#define CANOPEN_PDO_CONTRACT_PUMP_LEG_INDEX (0xFFU)
+#define CANOPEN_PDO_CONTRACT_NODE_COUNT (13U)
+
 /* Existing ecu_canopen_node_config_t fields keep their historical names:
  *   node->rpdo1_cob_id == DS301 RPDO0 == 0x200 + node
  *   node->rpdo2_cob_id == DS301 RPDO1 == 0x300 + node
- * New motion code should use this profile helper instead of relying on the
- * legacy field names at call sites.
+ * PDO command and feedback code should use this frozen contract table instead
+ * of relying on legacy field names at call sites.
  */
+const canopen_node_pdo_contract_t *canopen_pdo_contract_find(
+    canopen_master_bus_t bus,
+    uint8_t node_id);
+
+const canopen_node_pdo_contract_t *canopen_pdo_contract_for_drive_leg(uint32_t leg);
+const canopen_node_pdo_contract_t *canopen_pdo_contract_for_steer_leg(uint32_t leg);
+const canopen_node_pdo_contract_t *canopen_pdo_contract_for_lift_leg(uint32_t leg);
+const canopen_node_pdo_contract_t *canopen_pdo_contract_for_hydraulic_pump(void);
+const canopen_node_pdo_contract_t *canopen_pdo_contract_table(uint32_t *count);
+
 bool canopen_pdo_profile_init(uint8_t node_id,
                               canopen_axis_role_t role,
                               canopen_node_pdo_profile_t *profile);
