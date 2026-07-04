@@ -26,6 +26,11 @@ static void clear_steer_commissioning_authorization(motion_device_state_t *state
     if (state != NULL) {
         state->steer_commission_authorization_clear_count++;
         state->selected_axis_mask = 0U;
+        state->steer_commission_nmt_sent_mask = 0U;
+        state->steer_commission_neutral_since_ms = 0U;
+        state->steer_commission_last_sync_ms = 0U;
+        state->steer_next_group_valid = false;
+        state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_AUTH;
     }
 }
 
@@ -501,8 +506,7 @@ static bool steer_commissioning_remote_conditions_ok(
 {
     return command != NULL &&
            command->source == COMMAND_SOURCE_REMOTE &&
-           command->active_gear == ECU_GEAR_REQUEST_P &&
-           command->brake_release &&
+           command->steer_commission_interlock_ok &&
            command->target_speed_kph == 0.0f;
 }
 
@@ -633,7 +637,11 @@ static bool command_changed(const motion_device_state_t *state,
         state->last_motion_command.motion_mode != command->motion_mode ||
         state->last_motion_command.active_gear != command->active_gear ||
         state->last_motion_command.target_speed_kph != command->target_speed_kph ||
-        state->last_motion_command.brake_release != command->brake_release) {
+        state->last_motion_command.brake_release != command->brake_release ||
+        state->last_motion_command.steer_commission_interlock_ok !=
+            command->steer_commission_interlock_ok ||
+        state->last_motion_command.steer_commission_steering_neutral !=
+            command->steer_commission_steering_neutral) {
         return true;
     }
 
@@ -1189,20 +1197,24 @@ static void update_steer_remote_commissioning_state(
         state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_AUTH;
         return;
     }
-    if (!steering_command_is_neutral(command)) {
-        state->steer_commission_neutral_since_ms = 0U;
-        state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_NEUTRAL;
-        return;
-    }
-    if (state->steer_commission_neutral_since_ms == 0U) {
-        state->steer_commission_neutral_since_ms = now_ms;
-        state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_NEUTRAL;
-        return;
-    }
-    if ((uint32_t)(now_ms - state->steer_commission_neutral_since_ms) <
-        ECU_STEER_REMOTE_COMMISSION_NEUTRAL_MS) {
-        state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_NEUTRAL;
-        return;
+
+    if (state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE) {
+        if (!command->steer_commission_steering_neutral ||
+            !steering_command_is_neutral(command)) {
+            state->steer_commission_neutral_since_ms = 0U;
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_NEUTRAL;
+            return;
+        }
+        if (state->steer_commission_neutral_since_ms == 0U) {
+            state->steer_commission_neutral_since_ms = now_ms;
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_NEUTRAL;
+            return;
+        }
+        if ((uint32_t)(now_ms - state->steer_commission_neutral_since_ms) <
+            ECU_STEER_REMOTE_COMMISSION_NEUTRAL_MS) {
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_NEUTRAL;
+            return;
+        }
     }
 
     request_selected_steer_nodes_operational(canopen, config, state, axis_mask);

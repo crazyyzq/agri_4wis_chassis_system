@@ -143,3 +143,61 @@ def test_v8_remote_commissioning_uses_selected_axis_0f_1f_and_never_drive_or_can
     assert "out->target_speed_kph = 0.0f" in command_c
     assert "out->hydraulic_enable = false" in command_c
     assert "remote->throttle_per_mille == 0" in command_c
+
+
+def test_v9_commit_a_steer_commissioning_uses_explicit_interlock_not_brake_release(root: pathlib.Path) -> None:
+    vehicle_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    command_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    for token in [
+        "steer_commission_interlock_ok",
+        "steer_commission_steering_neutral",
+    ]:
+        assert token in vehicle_h, token
+        assert token in command_c, token
+        assert token in motion_c, token
+
+    interlock_fn = motion_c.split("static bool steer_commissioning_remote_conditions_ok", 1)[1].split(
+        "static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason", 1
+    )[0]
+    assert "command->steer_commission_interlock_ok" in interlock_fn
+    assert "command->brake_release" not in interlock_fn
+
+    steer4_arbiter_block = command_c.split(
+        "ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING", 1
+    )[1].split("#else", 1)[0]
+    assert "out->brake_release = false" in steer4_arbiter_block
+    assert "out->steer_commission_interlock_ok" in steer4_arbiter_block
+    assert "out->steer_commission_steering_neutral" in steer4_arbiter_block
+
+
+def test_v9_commit_a_active_state_allows_nonzero_steering_after_neutral_entry(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    update_fn = motion_c.split("static void update_steer_remote_commissioning_state", 1)[1].split(
+        "static void send_commissioning_sync_if_due", 1
+    )[0]
+    assert "state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE" in update_fn
+    neutral_gate = update_fn.split("state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE", 1)[1].split(
+        "request_selected_steer_nodes_operational", 1
+    )[0]
+    assert "steer_commission_steering_neutral" in neutral_gate
+    assert "steering_command_is_neutral" in neutral_gate
+
+
+def test_v9_commit_a_authorization_clear_resets_session_state(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    clear_fn = motion_c.split("static void clear_steer_commissioning_authorization", 1)[1].split(
+        "static bool commissioning_policy_allows_node5_steer_pdo", 1
+    )[0]
+    for token in [
+        "steer_commission_nmt_sent_mask = 0U",
+        "steer_commission_neutral_since_ms = 0U",
+        "steer_commission_last_sync_ms = 0U",
+        "selected_axis_mask = 0U",
+        "steer_next_group_valid = false",
+        "steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_AUTH",
+    ]:
+        assert token in clear_fn, token

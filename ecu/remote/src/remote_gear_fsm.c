@@ -77,12 +77,6 @@ void remote_gear_fsm_update(remote_gear_fsm_t *fsm,
         fsm->diagnostic = DIAG_REJECT_THROTTLE_NOT_LOW;
         return;
     }
-    if (!preconditions->brake_release_confirmed) {
-        fsm->state = fsm->requested_gear == ECU_GEAR_REQUEST_D ? GEAR_STATE_ARM_D : GEAR_STATE_ARM_R;
-        fsm->active_gear = ECU_GEAR_REQUEST_P;
-        fsm->diagnostic = DIAG_OK;
-        return;
-    }
     fsm->active_gear = fsm->requested_gear;
     fsm->state = drive_state_from_gear(fsm->active_gear);
     fsm->diagnostic = DIAG_OK;

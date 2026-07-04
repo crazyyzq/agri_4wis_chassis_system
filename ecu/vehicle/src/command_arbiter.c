@@ -20,6 +20,8 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->height_rate_mm_s = 0.0f;
     out->track_rate_mm_s = 0.0f;
     out->brake_release = false;
+    out->steer_commission_interlock_ok = false;
+    out->steer_commission_steering_neutral = false;
     out->high_voltage_enable = false;
     out->hydraulic_enable = false;
     out->hydraulic_valve_mask = 0U;
@@ -121,6 +123,23 @@ static bool remote_requests_brake_release(const remote_control_request_t *remote
     return remote->active_gear != ECU_GEAR_REQUEST_P;
 }
 
+#if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
+static bool remote_steer_commissioning_interlock_ok(const remote_control_request_t *remote)
+{
+    return remote != 0 &&
+           remote->link_state == REMOTE_LINK_ONLINE &&
+           remote->arm_state == REMOTE_ARM_READY &&
+           remote->estop_state == REMOTE_ESTOP_CLEAR &&
+           remote->active_gear == ECU_GEAR_REQUEST_P &&
+           remote->throttle_per_mille == 0;
+}
+
+static bool remote_steer_commissioning_steering_neutral(const remote_control_request_t *remote)
+{
+    return remote != 0 && remote->steer_per_mille == 0;
+}
+#endif
+
 static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_command_t *out,
                                                          const remote_control_request_t *remote,
                                                          float steer_deg)
@@ -136,9 +155,11 @@ static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_comma
     out->target_speed_kph = 0.0f;
 #if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
     out->active_gear = ECU_GEAR_REQUEST_P;
-    out->brake_release = remote != 0 &&
-                         remote->active_gear == ECU_GEAR_REQUEST_P &&
-                         remote->throttle_per_mille == 0;
+    out->brake_release = false;
+    out->steer_commission_interlock_ok =
+        remote_steer_commissioning_interlock_ok(remote);
+    out->steer_commission_steering_neutral =
+        remote_steer_commissioning_steering_neutral(remote);
     out->hydraulic_enable = false;
     out->hydraulic_valve_mask = 0U;
     out->height_rate_mm_s = 0.0f;

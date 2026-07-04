@@ -137,9 +137,9 @@ def test_gear_fsm_holds_active_drive_before_shift_entry_checks(root: pathlib.Pat
 
     hold_active_drive_index = gear_c.index("gear_request_matches_active_drive")
     throttle_entry_check_index = gear_c.index("!preconditions->throttle_low")
-    brake_entry_check_index = gear_c.index("!preconditions->brake_release_confirmed")
     assert hold_active_drive_index < throttle_entry_check_index
-    assert hold_active_drive_index < brake_entry_check_index
+    assert "preconditions->brake_release_confirmed" not in gear_c
+    assert "preconditions->brake_applied" not in gear_c
 
 
 def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> None:

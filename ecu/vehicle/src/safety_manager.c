@@ -27,6 +27,8 @@ void safety_manager_apply(const vehicle_safety_snapshot_t *safety,
         command->high_voltage_enable = false;
         command->hydraulic_valve_mask = 0U;
         command->horn_on = false;
+        command->steer_commission_interlock_ok = false;
+        command->steer_commission_steering_neutral = false;
         command->diagnostic = safety->primary_diag;
     }
 

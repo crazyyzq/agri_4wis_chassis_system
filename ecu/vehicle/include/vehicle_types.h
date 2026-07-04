@@ -44,6 +44,8 @@ typedef struct {
      * and not proof that a mechanical brake has physically released.
      */
     bool brake_release;
+    bool steer_commission_interlock_ok;
+    bool steer_commission_steering_neutral;
     bool high_voltage_enable;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
