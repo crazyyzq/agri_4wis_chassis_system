@@ -79,6 +79,8 @@ typedef enum {
     CANOPEN_MASTER_PDO_PHASE_NONE = 0,
     CANOPEN_MASTER_PDO_PHASE_STEER_ARM,
     CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER,
+    CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM,
+    CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER,
     CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY,
     CANOPEN_MASTER_PDO_PHASE_SAFE_STOP
 } canopen_master_pdo_phase_t;
@@ -230,6 +232,10 @@ typedef struct {
     uint8_t active_pdo_in_flight_frames;
     uint8_t active_pdo_arm_complete_frames;
     uint8_t active_pdo_trigger_complete_frames;
+    bool active_pdo_cancel_requested;
+    bool active_pdo_cancel_after_inflight;
+    bool active_pdo_trigger_started;
+    uint8_t active_pdo_trigger_complete_frames_at_cancel;
 } canopen_master_service_t;
 
 extern volatile canopen_master_debug_control_t g_canopen_master_debug_control;
@@ -313,6 +319,8 @@ bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *se
                                               uint32_t group_sequence);
 bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *service,
                                              uint32_t group_sequence);
+bool canopen_master_service_pdo_group_cancelled(const canopen_master_service_t *service,
+                                                uint32_t group_sequence);
 bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
                                              uint32_t group_sequence);
 void canopen_master_service_note_pdo_safety_inhibit(canopen_master_service_t *service);

@@ -276,23 +276,6 @@ bool servo_drive_canopen_set_target_torque(canopen_master_service_t *canopen,
            servo_drive_canopen_send_control_word(canopen, node, control_word);
 }
 
-bool servo_drive_canopen_set_output_state(canopen_master_service_t *canopen,
-                                          const ecu_canopen_node_config_t *node,
-                                          uint16_t output_mask,
-                                          uint16_t active_mask)
-{
-    if (output_mask == 0U) {
-        return true;
-    }
-
-    uint16_t value = active_mask & output_mask;
-    return servo_drive_write_sdo(canopen,
-                                 node,
-                                 ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL,
-                                 2U,
-                                 (int32_t)value);
-}
-
 bool servo_drive_canopen_read_input_states(canopen_master_service_t *canopen,
                                            const ecu_canopen_node_config_t *node,
                                            uint16_t *input_states)

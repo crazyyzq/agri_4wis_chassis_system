@@ -276,10 +276,13 @@
 #define ECU_OFFLINE_BACKOFF_MAX_MS    (5000U)
 
 /* CANopen object indexes used by the BC/BC2 servo adapter.  0x2190 reports
- * drive terminal input states; 0x2194 writes outputs configured for program
- * control, including the brake-release output. */
+ * drive terminal input states.  The ECU production firmware does not write
+ * drive terminal outputs such as 0x2194; servo brake wiring is owned by the
+ * drive internal brake controller.
+ */
 #define ECU_CANOPEN_OBJ_DEVICE_TYPE      (0x1000U)
 #define ECU_CANOPEN_OBJ_ERROR_REGISTER   (0x1001U)
+#define ECU_CANOPEN_OBJ_STORE_PARAMETERS (0x1010U)
 #define ECU_CANOPEN_OBJ_IDENTITY         (0x1018U)
 #define ECU_CANOPEN_OBJ_STATUSWORD       (0x6041U)
 #define ECU_CANOPEN_OBJ_CONTROLWORD      (0x6040U)
@@ -291,7 +294,7 @@
 #define ECU_CANOPEN_OBJ_TARGET_POSITION  (0x607AU)
 #define ECU_CANOPEN_OBJ_TARGET_VELOCITY  (0x60FFU)
 #define ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES (0x2190U)
-#define ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL (0x2194U)
+#define ECU_CANOPEN_OBJ_DENY_PROGRAM_CONTROL_OUTPUT_STATES (0x2194U)
 #define ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM (0x1400U)
 #define ECU_CANOPEN_OBJ_RPDO1_MAPPING    (0x1600U)
 #define ECU_CANOPEN_OBJ_RPDO2_COMM_PARAM (0x1401U)
@@ -318,14 +321,30 @@
 #define ECU_CANOPEN_RPDO_TRANSMISSION_ASYNC      (0xFFU)
 #define ECU_CANOPEN_TPDO_TRANSMISSION_SYNC1      (0x01U)
 
-/* Brake output polarity.
+/* Production SDO writes are disabled by default.
  *
- * The installed servos are mechanically braked by default.  Current field
- * wiring releases the brake when the drive output is low.  Keep both polarity
- * macros in configuration so reversing the drive terminal polarity is a single
- * compile-time change instead of a logic edit in the device layer. */
-#define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)
-#define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (0U)
+ * PDO mapping and drive flash save have already been configured by the CAN
+ * analyzer.  Normal firmware must not use debug/generic SDO writes as a
+ * backdoor for mapping, flash-save, actuator target, controlword, or drive
+ * terminal-output writes.  A future maintenance image may override this only
+ * with a separate physical safety procedure.
+ */
+#ifndef ECU_ENABLE_MAINTENANCE_SDO_WRITES
+#define ECU_ENABLE_MAINTENANCE_SDO_WRITES (0)
+#endif
+
+typedef enum {
+    ECU_BRAKE_ACTUATION_OWNER_SERVO_DRIVE_INTERNAL = 0
+} ecu_brake_actuation_owner_t;
+
+/* Brake ownership.
+ *
+ * Field wiring confirms the brake-release signal is active high, but the
+ * signal is driven by the servo drive internal brake controller.  ECU software
+ * may request CiA-402 operation enable through approved motion commands; it
+ * must not synthesize a local DIO output or 0x2194/OUT1 write for brake
+ * release.
+ */
 #define ECU_BC_SERVO_ENCODER_COUNTS_PER_REV          (10000.0f)
 #define ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM \
     (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV / 0.1f / 60.0f)
@@ -347,7 +366,8 @@
 #define ECU_LIFT_MM_TO_COUNTS                 (100.0f)
 
 /* Local digital outputs stay limited to board-level loads.  Servo brakes are
- * controlled through drive terminal outputs over CANopen, not through PCB DIO.
+ * controlled by the drive internal brake controller, not by PCB DIO and not by
+ * ECU writes to drive output objects.
  */
 #define ECU_DIO_BRAKE_RELEASE_MASK       (0UL)
 #define ECU_DIO_HYDRAULIC_ENABLE_MASK    (1UL << 1)

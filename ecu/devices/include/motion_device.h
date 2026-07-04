@@ -46,6 +46,7 @@ typedef struct {
     int32_t steer_active_group_target_counts[ECU_WHEEL_COUNT];
     int32_t steer_next_group_target_counts[ECU_WHEEL_COUNT];
     bool steer_group_active;
+    bool steer_active_group_node5_only;
     bool steer_next_group_valid;
     bool steer_group_degraded;
     bool steer_normal_pdo_allowed;
@@ -56,8 +57,11 @@ typedef struct {
     bool steer_safe_stop_pending;
     uint32_t steer_group_complete_count;
     uint32_t steer_group_failure_count;
+    bool steer_group_clean_cancelled;
+    bool steer_group_trigger_partial_failure;
+    uint32_t steer_last_clean_cancel_ms;
+    uint32_t steer_last_partial_failure_ms;
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
-    bool drive_brake_release_active[ECU_WHEEL_COUNT];
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];
     bool steer_pdo_configured[ECU_WHEEL_COUNT];
@@ -69,8 +73,8 @@ typedef struct {
     bool steer_latest_target_valid[ECU_WHEEL_COUNT];
     int32_t steer_latest_target_counts[ECU_WHEEL_COUNT];
     bool steer_pending_target[ECU_WHEEL_COUNT];
-    bool steer_realtime_position_valid[ECU_WHEEL_COUNT];
-    int32_t steer_realtime_position_counts[ECU_WHEEL_COUNT];
+    bool steer_last_commanded_position_valid[ECU_WHEEL_COUNT];
+    int32_t steer_last_commanded_position_counts[ECU_WHEEL_COUNT];
     bool steer_last_position_valid[ECU_WHEEL_COUNT];
     int32_t steer_last_position_counts[ECU_WHEEL_COUNT];
     uint32_t steer_last_limit_read_ms[ECU_WHEEL_COUNT];

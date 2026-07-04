@@ -6,6 +6,45 @@
 #include "servo_drive_canopen.h"
 
 #define ECU_STEER_GROUP_PDO_FRAME_COUNT (ECU_WHEEL_COUNT * 2U)
+#define ECU_NODE5_STEER_PDO_FRAME_COUNT (2U)
+
+bool ecu_commissioning_node5_pdo_runtime_authorized(void)
+{
+    /* This runtime authorization is intentionally false in production images.
+     * A Node5-only commissioning image may replace this hook with a physical
+     * safety-confirmed authorization path before any real RPDO is emitted.
+     */
+    return false;
+}
+
+static bool commissioning_policy_allows_node5_steer_pdo(void)
+{
+    return ECU_CANOPEN_COMMISSIONING_POLICY ==
+           ECU_CANOPEN_COMMISSIONING_POLICY_NODE5_STEER_PDO_ONLY;
+}
+
+static bool commissioning_policy_allows_full_steer_pdo(void)
+{
+    return ECU_CANOPEN_COMMISSIONING_POLICY ==
+           ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED;
+}
+
+static bool commissioning_policy_allows_drive_rpdo(void)
+{
+    /* Drive-wheel RPDO output is a later phase.  It must define velocity units,
+     * zero-speed watchdog behavior and brake/enable interlocks before this can
+     * return true.
+     */
+    return false;
+}
+
+static bool commissioning_policy_allows_can3_rpdo(void)
+{
+    /* CAN3 lift/hydraulic RPDO output is owned by the CAN3 task in a later
+     * phase.  Keep it closed while steering commissioning is being corrected.
+     */
+    return false;
+}
 
 static int32_t scaled_float_to_i32(float value, float scale)
 {
@@ -45,9 +84,11 @@ static bool i32_changed_beyond_deadband(int32_t previous,
 
 static bool drive_output_allowed(const vehicle_actuator_command_t *command)
 {
-#if ECU_COMMISSIONING_STEER_ONLY_MODE || \
-    (ECU_CANOPEN_COMMISSIONING_POLICY != ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED)
     (void)command;
+    if (!commissioning_policy_allows_drive_rpdo()) {
+        return false;
+    }
+#if ECU_COMMISSIONING_STEER_ONLY_MODE
     return false;
 #else
     return command->brake_release;
@@ -60,14 +101,6 @@ static bool target_update_interval_elapsed(uint32_t last_update_ms,
 {
     return (uint32_t)(now_ms - last_update_ms) >=
            ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS;
-}
-
-static uint16_t drive_brake_output_value(bool brake_release)
-{
-    bool active_bit = brake_release ?
-                      (ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U) :
-                      (ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT == 0U);
-    return active_bit ? SERVO_DRIVE_OUTPUT_OUT1_MASK : 0U;
 }
 
 static bool send_drive_target_update(canopen_master_service_t *canopen,
@@ -118,21 +151,12 @@ static bool send_drive_command(canopen_master_service_t *canopen,
         bool ok = true;
         bool needs_stop = !state->drive_last_velocity_valid[wheel] ||
                           state->drive_last_velocity_units[wheel] != 0 ||
-                          state->drive_velocity_mode_ready[wheel] ||
-                          state->drive_brake_release_active[wheel];
+                          state->drive_velocity_mode_ready[wheel];
         if (needs_stop) {
             ok = servo_drive_canopen_stop_velocity_mode(canopen, node);
         }
-        if (state->drive_brake_release_active[wheel] || needs_stop) {
-            ok = servo_drive_canopen_set_output_state(
-                     canopen,
-                     node,
-                     SERVO_DRIVE_OUTPUT_OUT1_MASK,
-                     drive_brake_output_value(false)) && ok;
-        }
         if (ok) {
             state->drive_velocity_mode_ready[wheel] = false;
-            state->drive_brake_release_active[wheel] = false;
             state->drive_last_velocity_valid[wheel] = true;
             state->drive_last_velocity_units[wheel] = 0;
         }
@@ -140,16 +164,6 @@ static bool send_drive_command(canopen_master_service_t *canopen,
     }
 
     bool ok = true;
-    if (!state->drive_brake_release_active[wheel]) {
-        ok = servo_drive_canopen_set_output_state(
-                 canopen,
-                 node,
-                 SERVO_DRIVE_OUTPUT_OUT1_MASK,
-                 drive_brake_output_value(true));
-        if (ok) {
-            state->drive_brake_release_active[wheel] = true;
-        }
-    }
 
     if (ok && !state->drive_velocity_mode_ready[wheel]) {
         ok = servo_drive_canopen_prepare_velocity_mode(canopen, node);
@@ -268,7 +282,7 @@ static bool prepare_steer_axis_once(canopen_master_service_t *canopen,
         state->steer_axis_remote_verified[wheel] = false;
         state->steer_position_mode_ready[wheel] = false;
         state->steer_last_position_valid[wheel] = false;
-        state->steer_realtime_position_valid[wheel] = false;
+        state->steer_last_commanded_position_valid[wheel] = false;
         state->steer_realtime_enabled[wheel] = false;
         state->steer_setup_queued_ms[wheel] = 0U;
     }
@@ -299,13 +313,28 @@ static bool send_steer_command(canopen_master_service_t *canopen,
     return ok;
 }
 
-#if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED
 static bool command_source_allows_motion_output(ecu_command_source_t source)
 {
     return source == COMMAND_SOURCE_REMOTE ||
            source == COMMAND_SOURCE_AUTO ||
            source == COMMAND_SOURCE_MAINTENANCE ||
            source == COMMAND_SOURCE_CPU1;
+}
+
+static bool node5_steer_contract_allows(const ecu_hardware_config_t *config,
+                                        const canopen_master_pdo_request_t *request)
+{
+    if (config == 0 || request == 0) {
+        return false;
+    }
+
+    return config->steer_nodes[ECU_WHEEL_LEG1_FRONT_RIGHT].node_id ==
+               ECU_CANOPEN_STEER_FR_NODE_ID &&
+           request->node_id == ECU_CANOPEN_STEER_FR_NODE_ID &&
+           request->cob_id == (uint16_t)(ECU_CANOPEN_RPDO2_BASE +
+                                         ECU_CANOPEN_STEER_FR_NODE_ID) &&
+           request->size == 7U &&
+           request->data[2] == (uint8_t)SERVO_DRIVE_MODE_PROFILE_POSITION;
 }
 
 static bool steer_all_axes_have_remote_evidence(motion_device_state_t *state,
@@ -324,7 +353,6 @@ static bool steer_all_axes_have_remote_evidence(motion_device_state_t *state,
     }
     return true;
 }
-#endif
 
 static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
     motion_device_state_t *state,
@@ -343,12 +371,24 @@ static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
         command->diagnostic == DIAG_REMOTE_ESTOP_CREDIBILITY) {
         return MOTION_STEER_INHIBIT_SBUS_OFFLINE;
     }
-#if ECU_CANOPEN_COMMISSIONING_POLICY != ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED
-    (void)state;
-    (void)canopen;
-    (void)config;
-    return MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED;
-#else
+    if (commissioning_policy_allows_can3_rpdo() ||
+        commissioning_policy_allows_drive_rpdo()) {
+        return MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED;
+    }
+    if (!commissioning_policy_allows_full_steer_pdo() &&
+        !commissioning_policy_allows_node5_steer_pdo()) {
+        (void)state;
+        (void)canopen;
+        (void)config;
+        return MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED;
+    }
+    if (commissioning_policy_allows_node5_steer_pdo() &&
+        !ecu_commissioning_node5_pdo_runtime_authorized()) {
+        (void)state;
+        (void)canopen;
+        (void)config;
+        return MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED;
+    }
     if (!command_source_allows_motion_output(command->source)) {
         return MOTION_STEER_INHIBIT_COMMAND_SOURCE_NOT_AUTHORIZED;
     }
@@ -365,12 +405,12 @@ static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
     (void)canopen;
     (void)config;
 #else
-    if (!steer_all_axes_have_remote_evidence(state, canopen, config)) {
+    if (!commissioning_policy_allows_node5_steer_pdo() &&
+        !steer_all_axes_have_remote_evidence(state, canopen, config)) {
         return MOTION_STEER_INHIBIT_AXIS_NOT_READY;
     }
 #endif
     return MOTION_STEER_INHIBIT_NONE;
-#endif
 }
 
 static bool motion_device_update_steer_safety_gate(
@@ -404,9 +444,6 @@ static bool motion_device_update_steer_safety_gate(
             (void)canopen_master_service_cancel_pdo_group(
                 canopen,
                 state->steer_active_group_sequence);
-            state->steer_group_degraded = true;
-            state->steer_group_active = false;
-            state->steer_active_group_sequence = 0U;
         }
     } else {
         state->steer_safe_stop_pending = false;
@@ -482,6 +519,27 @@ static bool build_steer_rpdo_request(canopen_master_pdo_request_t *request,
                                             phase);
 }
 
+static bool build_node5_steer_rpdo_request(canopen_master_pdo_request_t *request,
+                                           const ecu_hardware_config_t *config,
+                                           uint16_t control_word,
+                                           int32_t target_position_counts,
+                                           uint32_t group_sequence,
+                                           canopen_master_pdo_phase_t phase)
+{
+    if (config == 0) {
+        return false;
+    }
+    if (!build_steer_rpdo_request(request,
+                                  &config->steer_nodes[ECU_WHEEL_LEG1_FRONT_RIGHT],
+                                  control_word,
+                                  target_position_counts,
+                                  group_sequence,
+                                  phase)) {
+        return false;
+    }
+    return node5_steer_contract_allows(config, request);
+}
+
 static int32_t rate_limit_target_counts(int32_t current,
                                         int32_t requested,
                                         uint32_t elapsed_ms)
@@ -544,6 +602,15 @@ static bool all_steer_axes_realtime_ready(motion_device_state_t *state,
                                           const ecu_hardware_config_t *config,
                                           uint32_t now_ms)
 {
+    if (commissioning_policy_allows_node5_steer_pdo()) {
+        return steer_axis_realtime_ready(
+            state,
+            canopen,
+            config->steer_nodes[ECU_WHEEL_LEG1_FRONT_RIGHT].node_id,
+            ECU_WHEEL_LEG1_FRONT_RIGHT,
+            now_ms);
+    }
+
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         if (!steer_axis_realtime_ready(state,
                                        canopen,
@@ -569,8 +636,12 @@ static bool build_steer_group_targets(motion_device_state_t *state,
 
         int32_t requested = state->steer_latest_target_counts[wheel];
         int32_t limited = requested;
-        if (state->steer_realtime_position_valid[wheel]) {
-            limited = rate_limit_target_counts(state->steer_realtime_position_counts[wheel],
+        if (state->steer_last_commanded_position_valid[wheel]) {
+            /* This is command-side smoothing only.  Until TPDO actual-position
+             * decoding is wired in, the ECU must not treat the last submitted
+             * target as measured wheel position.
+             */
+            limited = rate_limit_target_counts(state->steer_last_commanded_position_counts[wheel],
                                                requested,
                                                elapsed_ms);
         }
@@ -597,12 +668,73 @@ static uint32_t next_steer_group_sequence(motion_device_state_t *state)
     return state->steer_group_sequence_counter;
 }
 
+static bool queue_node5_steer_group(canopen_master_service_t *canopen,
+                                    const ecu_hardware_config_t *config,
+                                    motion_device_state_t *state,
+                                    const int32_t targets[ECU_WHEEL_COUNT],
+                                    uint32_t now_ms)
+{
+    if (!ecu_commissioning_node5_pdo_runtime_authorized() ||
+        canopen_master_service_pdo_queue_available(canopen) <
+            ECU_NODE5_STEER_PDO_FRAME_COUNT) {
+        return false;
+    }
+
+    canopen_master_pdo_request_t requests[ECU_NODE5_STEER_PDO_FRAME_COUNT];
+    uint32_t group_sequence = next_steer_group_sequence(state);
+    int32_t target = targets[ECU_WHEEL_LEG1_FRONT_RIGHT];
+
+    if (!build_node5_steer_rpdo_request(
+            &requests[0],
+            config,
+            SERVO_DRIVE_CONTROL_ENABLE_OPERATION,
+            target,
+            group_sequence,
+            CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM) ||
+        !build_node5_steer_rpdo_request(
+            &requests[1],
+            config,
+            SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION,
+            target,
+            group_sequence,
+            CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER)) {
+        return false;
+    }
+
+    if (!canopen_master_service_queue_pdo_batch(
+            canopen,
+            requests,
+            ECU_NODE5_STEER_PDO_FRAME_COUNT)) {
+        state->steer_pdo_tx_error_count[ECU_WHEEL_LEG1_FRONT_RIGHT]++;
+        state->steer_group_failure_count++;
+        return false;
+    }
+
+    state->steer_active_group_sequence = group_sequence;
+    state->steer_active_group_submit_ms = now_ms;
+    memcpy(state->steer_active_group_target_counts,
+           targets,
+           sizeof(state->steer_active_group_target_counts));
+    state->steer_group_active = true;
+    state->steer_active_group_node5_only = true;
+    state->steer_group_degraded = false;
+    return true;
+}
+
 static bool queue_steer_group(canopen_master_service_t *canopen,
                               const ecu_hardware_config_t *config,
                               motion_device_state_t *state,
                               const int32_t targets[ECU_WHEEL_COUNT],
                               uint32_t now_ms)
 {
+    if (commissioning_policy_allows_node5_steer_pdo()) {
+        return queue_node5_steer_group(canopen, config, state, targets, now_ms);
+    }
+
+    if (!commissioning_policy_allows_full_steer_pdo()) {
+        return false;
+    }
+
     if (canopen_master_service_pdo_queue_available(canopen) < ECU_STEER_GROUP_PDO_FRAME_COUNT) {
         return false;
     }
@@ -649,6 +781,7 @@ static bool queue_steer_group(canopen_master_service_t *canopen,
            targets,
            sizeof(state->steer_active_group_target_counts));
     state->steer_group_active = true;
+    state->steer_active_group_node5_only = false;
     state->steer_group_degraded = false;
     return true;
 }
@@ -656,12 +789,14 @@ static bool queue_steer_group(canopen_master_service_t *canopen,
 static void finish_completed_steer_group(motion_device_state_t *state,
                                          uint32_t now_ms)
 {
-    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+    uint32_t wheels_to_update = state->steer_active_group_node5_only ?
+                                1U : ECU_WHEEL_COUNT;
+    for (uint32_t wheel = 0U; wheel < wheels_to_update; ++wheel) {
         int32_t target = state->steer_active_group_target_counts[wheel];
         state->steer_last_position_valid[wheel] = true;
         state->steer_last_position_counts[wheel] = target;
-        state->steer_realtime_position_valid[wheel] = true;
-        state->steer_realtime_position_counts[wheel] = target;
+        state->steer_last_commanded_position_valid[wheel] = true;
+        state->steer_last_commanded_position_counts[wheel] = target;
         state->steer_last_target_update_ms[wheel] = now_ms;
         state->steer_pending_target[wheel] =
             target != state->steer_latest_target_counts[wheel];
@@ -670,14 +805,40 @@ static void finish_completed_steer_group(motion_device_state_t *state,
     state->last_target_update_ms = now_ms;
     state->steer_group_complete_count++;
     state->steer_group_active = false;
+    state->steer_active_group_node5_only = false;
     state->steer_active_group_sequence = 0U;
 }
 
-static void fail_active_steer_group(motion_device_state_t *state)
+static void clean_cancel_active_steer_group(motion_device_state_t *state,
+                                            uint32_t now_ms)
 {
+    state->steer_group_clean_cancelled = true;
+    state->steer_last_clean_cancel_ms = now_ms;
+    state->steer_group_active = false;
+    state->steer_active_group_node5_only = false;
+    state->steer_active_group_sequence = 0U;
+}
+
+static void fail_active_steer_group(motion_device_state_t *state,
+                                    const canopen_master_service_t *canopen,
+                                    uint32_t now_ms)
+{
+    canopen_master_snapshot_t snapshot;
+
+    memset(&snapshot, 0, sizeof(snapshot));
+    canopen_master_service_get_snapshot(canopen, &snapshot);
     state->steer_group_failure_count++;
+    if (snapshot.pdo_trigger_complete_frames > 0U ||
+        snapshot.last_pdo_failed_phase ==
+            (uint8_t)CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER ||
+        snapshot.last_pdo_failed_phase ==
+            (uint8_t)CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER) {
+        state->steer_group_trigger_partial_failure = true;
+        state->steer_last_partial_failure_ms = now_ms;
+    }
     state->steer_group_degraded = true;
     state->steer_group_active = false;
+    state->steer_active_group_node5_only = false;
     state->steer_active_group_sequence = 0U;
 }
 
@@ -739,7 +900,6 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
         state->drive_last_velocity_valid[wheel] = true;
         state->drive_last_velocity_units[wheel] = 0;
         state->drive_velocity_mode_ready[wheel] = false;
-        state->drive_brake_release_active[wheel] = false;
         (void)velocity_units;
         (void)drive_allowed;
 #endif
@@ -782,7 +942,8 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
         return ECU_DEVICE_APPLY_BACKEND_OFFLINE;
     }
 
-#if ECU_CANOPEN_COMMISSIONING_POLICY != ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED
+#if ECU_CANOPEN_COMMISSIONING_POLICY != ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED && \
+    ECU_CANOPEN_COMMISSIONING_POLICY != ECU_CANOPEN_COMMISSIONING_POLICY_NODE5_STEER_PDO_ONLY
     state->steer_normal_pdo_allowed = false;
     state->steer_safety_inhibited = true;
     state->steer_inhibit_reason = MOTION_STEER_INHIBIT_BENCH_MODE_DISABLED;
@@ -800,8 +961,13 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
 
     if (state->steer_group_active) {
         if (canopen_master_service_pdo_group_failed(canopen, state->steer_active_group_sequence)) {
-            fail_active_steer_group(state);
+            fail_active_steer_group(state, canopen, now_ms);
             return ECU_DEVICE_APPLY_REJECTED;
+        }
+        if (canopen_master_service_pdo_group_cancelled(canopen,
+                                                       state->steer_active_group_sequence)) {
+            clean_cancel_active_steer_group(state, now_ms);
+            return ECU_DEVICE_APPLY_OK;
         }
         if (canopen_master_service_pdo_group_pending(canopen, state->steer_active_group_sequence)) {
             if ((uint32_t)(now_ms - state->steer_realtime_last_flush_ms) >=

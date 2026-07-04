@@ -95,11 +95,24 @@ def test_contract_table_contains_node1_to_node13_and_fixed_bus_roles(root: pathl
         ("ECU_CANOPEN_LIFT_RR_NODE_ID", "3U"),
     ]:
         pattern = (
-            rf"\{{ CANOPEN_MASTER_BUS_CAN3,\s*{node_token},\s*{leg_index},\s*"
+            rf"CONTRACT_ENTRY\(CANOPEN_MASTER_BUS_CAN3,\s*{node_token},\s*{leg_index},\s*"
             r"CANOPEN_AXIS_ROLE_LIFT_POSITION"
         )
         assert re.search(pattern, source), node_token
     assert "CANOPEN_PDO_CONTRACT_PUMP_LEG_INDEX" in source
+
+
+def test_contract_table_is_compile_time_immutable(root: pathlib.Path) -> None:
+    source = read(root, "ecu/drivers/canopen/src/canopen_pdo_profile.c")
+
+    assert "static const canopen_node_pdo_contract_t k_contract_table" in source
+    for forbidden in [
+        "contract_seed_t",
+        "k_contract_table_ready",
+        "ensure_contract_table",
+        "fill_contract_from_seed",
+    ]:
+        assert forbidden not in source, forbidden
 
 
 def test_contract_builders_use_frozen_standard_wire_format(root: pathlib.Path) -> None:
@@ -175,3 +188,131 @@ def test_default_policy_still_blocks_nmt_sync_and_rpdo_output(root: pathlib.Path
         "bool canopen_master_service_process", 1
     )[0]
     assert "CO_NMT_sendCommand" not in init_block
+
+
+def test_brake_output_and_0x2194_runtime_path_are_removed(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    servo_h = read(root, "ecu/devices/include/servo_drive_canopen.h")
+    servo_c = read(root, "ecu/devices/src/servo_drive_canopen.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    assert "ECU_BRAKE_ACTUATION_OWNER_SERVO_DRIVE_INTERNAL" in config_h
+    assert "ECU_CANOPEN_OBJ_DENY_PROGRAM_CONTROL_OUTPUT_STATES (0x2194U)" in config_h
+
+    for text in [config_h, servo_h, servo_c, motion_c, lift_c]:
+        for forbidden in [
+            "ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL",
+            "ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL",
+            "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT",
+            "drive_brake_output_value",
+            "drive_brake_release_active",
+            "SERVO_DRIVE_OUTPUT_OUT1_MASK",
+            "servo_drive_canopen_set_output_state",
+        ]:
+            assert forbidden not in text, forbidden
+
+    assert "brake_release_confirmed =\n        s_runtime.executor.last_command.brake_release" not in tasks_c
+    assert "brake_release_confirmed = false" in tasks_c
+    assert "zero_speed_confirmed = false" in tasks_c
+
+
+def test_production_debug_sdo_writes_are_default_denied(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+
+    assert "#define ECU_ENABLE_MAINTENANCE_SDO_WRITES (0)" in config_h
+    assert "canopen_master_sdo_write_allowed" in service_c
+    assert "canopen_master_sdo_write_index_is_denylisted" in service_c
+    for token in [
+        "ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_RPDO1_MAPPING",
+        "ECU_CANOPEN_OBJ_RPDO2_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_RPDO2_MAPPING",
+        "ECU_CANOPEN_OBJ_TPDO1_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_TPDO1_MAPPING",
+        "ECU_CANOPEN_OBJ_TPDO2_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_TPDO2_MAPPING",
+        "ECU_CANOPEN_OBJ_STORE_PARAMETERS",
+        "ECU_CANOPEN_OBJ_DENY_PROGRAM_CONTROL_OUTPUT_STATES",
+    ]:
+        assert token in service_c, token
+    assert "#if ECU_ENABLE_MAINTENANCE_SDO_WRITES" in service_c
+    assert "return false;" in service_c.split("#else", 1)[1]
+
+
+def test_node5_only_policy_uses_strict_0f_to_1f_rpdo_builder(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+
+    for token in [
+        "commissioning_policy_allows_node5_steer_pdo",
+        "commissioning_policy_allows_full_steer_pdo",
+        "commissioning_policy_allows_drive_rpdo",
+        "commissioning_policy_allows_can3_rpdo",
+        "ecu_commissioning_node5_pdo_runtime_authorized",
+        "return false;",
+        "node5_steer_contract_allows",
+        "ECU_CANOPEN_STEER_FR_NODE_ID",
+        "ECU_CANOPEN_RPDO2_BASE +",
+        "request->size == 7U",
+        "SERVO_DRIVE_MODE_PROFILE_POSITION",
+        "SERVO_DRIVE_CONTROL_ENABLE_OPERATION",
+        "SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION",
+    ]:
+        assert token in motion_c, token
+
+    node5_queue = motion_c.split("if (commissioning_policy_allows_node5_steer_pdo())", 1)[1].split(
+        "if (!commissioning_policy_allows_full_steer_pdo())", 1
+    )[0]
+    assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" not in node5_queue
+    assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" not in node5_queue
+    assert "CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM" in service_h
+    assert "CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER" in service_h
+
+
+def test_pdo_cancel_classifies_clean_cancel_and_partial_trigger_failure(root: pathlib.Path) -> None:
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    for token in [
+        "active_pdo_cancel_requested",
+        "active_pdo_cancel_after_inflight",
+        "active_pdo_trigger_started",
+        "active_pdo_trigger_complete_frames_at_cancel",
+    ]:
+        assert token in service_h and token in service_c, token
+
+    assert "pdo_tail_matches(service, &service->pdo_in_flight_request)" in service_c
+    assert "preserved_in_flight_tail" in service_c
+    assert "canopen_master_service_pdo_group_cancelled" in service_h
+    assert "CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED" in service_c
+    assert "CANOPEN_MASTER_PDO_GROUP_STATE_FAILED" in service_c
+
+    for token in [
+        "steer_group_clean_cancelled",
+        "steer_group_trigger_partial_failure",
+        "steer_last_clean_cancel_ms",
+        "steer_last_partial_failure_ms",
+    ]:
+        assert token in motion_h and token in motion_c, token
+
+    assert "clean_cancel_active_steer_group" in motion_c
+    assert "snapshot.pdo_trigger_complete_frames > 0U" in motion_c
+    assert "CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER" in motion_c
+
+
+def test_commanded_position_is_not_named_actual_or_realtime_feedback(root: pathlib.Path) -> None:
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "steer_last_commanded_position_valid" in motion_h
+    assert "steer_last_commanded_position_counts" in motion_h
+    assert "steer_last_commanded_position_valid" in motion_c
+    assert "steer_last_commanded_position_counts" in motion_c
+    assert "steer_realtime_position_valid" not in motion_h + motion_c
+    assert "steer_realtime_position_counts" not in motion_h + motion_c
+    assert "last submitted\n             * target as measured wheel position" in motion_c

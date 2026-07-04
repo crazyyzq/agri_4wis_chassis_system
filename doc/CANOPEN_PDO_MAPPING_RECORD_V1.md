@@ -139,3 +139,19 @@ byte6..7 = 221C actual current, signed int16 little-endian
 CPU0 production firmware does not configure, verify, or save PDO mapping. It
 must not write the mapping objects `0x1400`, `0x1600`, `0x1401`, `0x1601`,
 `0x1800`, `0x1A00`, `0x1801`, or `0x1A01` during normal boot or runtime.
+
+## Brake ownership
+
+Brake-release polarity on the installed servo drives is active high, but the
+brake output owner is the servo drive internal brake controller. ECU firmware
+does not drive brake release through local DIO and does not write the drive
+program-output object `0x2194` / OUT bits during normal runtime.
+
+`vehicle_actuator_command_t.brake_release` remains only a high-level permission
+to request a motion-capable CiA-402 state. It is not a brake wire level and it
+is not `brake_release_confirmed`. Without an independent brake feedback input,
+`brake_release_confirmed` must remain unavailable/false.
+
+The normal runtime contract is therefore limited to the frozen RPDO/TPDO table
+above plus read-only diagnosis. Mapping writes, flash save `0x1010`, and
+program-output writes such as `0x2194` remain denied by default.

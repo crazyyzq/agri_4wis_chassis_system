@@ -996,25 +996,30 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
 
     for token in [
         "ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES",
-        "ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL",
-        "ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL",
-        "SERVO_DRIVE_OUTPUT_OUT1_MASK",
-        "SERVO_DRIVE_OUTPUT_OUT4_MASK",
         "SERVO_DRIVE_INPUT_IN2_MASK",
         "SERVO_DRIVE_INPUT_IN3_MASK",
         "SERVO_DRIVE_INPUT_IN7_MASK",
         "SERVO_DRIVE_INPUT_IN8_MASK",
-        "servo_drive_canopen_set_output_state",
         "servo_drive_canopen_read_input_states",
     ]:
         assert token in config_h or token in servo_h or token in servo_c, token
 
-    assert "servo_drive_canopen_set_output_state" in motion_c
-    assert "SERVO_DRIVE_OUTPUT_OUT1_MASK" in motion_c
+    for forbidden in [
+        "ECU_CANOPEN_OBJ_OUTPUT_STATES_PROGRAM_CONTROL",
+        "ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL",
+        "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT",
+        "SERVO_DRIVE_OUTPUT_OUT1_MASK",
+        "SERVO_DRIVE_OUTPUT_OUT4_MASK",
+        "servo_drive_canopen_set_output_state",
+    ]:
+        assert forbidden not in config_h
+        assert forbidden not in servo_h
+        assert forbidden not in servo_c
+        assert forbidden not in motion_c
+
     assert "servo_drive_canopen_read_input_states" in motion_c
     assert "SERVO_DRIVE_INPUT_IN2_MASK" in motion_c
     assert "SERVO_DRIVE_INPUT_IN3_MASK" in motion_c
-    assert "servo_drive_canopen_set_output_state" not in lift_c
     assert "BC2_AXIS_OUTPUT_BRAKE_MASK" not in lift_c
     assert "BC2_AXIS_INPUT_POSITIVE_LIMIT_MASK" not in lift_c
     assert "BC2_AXIS_INPUT_NEGATIVE_LIMIT_MASK" not in lift_c
@@ -1030,22 +1035,26 @@ def test_vehicle_canopen_node_mapping_matches_machine_interfaces(root: pathlib.P
         "BC2 的 SW 拨码只设置 A 轴节点号，B 轴节点号等于 A 轴节点号加 1",
         "A 轴电机的抱闸是控制信号 I/O 端子 J3 的引脚 8 OUT1",
         "B 轴电机的抱闸是引脚 17 OUT4",
-        "B 轴节点访问 `0x2194` 时仍写轴内 OUT1 对应的 bit0",
-        "0x2194",
+        "ECU 不得通过 PCB DIO、`0x2194` 或 OUT1 直接控制抱闸",
+        "不得写 `0x2194` 或驱动器 OUT 位来控制抱闸",
         "0x2190",
     ]:
         assert phrase in requirements, phrase
 
 
-def test_servo_brake_release_is_low_level_active(root: pathlib.Path) -> None:
+def test_servo_brake_release_is_drive_internal_owner(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     motion_c = read(root, "ecu/devices/src/motion_device.c")
+    servo_h = read(root, "ecu/devices/include/servo_drive_canopen.h")
+    servo_c = read(root, "ecu/devices/src/servo_drive_canopen.c")
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
-    assert "#define ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL (0U)" in config_h
-    assert "#define ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT  (0U)" in config_h
-    assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" in motion_c
-    assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT != 0U" not in lift_c
+    assert "ECU_BRAKE_ACTUATION_OWNER_SERVO_DRIVE_INTERNAL" in config_h
+    assert "ECU_ENABLE_MAINTENANCE_SDO_WRITES (0)" in config_h
+    for text in [config_h, motion_c, servo_h, servo_c, lift_c]:
+        assert "ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL" not in text
+        assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT" not in text
+        assert "servo_drive_canopen_set_output_state" not in text
     assert "CAN3 servo outputs are disabled in the V7 static-contract commit" in lift_c
 
 

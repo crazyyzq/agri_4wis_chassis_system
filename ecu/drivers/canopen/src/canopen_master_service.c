@@ -209,6 +209,34 @@ static bool valid_sdo_size(uint8_t size)
     return size == 1U || size == 2U || size == 4U;
 }
 
+static bool canopen_master_sdo_write_index_is_denylisted(uint16_t index)
+{
+    return index == ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM ||
+           index == ECU_CANOPEN_OBJ_RPDO1_MAPPING ||
+           index == ECU_CANOPEN_OBJ_RPDO2_COMM_PARAM ||
+           index == ECU_CANOPEN_OBJ_RPDO2_MAPPING ||
+           index == ECU_CANOPEN_OBJ_TPDO1_COMM_PARAM ||
+           index == ECU_CANOPEN_OBJ_TPDO1_MAPPING ||
+           index == ECU_CANOPEN_OBJ_TPDO2_COMM_PARAM ||
+           index == ECU_CANOPEN_OBJ_TPDO2_MAPPING ||
+           index == ECU_CANOPEN_OBJ_STORE_PARAMETERS ||
+           index == ECU_CANOPEN_OBJ_DENY_PROGRAM_CONTROL_OUTPUT_STATES;
+}
+
+static bool canopen_master_sdo_write_allowed(uint16_t index)
+{
+    if (canopen_master_sdo_write_index_is_denylisted(index)) {
+        return false;
+    }
+
+#if ECU_ENABLE_MAINTENANCE_SDO_WRITES
+    return true;
+#else
+    (void)index;
+    return false;
+#endif
+}
+
 static bool canopen_master_sdo_write_requires_order(uint16_t index)
 {
     /* CiA 402 control-word writes encode state transitions.  A sequence such as
@@ -299,7 +327,23 @@ static void begin_pdo_group(canopen_master_service_t *service,
     service->active_pdo_in_flight_frames = 0U;
     service->active_pdo_arm_complete_frames = 0U;
     service->active_pdo_trigger_complete_frames = 0U;
+    service->active_pdo_cancel_requested = false;
+    service->active_pdo_cancel_after_inflight = false;
+    service->active_pdo_trigger_started = false;
+    service->active_pdo_trigger_complete_frames_at_cancel = 0U;
     sync_pdo_group_snapshot(service);
+}
+
+static bool pdo_phase_is_arm(canopen_master_pdo_phase_t phase)
+{
+    return phase == CANOPEN_MASTER_PDO_PHASE_STEER_ARM ||
+           phase == CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM;
+}
+
+static bool pdo_phase_is_trigger(canopen_master_pdo_phase_t phase)
+{
+    return phase == CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER ||
+           phase == CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER;
 }
 
 static bool can_accept_pdo_group(const canopen_master_service_t *service,
@@ -436,6 +480,16 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
 
     if (service == NULL || !service->snapshot.initialized ||
         node_id == 0U || index == 0U || !valid_sdo_size(size)) {
+        return false;
+    }
+    if (!canopen_master_sdo_write_allowed(index)) {
+        service->snapshot.dropped_command_count++;
+        service->snapshot.command_error_count++;
+        service->snapshot.last_download_index = index;
+        service->snapshot.last_download_subindex = subindex;
+        service->snapshot.last_download_size = size;
+        service->snapshot.last_download_value = value;
+        service->snapshot.last_error = -1;
         return false;
     }
 
@@ -721,6 +775,14 @@ bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *ser
            service->snapshot.last_pdo_failed_group_sequence == group_sequence;
 }
 
+bool canopen_master_service_pdo_group_cancelled(const canopen_master_service_t *service,
+                                                uint32_t group_sequence)
+{
+    return service != NULL && group_sequence != 0U &&
+           service->active_pdo_group_sequence == group_sequence &&
+           service->active_pdo_group_state == CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED;
+}
+
 bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
                                              uint32_t group_sequence)
 {
@@ -729,15 +791,24 @@ bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
     }
 
     taskENTER_CRITICAL();
+    if (service->active_pdo_group_sequence == group_sequence) {
+        bool trigger_in_flight = service->pdo_in_flight &&
+            service->pdo_in_flight_request.group_sequence == group_sequence &&
+            pdo_phase_is_trigger(service->pdo_in_flight_request.phase);
+        service->active_pdo_cancel_requested = true;
+        service->active_pdo_cancel_after_inflight =
+            service->pdo_in_flight &&
+            service->pdo_in_flight_request.group_sequence == group_sequence;
+        service->active_pdo_trigger_started =
+            service->active_pdo_trigger_complete_frames > 0U || trigger_in_flight;
+        service->active_pdo_trigger_complete_frames_at_cancel =
+            service->active_pdo_trigger_complete_frames;
+    }
     cancel_queued_pdo_group(service, group_sequence);
     if (service->active_pdo_group_sequence == group_sequence &&
         !service->pdo_in_flight) {
         service->active_pdo_group_state = CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED;
         service->active_pdo_in_flight_frames = 0U;
-        service->snapshot.last_pdo_failed_group_sequence = group_sequence;
-        service->snapshot.last_pdo_failed_group_id = group_sequence;
-        service->snapshot.last_pdo_failed_reason =
-            (uint8_t)CANOPEN_MASTER_PDO_FAIL_GROUP_CANCELLED;
         sync_pdo_group_snapshot(service);
     }
     taskEXIT_CRITICAL();
@@ -843,10 +914,25 @@ static void cancel_queued_pdo_group(canopen_master_service_t *service,
     uint8_t old_count = service->pdo_queue_count;
     uint8_t write = old_tail;
     uint8_t kept = 0U;
+    bool preserved_in_flight_tail = false;
 
     for (uint8_t i = 0U; i < old_count; ++i) {
         uint8_t read = (uint8_t)((old_tail + i) % CANOPEN_MASTER_PDO_QUEUE_CAPACITY);
         if (service->pdo_queue[read].group_sequence == group_sequence) {
+            if (!preserved_in_flight_tail &&
+                service->pdo_in_flight &&
+                pdo_tail_matches(service, &service->pdo_in_flight_request) &&
+                read == old_tail) {
+                preserved_in_flight_tail = true;
+            } else {
+                service->snapshot.pdo_dropped_count++;
+                continue;
+            }
+        }
+
+        if (service->pdo_queue[read].group_sequence == group_sequence &&
+            preserved_in_flight_tail &&
+            read != old_tail) {
             service->snapshot.pdo_dropped_count++;
             continue;
         }
@@ -886,10 +972,15 @@ static void fail_active_pdo_group(canopen_master_service_t *service,
         canopen_master_pdo_fail_reason_t reason =
             error == -ETIMEDOUT ? CANOPEN_MASTER_PDO_FAIL_TX_TIMEOUT :
             CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR;
+        service->active_pdo_trigger_started =
+            service->active_pdo_trigger_started ||
+            service->active_pdo_trigger_complete_frames > 0U ||
+            pdo_phase_is_trigger(request->phase);
         note_pdo_failure(service, request, error, reason, now_ms);
     }
 
     taskENTER_CRITICAL();
+    service->pdo_in_flight = false;
     cancel_queued_pdo_group(service, group_sequence);
     taskEXIT_CRITICAL();
 
@@ -931,10 +1022,11 @@ static void complete_in_flight_pdo(canopen_master_service_t *service,
     service->pdo_in_flight = false;
     service->active_pdo_in_flight_frames = 0U;
     service->active_pdo_tx_complete_frames++;
-    if (request.phase == CANOPEN_MASTER_PDO_PHASE_STEER_ARM) {
+    if (pdo_phase_is_arm(request.phase)) {
         service->active_pdo_arm_complete_frames++;
-    } else if (request.phase == CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER) {
+    } else if (pdo_phase_is_trigger(request.phase)) {
         service->active_pdo_trigger_complete_frames++;
+        service->active_pdo_trigger_started = true;
     }
 
     service->snapshot.pdo_tx_count++;
@@ -946,6 +1038,29 @@ static void complete_in_flight_pdo(canopen_master_service_t *service,
     service->snapshot.last_pdo_current_error = 0;
     service->snapshot.last_pdo_error = 0;
     service->snapshot.last_error = 0;
+
+    if (service->active_pdo_group_sequence == request.group_sequence &&
+        service->active_pdo_cancel_requested) {
+        bool trigger_was_started =
+            service->active_pdo_trigger_started ||
+            service->active_pdo_trigger_complete_frames_at_cancel > 0U;
+        service->active_pdo_cancel_after_inflight = false;
+        if (trigger_was_started) {
+            note_pdo_failure(service,
+                             &request,
+                             -1,
+                             CANOPEN_MASTER_PDO_FAIL_GROUP_CANCELLED,
+                             now_ms);
+            service->active_pdo_failed_frames++;
+            service->active_pdo_group_state =
+                CANOPEN_MASTER_PDO_GROUP_STATE_FAILED;
+        } else {
+            service->active_pdo_group_state =
+                CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED;
+        }
+        sync_pdo_group_snapshot(service);
+        return;
+    }
 
     if (service->active_pdo_group_sequence == request.group_sequence &&
         service->active_pdo_failed_frames == 0U &&
@@ -1023,11 +1138,14 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
         return false;
     }
 
-    if (request.phase == CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER &&
-        service->active_pdo_expected_frames == (ECU_WHEEL_COUNT * 2U) &&
-        service->active_pdo_arm_complete_frames < ECU_WHEEL_COUNT) {
-        fail_active_pdo_group(service, &request, -EIO, now_ms);
-        return false;
+    if (pdo_phase_is_trigger(request.phase)) {
+        uint8_t required_arms =
+            service->active_pdo_expected_frames == (ECU_WHEEL_COUNT * 2U) ?
+            ECU_WHEEL_COUNT : 1U;
+        if (service->active_pdo_arm_complete_frames < required_arms) {
+            fail_active_pdo_group(service, &request, -EIO, now_ms);
+            return false;
+        }
     }
 
     struct can_frame frame;
@@ -1045,9 +1163,12 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
         service->active_pdo_submitted_frames++;
         service->active_pdo_in_flight_frames = 1U;
         service->active_pdo_group_state =
-            request.phase == CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER ?
+            pdo_phase_is_trigger(request.phase) ?
             CANOPEN_MASTER_PDO_GROUP_STATE_TRIGGER_IN_FLIGHT :
             CANOPEN_MASTER_PDO_GROUP_STATE_ARM_IN_FLIGHT;
+        if (pdo_phase_is_trigger(request.phase)) {
+            service->active_pdo_trigger_started = true;
+        }
         service->snapshot.last_pdo_current_error = 0;
         service->snapshot.last_pdo_error = 0;
         service->snapshot.last_error = 0;

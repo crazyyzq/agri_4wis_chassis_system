@@ -99,20 +99,19 @@ static bool remote_requests_brake_release(const remote_control_request_t *remote
 
     /* D/R arming is a two-step sequence.  The gear FSM first enters ARM_D or
      * ARM_R while the active gear is still P and speed remains zero.  During
-     * this arming state the command layer must release the drive brakes so the
-     * next remote cycle can confirm brake release and allow the gear FSM to
-     * enter DRIVE_D/DRIVE_R.  Without this explicit arming request, active_gear
-     * stays P, brake_release stays false, and the vehicle deadlocks in ARM_*.
+     * this arming state the command layer may request drive motion enable, but
+     * this request is not a physical brake-release confirmation.  Current
+     * firmware keeps the confirmation unavailable until independent feedback is
+     * integrated.
      */
     if (remote->gear_state == GEAR_STATE_ARM_D ||
         remote->gear_state == GEAR_STATE_ARM_R) {
         return true;
     }
 
-    /* Track-width adjustment has the same handshake shape: the adjust FSM
-     * enters TRACK_PREPARE and waits for brake_release_confirmed before it can
-     * enter TRACK_ACTIVE.  Request the release during prepare, otherwise the
-     * FSM waits for feedback from an output that was never commanded.
+    /* Track-width adjustment has the same handshake shape.  Requesting motion
+     * enable during prepare is only intent; the FSM must not treat it as
+     * measured brake feedback.
      */
     if (remote->adjust_state == ADJUST_STATE_TRACK_PREPARE ||
         remote->adjust_state == ADJUST_STATE_TRACK_ACTIVE) {

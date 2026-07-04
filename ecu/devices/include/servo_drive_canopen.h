@@ -31,13 +31,6 @@
 #define SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER (0x003FU)
 #define SERVO_DRIVE_CONTROL_QUICK_STOP        (0x0002U)
 
-#define SERVO_DRIVE_OUTPUT_OUT1_MASK          (1U << 0)
-#define SERVO_DRIVE_OUTPUT_OUT2_MASK          (1U << 1)
-#define SERVO_DRIVE_OUTPUT_OUT3_MASK          (1U << 2)
-#define SERVO_DRIVE_OUTPUT_OUT4_MASK          (1U << 3)
-#define SERVO_DRIVE_OUTPUT_OUT5_MASK          (1U << 4)
-#define SERVO_DRIVE_OUTPUT_OUT6_MASK          (1U << 5)
-
 #define SERVO_DRIVE_INPUT_IN1_MASK            (1U << 0)
 #define SERVO_DRIVE_INPUT_IN2_MASK            (1U << 1)
 #define SERVO_DRIVE_INPUT_IN3_MASK            (1U << 2)
@@ -153,16 +146,6 @@ bool servo_drive_canopen_set_target_torque(canopen_master_service_t *canopen,
                                            const ecu_canopen_node_config_t *node,
                                            uint16_t control_word,
                                            int16_t target_torque_raw);
-
-/* Queue a program-controlled output-state write to object 0x2194.
- *
- * output_mask selects the OUT bits that are owned by this command.
- * active_mask is the 0x2194 bit value to write for those outputs.
- */
-bool servo_drive_canopen_set_output_state(canopen_master_service_t *canopen,
-                                          const ecu_canopen_node_config_t *node,
-                                          uint16_t output_mask,
-                                          uint16_t active_mask);
 
 /* Request object 0x2190 and return the latest completed value when available.
  *

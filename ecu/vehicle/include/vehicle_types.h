@@ -39,6 +39,10 @@ typedef struct {
     float target_height_mm;
     float height_rate_mm_s;
     float track_rate_mm_s;
+    /* High-level permission to request a servo drive into a motion-capable
+     * CiA-402 state.  This is not a PCB output level, not a 0x2194/OUT bit,
+     * and not proof that a mechanical brake has physically released.
+     */
     bool brake_release;
     bool high_voltage_enable;
     bool hydraulic_enable;

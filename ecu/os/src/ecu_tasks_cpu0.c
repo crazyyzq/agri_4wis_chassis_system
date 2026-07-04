@@ -156,8 +156,8 @@ void ecu_task_runtime_init(uint32_t now_ms)
     status_led_service_init(&s_runtime.status_led, now_ms);
 
     s_runtime.safety_snapshot.brake_release_allowed = false;
-    s_runtime.safety_snapshot.zero_speed_confirmed = true;
-    s_runtime.hardware_feedback.zero_speed_confirmed = true;
+    s_runtime.safety_snapshot.zero_speed_confirmed = false;
+    s_runtime.hardware_feedback.zero_speed_confirmed = false;
     s_runtime.hardware_feedback.hydraulic_stopped = true;
     s_runtime.safety_snapshot.primary_diag = DIAG_OK;
     s_runtime.initialized = true;
@@ -200,7 +200,10 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
     out->estop_latched = s_runtime.safety_snapshot.estop_latched;
     out->a_class_fault = s_runtime.safety_snapshot.a_class_fault;
     out->zero_speed = s_runtime.hardware_feedback.zero_speed_confirmed;
-    out->brake_applied = !s_runtime.executor.last_command.brake_release;
+    /* No independent brake-applied input exists on the current ECU wiring.
+     * Do not derive mechanical brake state from the last requested command.
+     */
+    out->brake_applied = false;
     out->brake_release_confirmed = s_runtime.hardware_feedback.brake_release_confirmed;
     out->throttle_low = input->throttle == REMOTE_POS_LOW;
     out->steering_neutral = input->steering == REMOTE_POS_CENTER;
@@ -257,10 +260,12 @@ static void refresh_lift_hydraulic_feedback(void)
 
 static void refresh_local_io_feedback(void)
 {
-    s_runtime.hardware_feedback.brake_release_confirmed =
-        s_runtime.executor.last_command.brake_release;
-    s_runtime.hardware_feedback.zero_speed_confirmed =
-        s_runtime.final_command.target_speed_kph == 0.0f;
+    /* These are physical/observed facts, not command echoes.  Until TPDO
+     * actual velocity and independent brake feedback are integrated, keep them
+     * unavailable instead of falsely confirming a safe mechanical state.
+     */
+    s_runtime.hardware_feedback.brake_release_confirmed = false;
+    s_runtime.hardware_feedback.zero_speed_confirmed = false;
 }
 
 static int32_t float_to_centi(float value)

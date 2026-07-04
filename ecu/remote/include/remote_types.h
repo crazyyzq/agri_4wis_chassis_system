@@ -107,9 +107,9 @@ typedef struct {
     bool arm_ready;
     bool estop_latched;
     bool a_class_fault;
-    bool zero_speed;
-    bool brake_applied;
-    bool brake_release_confirmed;
+    bool zero_speed;                /* Observed zero speed; false when unavailable. */
+    bool brake_applied;             /* Independent brake-applied feedback only. */
+    bool brake_release_confirmed;   /* Independent brake-release feedback only. */
     bool throttle_low;
     bool steering_neutral;
     bool adjustment_active;
