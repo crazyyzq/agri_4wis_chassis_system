@@ -73,6 +73,10 @@ typedef struct {
     uint8_t steer_commission_axis_mask;
     uint8_t steer_commission_nmt_sent_mask;
     uint32_t steer_commission_authorization_clear_count;
+    bool steer_commission_post_command_tpdo_pending;
+    uint8_t steer_commission_post_command_axis_mask;
+    uint8_t steer_commission_post_command_missing_mask;
+    uint32_t steer_commission_post_command_timeout_count;
 } vehicle_executor_state_t;
 
 #endif /* VEHICLE_TYPES_H */

@@ -57,6 +57,14 @@
 #define ECU_ENABLE_DEBUG_MONITOR         (1)
 #endif
 
+#ifndef ECU_BUILD_PROFILE_TEXT
+#define ECU_BUILD_PROFILE_TEXT           "safe"
+#endif
+
+#ifndef ECU_BUILD_PROFILE_STEER4_REMOTE
+#define ECU_BUILD_PROFILE_STEER4_REMOTE  (0)
+#endif
+
 #ifndef ECU_DEBUG_MONITOR_PERIOD_MS
 #define ECU_DEBUG_MONITOR_PERIOD_MS      (500U)
 #endif
@@ -255,6 +263,7 @@
 #define ECU_STEER_REMOTE_COMMISSION_TRIGGER_THRESHOLD_COUNTS (5000)
 #define ECU_STEER_REMOTE_COMMISSION_NEUTRAL_MS              (300U)
 #define ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS     (250U)
+#define ECU_STEER_REMOTE_COMMISSION_POST_COMMAND_TPDO_TIMEOUT_MS (250U)
 /* Analyzer-only PDO capture switch.  Default is disabled because real drives
  * have not yet confirmed their RPDO mapping/readback.  Setting this to 1 is
  * only for a bounded CAN analyzer capture on an unpopulated actuator bus; it is
@@ -277,7 +286,9 @@
  * and tested, but force walking motors to zero/braked while steering is being
  * tuned on the real vehicle.  Set to 0 after steering response is verified.
  */
+#ifndef ECU_COMMISSIONING_STEER_ONLY_MODE
 #define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)
+#endif
 
 /* Shared offline retry backoff for no-device bench bring-up.  Missing BMS,
  * CANopen nodes or Modbus devices must stay diagnostic-visible without causing
@@ -491,6 +502,17 @@ typedef struct {
     int32_t maximum_position_counts;
     float commissioning_max_abs_deg;
 } steer_axis_calibration_t;
+
+#define ECU_STEER_CALIBRATION_OVERRIDE_MAGIC (0x53544341UL)
+
+typedef struct {
+    uint32_t magic;
+    uint32_t sequence;
+    bool enable;
+    steer_axis_calibration_t axis[ECU_WHEEL_COUNT];
+} ecu_steer_calibration_override_t;
+
+extern volatile ecu_steer_calibration_override_t g_ecu_steer_calibration_override;
 
 typedef struct {
     uint16_t low_max;

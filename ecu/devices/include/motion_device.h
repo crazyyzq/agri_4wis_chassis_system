@@ -38,6 +38,7 @@ typedef enum {
     STEER_REMOTE_COMMISSION_TPDO_MONITOR,
     STEER_REMOTE_COMMISSION_AXIS_READY,
     STEER_REMOTE_COMMISSION_ACTIVE,
+    STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO,
     STEER_REMOTE_COMMISSION_FAULT
 } steer_remote_commission_state_t;
 
@@ -78,6 +79,14 @@ typedef struct {
     uint32_t steer_commission_last_sync_ms;
     uint32_t steer_commission_authorization_clear_count;
     uint8_t steer_commission_nmt_sent_mask;
+    bool steer_commission_post_command_tpdo_pending;
+    uint8_t steer_commission_post_command_axis_mask;
+    uint8_t steer_commission_post_command_missing_mask;
+    uint32_t steer_commission_post_command_start_ms;
+    uint32_t steer_commission_last_post_command_timeout_ms;
+    uint32_t steer_commission_post_command_timeout_count;
+    uint32_t steer_commission_tpdo0_count_before[ECU_WHEEL_COUNT];
+    uint32_t steer_commission_tpdo1_count_before[ECU_WHEEL_COUNT];
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];
@@ -119,6 +128,20 @@ bool steer_commissioning_build_targets(
     uint8_t enabled_axis_mask,
     float remote_steer_deg,
     int32_t out_target_counts[ECU_WHEEL_COUNT]);
+
+/* Read the effective steering commissioning calibration.
+ *
+ * Static configuration is fail-closed by default.  A field engineer may write
+ * g_ecu_steer_calibration_override through J-Link RAM watch/memory access for
+ * a RAM-only commissioning session.  The override is never saved to flash and
+ * is accepted only when magic, enable, sequence stability and selected-axis
+ * limits are valid.
+ */
+bool motion_device_get_effective_steer_calibration(
+    const ecu_hardware_config_t *config,
+    uint8_t enabled_axis_mask,
+    steer_axis_calibration_t out_calibration[ECU_WHEEL_COUNT],
+    bool *using_ram_override);
 
 /* Apply final drive, steering and brake intent to CAN2 motion nodes.
  *

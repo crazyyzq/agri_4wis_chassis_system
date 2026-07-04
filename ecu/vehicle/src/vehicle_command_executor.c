@@ -126,6 +126,14 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.steer_commission_nmt_sent_mask;
     executor->steer_commission_authorization_clear_count =
         s_runtime.motion.steer_commission_authorization_clear_count;
+    executor->steer_commission_post_command_tpdo_pending =
+        s_runtime.motion.steer_commission_post_command_tpdo_pending;
+    executor->steer_commission_post_command_axis_mask =
+        s_runtime.motion.steer_commission_post_command_axis_mask;
+    executor->steer_commission_post_command_missing_mask =
+        s_runtime.motion.steer_commission_post_command_missing_mask;
+    executor->steer_commission_post_command_timeout_count =
+        s_runtime.motion.steer_commission_post_command_timeout_count;
 }
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor)

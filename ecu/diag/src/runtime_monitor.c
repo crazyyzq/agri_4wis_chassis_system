@@ -34,9 +34,25 @@ static const char *steer_commission_state_text(uint8_t state)
     case STEER_REMOTE_COMMISSION_TPDO_MONITOR: return "tpdo_monitor";
     case STEER_REMOTE_COMMISSION_AXIS_READY: return "axis_ready";
     case STEER_REMOTE_COMMISSION_ACTIVE: return "active";
+    case STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO: return "wait_post_tpdo";
     case STEER_REMOTE_COMMISSION_FAULT: return "fault";
     default: return "unknown";
     }
+}
+
+static const char *commissioning_policy_text(void)
+{
+#if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
+    return "STEER4_REMOTE_COMMISSIONING";
+#elif ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED
+    return "PDO_OUTPUT_ENABLED";
+#elif ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_NODE5_STEER_PDO_ONLY
+    return "NODE5_STEER_PDO_ONLY";
+#elif ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_TPDO_MONITOR_ONLY
+    return "TPDO_MONITOR_ONLY";
+#else
+    return "MAPPING_VERIFY_ONLY";
+#endif
 }
 
 static const char *link_state_text(remote_link_state_t state)
@@ -204,6 +220,12 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         return;
     }
 
+    printf("[ECU BUILD] build_profile=%s policy=%s drive_rpdo=0 can3_rpdo=0 "
+           "mapping_write=%u flash_write=0 brake_control=none\r\n",
+           ECU_BUILD_PROFILE_TEXT,
+           commissioning_policy_text(),
+           (unsigned int)ECU_ENABLE_MAINTENANCE_SDO_WRITES);
+
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
            "frames=%lu dec_err=%lu link=%s "
            "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s "
@@ -311,7 +333,11 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
     printf("[ECU CANopen PDO CAN2] queued=%lu dropped=%lu tx=%lu tx_err=%lu "
            "pdo_group_state=%u pdo_group=%lu pdo_expected_frames=%u "
            "pdo_arm_frame_count=%u pdo_trigger_frame_count=%u pdo_axis_mask=0x%02x "
-           "pdo_position_group=%s sync_tx=%lu sync_err=%lu last_sync=%lums "
+           "pdo_position_group=%s sync_tx=%lu sync_done=%lu sync_inflight=%s "
+           "sync_err=%lu last_sync=%lums last_sync_done=%lums "
+           "tpdo_observer_ready=%s tpdo0_mask=0x%02x tpdo1_mask=0x%02x "
+           "tpdo0_hal=0x%02x tpdo1_hal=0x%02x "
+           "tpdo_observer_err_mask=0x%02x tpdo_observer_errs=%lu "
            "pdo_tx_complete_frames=%u pdo_failed_frames=%u pdo_in_flight_frames=%u "
            "pdo_arm_complete_frames=%u pdo_trigger_complete_frames=%u "
            "last_pdo_tx_complete_ms=%lu last_pdo_tx_timeout_ms=%lu "
@@ -331,8 +357,18 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->can2_canopen_snapshot.pdo_axis_mask,
            bool_text(snapshot->can2_canopen_snapshot.pdo_position_group),
            (unsigned long)snapshot->can2_canopen_snapshot.sync_tx_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.sync_tx_complete_count,
+           bool_text(snapshot->can2_canopen_snapshot.sync_in_flight),
            (unsigned long)snapshot->can2_canopen_snapshot.sync_tx_error_count,
            (unsigned long)snapshot->can2_canopen_snapshot.last_sync_tx_ms,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_sync_tx_complete_ms,
+           bool_text(snapshot->can2_canopen_snapshot.steer_tpdo_observer_ready),
+           (unsigned int)snapshot->can2_canopen_snapshot.tpdo0_observer_registered_mask,
+           (unsigned int)snapshot->can2_canopen_snapshot.tpdo1_observer_registered_mask,
+           (unsigned int)snapshot->can2_canopen_snapshot.tpdo0_hal_fallback_registered_mask,
+           (unsigned int)snapshot->can2_canopen_snapshot.tpdo1_hal_fallback_registered_mask,
+           (unsigned int)snapshot->can2_canopen_snapshot.steer_tpdo_observer_error_mask,
+           (unsigned long)snapshot->can2_canopen_snapshot.tpdo_observer_registration_error_count,
            (unsigned int)snapshot->can2_canopen_snapshot.pdo_tx_complete_frames,
            (unsigned int)snapshot->can2_canopen_snapshot.pdo_failed_frames,
            (unsigned int)snapshot->can2_canopen_snapshot.pdo_in_flight_frames,
@@ -389,7 +425,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "steer_last_allowed_to_inhibited_ms=%lu "
            "steer_safe_stop_pending=%s steer_commission_state=%u(%s) "
            "steer_commission_axis_mask=0x%02x steer_commission_nmt_sent_mask=0x%02x "
-           "steer_commission_auth_clears=%lu\r\n",
+           "steer_commission_auth_clears=%lu "
+           "post_tpdo_pending=%s post_tpdo_axis=0x%02x post_tpdo_missing=0x%02x "
+           "post_tpdo_timeouts=%lu\r\n",
            bool_text(snapshot->steer_normal_pdo_allowed),
            bool_text(snapshot->steer_safety_inhibited),
            (unsigned int)snapshot->steer_inhibit_reason,
@@ -401,7 +439,30 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            steer_commission_state_text(snapshot->steer_commission_state),
            (unsigned int)snapshot->steer_commission_axis_mask,
            (unsigned int)snapshot->steer_commission_nmt_sent_mask,
-           (unsigned long)snapshot->steer_commission_authorization_clear_count);
+           (unsigned long)snapshot->steer_commission_authorization_clear_count,
+           bool_text(snapshot->steer_commission_post_command_tpdo_pending),
+           (unsigned int)snapshot->steer_commission_post_command_axis_mask,
+           (unsigned int)snapshot->steer_commission_post_command_missing_mask,
+           (unsigned long)snapshot->steer_commission_post_command_timeout_count);
+
+    printf("[ECU STEER CAL] ram_override=%s valid=%s seq=%lu",
+           bool_text(snapshot->steer_calibration_ram_override_enabled),
+           bool_text(snapshot->steer_calibration_ram_override_valid),
+           (unsigned long)snapshot->steer_calibration_ram_override_sequence);
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        const steer_axis_calibration_t *axis =
+            &snapshot->steer_effective_calibration[wheel];
+        printf(" w%lu[valid=%s sign=%d zero=%ld min=%ld max=%ld max_deg=",
+               (unsigned long)(wheel + 1U),
+               bool_text(axis->valid),
+               (int)axis->direction_sign,
+               (long)axis->straight_zero_offset_counts,
+               (long)axis->minimum_position_counts,
+               (long)axis->maximum_position_counts);
+        print_centi_value((int32_t)(axis->commissioning_max_abs_deg * 100.0f));
+        printf("]");
+    }
+    printf("\r\n");
 
     printf("[ECU CANopen CAN3] init=%s state=%u normal=%s bitrate=%lu local=%u remote=%u "
            "proc=%lu sdo_ok=%lu sdo_abort=%lu dl_ok=%lu dl_abort=%lu queued=%lu dropped=%lu "

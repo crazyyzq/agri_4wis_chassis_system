@@ -201,3 +201,203 @@ def test_v9_commit_a_authorization_clear_resets_session_state(root: pathlib.Path
         "steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_AUTH",
     ]:
         assert token in clear_fn, token
+
+
+def test_v9_commit_b_tpdo_observer_registration_is_checked_and_gates_output(root: pathlib.Path) -> None:
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    for token in [
+        "tpdo0_observer_registered_mask",
+        "tpdo1_observer_registered_mask",
+        "steer_tpdo_observer_ready",
+        "tpdo_observer_registration_error_count",
+        "canopen_master_service_steer_tpdo_observers_ready",
+    ]:
+        assert token in service_h, token
+        assert token in service_c or token.startswith("canopen_master_service_"), token
+
+    observer_fn = service_c.split("static void register_steer_tpdo_observers", 1)[1].split(
+        "static void refresh_tpdo_freshness", 1
+    )[0]
+    assert "CO_ReturnError_t" in observer_fn
+    assert "CO_CANrxBufferInit" in observer_fn
+    assert "== CO_ERROR_NO" in observer_fn
+    assert "tpdo0_observer_registered_mask" in observer_fn
+    assert "tpdo1_observer_registered_mask" in observer_fn
+    assert "steer_tpdo_observer_ready" in observer_fn
+
+    feedback_gate = motion_c.split("static bool steer_commissioning_axis_feedback_ready", 1)[1].split(
+        "static bool steer_commissioning_axis_calibration_ready", 1
+    )[0]
+    assert "canopen_master_service_steer_tpdo_observers_ready" in feedback_gate
+
+
+def test_v9_commit_b_feedback_reader_uses_even_sequence_lock(root: pathlib.Path) -> None:
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+
+    assert "feedback_sequence" in service_h
+
+    callback_fn = service_c.split("static void steer_tpdo_rx_callback", 1)[1].split(
+        "static uint16_t find_free_canopen_rx_slot", 1
+    )[0]
+    for token in [
+        "feedback_sequence",
+        "begin_feedback_write",
+        "end_feedback_write",
+    ]:
+        assert token in callback_fn or token in service_c, token
+
+    reader_fn = service_c.split("bool canopen_master_service_get_node_feedback", 1)[1].split(
+        "void canopen_master_service_get_snapshot", 1
+    )[0]
+    for token in [
+        "sequence_before",
+        "sequence_after",
+        "sequence_before == sequence_after",
+        "(sequence_before & 1U) == 0U",
+    ]:
+        assert token in reader_fn, token
+
+
+def test_v9_commit_b_sync_is_gated_and_has_inflight_completion(root: pathlib.Path) -> None:
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+
+    for token in [
+        "sync_in_flight",
+        "sync_in_flight_submit_ms",
+        "sync_tx_complete_count",
+        "last_sync_tx_complete_ms",
+    ]:
+        assert token in service_h, token
+
+    send_sync_fn = service_c.split("bool canopen_master_service_send_sync", 1)[1].split(
+        "bool canopen_master_service_get_node_feedback", 1
+    )[0]
+    for token in [
+        "service->pdo_queue_count != 0U",
+        "pdo_group_is_active(service)",
+        "service->sync_in_flight",
+        "service->sync_in_flight_submit_ms = now_ms",
+    ]:
+        assert token in send_sync_fn, token
+
+    start_next_fn = service_c.split("static bool start_next_pdo_frame", 1)[1].split(
+        "static void wait_briefly_for_pdo_tx_complete", 1
+    )[0]
+    assert "service->sync_in_flight" in start_next_fn
+
+    complete_fn = service_c.split("static void process_pdo_tx_complete_events", 1)[1].split(
+        "static bool pdo_in_flight_timed_out", 1
+    )[0]
+    assert "complete_in_flight_sync" in complete_fn
+    assert "sync_tx_complete_count" in service_c
+
+
+def test_v9_commit_b_position_group_waits_for_post_command_tpdo_window(root: pathlib.Path) -> None:
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    assert "ECU_STEER_REMOTE_COMMISSION_POST_COMMAND_TPDO_TIMEOUT_MS" in config_h
+    assert "STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO" in motion_h
+    for token in [
+        "steer_commission_post_command_tpdo_pending",
+        "steer_commission_post_command_axis_mask",
+        "steer_commission_tpdo0_count_before",
+        "steer_commission_tpdo1_count_before",
+        "steer_commission_post_command_timeout_count",
+    ]:
+        assert token in motion_h, token
+
+    flush_fn = motion_c.split("static ecu_device_apply_result_t flush_steer4_remote_commissioning", 1)[1].split(
+        "#endif", 1
+    )[0]
+    for token in [
+        "start_post_command_tpdo_window",
+        "post_command_tpdo_window_complete",
+        "STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO",
+        "ECU_STEER_REMOTE_COMMISSION_POST_COMMAND_TPDO_TIMEOUT_MS",
+    ]:
+        assert token in flush_fn or token in motion_c, token
+
+    post_fn = motion_c.split("static bool post_command_tpdo_window_complete", 1)[1].split(
+        "static ecu_device_apply_result_t flush_steer4_remote_commissioning", 1
+    )[0]
+    assert "feedback.tpdo0_rx_count <= state->steer_commission_tpdo0_count_before[wheel]" in post_fn
+    assert "feedback.tpdo1_rx_count <= state->steer_commission_tpdo1_count_before[wheel]" in post_fn
+    assert "feedback.fault_latched != 0U" in post_fn
+
+
+def test_v9_commit_c_cmake_profiles_are_safe_by_default_and_selectable(root: pathlib.Path) -> None:
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        'set(ECU_COMMISSIONING_PROFILE "safe" CACHE STRING "safe|steer4_remote")',
+        "ECU_COMMISSIONING_PROFILE STREQUAL \"steer4_remote\"",
+        "-DECU_CANOPEN_COMMISSIONING_POLICY=4",
+        "-DECU_COMMISSIONING_STEER_ONLY_MODE=1",
+        "-DECU_ENABLE_MAINTENANCE_SDO_WRITES=0",
+        "-DECU_ENABLE_COMMISSIONING_POWER_DEBUG=0",
+        "-DECU_ENABLE_COMMISSIONING_CANOPEN_SCAN=0",
+        "Unsupported ECU_COMMISSIONING_PROFILE",
+    ]:
+        assert token in cmake, token
+
+    assert "#ifndef ECU_COMMISSIONING_STEER_ONLY_MODE" in config_h
+    assert "#ifndef ECU_BUILD_PROFILE_TEXT" in config_h
+    assert "build_profile=%s policy=%s drive_rpdo=0 can3_rpdo=0" in monitor_c
+    assert "brake_control=none" in monitor_c
+
+
+def test_v9_commit_c_ram_calibration_override_is_fail_closed_and_not_flash_saved(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "ECU_STEER_CALIBRATION_OVERRIDE_MAGIC",
+        "ecu_steer_calibration_override_t",
+        "volatile ecu_steer_calibration_override_t g_ecu_steer_calibration_override",
+        "motion_device_get_effective_steer_calibration",
+    ]:
+        assert token in config_h or token in motion_h or token in motion_c, token
+
+    override_fn = motion_c.split("bool motion_device_get_effective_steer_calibration", 1)[1].split(
+        "bool steer_commissioning_build_targets", 1
+    )[0]
+    for token in [
+        "ECU_STEER_CALIBRATION_OVERRIDE_MAGIC",
+        "g_ecu_steer_calibration_override.enable",
+        "sequence_before != sequence_after",
+        "steer_axis_calibration_is_valid",
+        "!steer_axis_calibration_is_valid(&out_calibration[wheel])",
+        "return false",
+    ]:
+        assert token in override_fn, token
+
+    assert "ECU_CANOPEN_OBJ_STORE_PARAMETERS" not in override_fn
+    assert "ram_override=%s valid=%s seq=%lu" in monitor_c
+    assert "steer_effective_calibration" in read(root, "ecu/diag/include/runtime_monitor.h")
+
+
+def test_v9_commit_c_steer4_output_uses_effective_calibration_not_static_config_only(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    ready_fn = motion_c.split("static bool steer_commissioning_axis_calibration_ready", 1)[1].split(
+        "static bool steer_commissioning_remote_conditions_ok", 1
+    )[0]
+    assert "motion_device_get_effective_steer_calibration" in ready_fn
+    assert "steer_commissioning_build_targets(calibration" in ready_fn
+
+    flush_fn = motion_c.split("static ecu_device_apply_result_t flush_steer4_remote_commissioning", 1)[1].split(
+        "#endif", 1
+    )[0]
+    assert "motion_device_get_effective_steer_calibration" in flush_fn
+    assert "steer_commissioning_build_targets(calibration" in flush_fn

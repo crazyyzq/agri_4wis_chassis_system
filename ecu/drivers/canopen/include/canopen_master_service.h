@@ -128,6 +128,7 @@ typedef struct {
 } canopen_master_pdo_group_descriptor_t;
 
 typedef struct {
+    uint32_t feedback_sequence;     /* Even when stable; odd while ISR writes this node snapshot. */
     bool tpdo0_valid;
     bool tpdo1_valid;
     bool feedback_fresh;
@@ -220,8 +221,20 @@ typedef struct {
     int32_t last_error;
     uint32_t sync_tx_count;
     uint32_t sync_tx_error_count;
+    uint32_t sync_tx_complete_count;
     uint32_t last_sync_tx_ms;
+    uint32_t last_sync_tx_complete_ms;
+    uint32_t sync_tx_timeout_count;
+    uint32_t sync_in_flight_submit_ms;
     int32_t last_sync_error;
+    bool sync_in_flight;
+    uint8_t tpdo0_observer_registered_mask;
+    uint8_t tpdo1_observer_registered_mask;
+    uint8_t tpdo0_hal_fallback_registered_mask;
+    uint8_t tpdo1_hal_fallback_registered_mask;
+    uint8_t steer_tpdo_observer_error_mask;
+    bool steer_tpdo_observer_ready;
+    uint32_t tpdo_observer_registration_error_count;
     canopen_node_feedback_t node_feedback[CANOPEN_MASTER_NODE_FEEDBACK_SLOTS];
 } canopen_master_snapshot_t;
 
@@ -260,6 +273,8 @@ typedef struct {
     canopen_master_pdo_request_t pdo_in_flight_request;
     bool pdo_in_flight;
     uint32_t pdo_in_flight_submit_ms;
+    bool sync_in_flight;
+    uint32_t sync_in_flight_submit_ms;
     uint32_t observed_pdo_tx_complete_count;
     uint32_t active_pdo_group_sequence;
     canopen_master_pdo_group_state_t active_pdo_group_state;
@@ -362,6 +377,7 @@ bool canopen_master_service_send_sync(canopen_master_service_t *service,
 bool canopen_master_service_get_node_feedback(const canopen_master_service_t *service,
                                               uint8_t node_id,
                                               canopen_node_feedback_t *out);
+bool canopen_master_service_steer_tpdo_observers_ready(const canopen_master_service_t *service);
 
 uint8_t canopen_master_service_pdo_queue_available(const canopen_master_service_t *service);
 bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *service,

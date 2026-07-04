@@ -99,6 +99,7 @@ bool commissioning_debug_apply_power_request(commissioning_debug_context_t *cont
     return true;
 }
 
+#if ECU_ENABLE_COMMISSIONING_CANOPEN_SCAN
 static bool commissioning_scan_due(uint32_t now_ms, uint32_t *last_scan_ms)
 {
     if (last_scan_ms == 0) {
@@ -111,6 +112,7 @@ static bool commissioning_scan_due(uint32_t now_ms, uint32_t *last_scan_ms)
     }
     return false;
 }
+#endif
 
 void commissioning_debug_scan_can2(commissioning_debug_context_t *context,
                                    canopen_master_service_t *canopen,

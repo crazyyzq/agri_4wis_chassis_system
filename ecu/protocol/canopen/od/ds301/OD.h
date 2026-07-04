@@ -40,11 +40,21 @@
 #define OD_CNT_STORAGE 1
 #define OD_CNT_TIME 1
 #define OD_CNT_EM_PROD 1
-#define OD_CNT_HB_CONS 1
+/* Remote-node liveness is evaluated by CPU0 device diagnostics and TPDO/SDO
+ * freshness, not by the local CANopenNode heartbeat consumer.  Disabling the
+ * local heartbeat consumer preserves scarce HPM classic-CAN hardware filters
+ * for motion-node TPDO feedback.
+ */
+#define OD_CNT_HB_CONS 0
 #define OD_CNT_HB_PROD 1
 #define OD_CNT_SDO_SRV 1
 #define OD_CNT_SDO_CLI 1
-#define OD_CNT_RPDO 4
+/* CPU0 is a CANopen master in this project.  It sends remote-node RPDO frames
+ * through canopen_master_service and does not consume local RPDO objects.
+ * Keeping local RPDO consumers disabled frees HPM classic-CAN hardware filters
+ * for Node5-8 steering TPDO feedback observers.
+ */
+#define OD_CNT_RPDO 0
 #define OD_CNT_TPDO 4
 
 

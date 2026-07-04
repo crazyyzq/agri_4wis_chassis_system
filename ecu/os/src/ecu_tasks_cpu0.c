@@ -14,6 +14,7 @@
 #include "ecu_tasks.h"
 #include "ipc_snapshot.h"
 #include "modbus_master_service.h"
+#include "motion_device.h"
 #include "power_device.h"
 #include "remote_manager.h"
 #include "remote_sbus_mapper.h"
@@ -395,6 +396,26 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.steer_commission_nmt_sent_mask;
     out->steer_commission_authorization_clear_count =
         s_runtime.executor.steer_commission_authorization_clear_count;
+    out->steer_commission_post_command_tpdo_pending =
+        s_runtime.executor.steer_commission_post_command_tpdo_pending;
+    out->steer_commission_post_command_axis_mask =
+        s_runtime.executor.steer_commission_post_command_axis_mask;
+    out->steer_commission_post_command_missing_mask =
+        s_runtime.executor.steer_commission_post_command_missing_mask;
+    out->steer_commission_post_command_timeout_count =
+        s_runtime.executor.steer_commission_post_command_timeout_count;
+    out->steer_calibration_ram_override_sequence =
+        g_ecu_steer_calibration_override.sequence;
+    out->steer_calibration_ram_override_enabled =
+        g_ecu_steer_calibration_override.magic ==
+            ECU_STEER_CALIBRATION_OVERRIDE_MAGIC &&
+        g_ecu_steer_calibration_override.enable;
+    out->steer_calibration_ram_override_valid =
+        motion_device_get_effective_steer_calibration(
+            ecu_hardware_config_default(),
+            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL,
+            out->steer_effective_calibration,
+            NULL);
     out->power_result = s_runtime.executor.power_result;
     out->motion_result = s_runtime.executor.motion_result;
     out->lift_hydraulic_result = s_runtime.executor.lift_hydraulic_result;

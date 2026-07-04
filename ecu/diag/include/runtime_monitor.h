@@ -113,6 +113,14 @@ typedef struct {
     uint8_t steer_commission_axis_mask;
     uint8_t steer_commission_nmt_sent_mask;
     uint32_t steer_commission_authorization_clear_count;
+    bool steer_commission_post_command_tpdo_pending;
+    uint8_t steer_commission_post_command_axis_mask;
+    uint8_t steer_commission_post_command_missing_mask;
+    uint32_t steer_commission_post_command_timeout_count;
+    bool steer_calibration_ram_override_enabled;
+    bool steer_calibration_ram_override_valid;
+    uint32_t steer_calibration_ram_override_sequence;
+    steer_axis_calibration_t steer_effective_calibration[ECU_WHEEL_COUNT];
 
     ecu_device_apply_result_t power_result;
     ecu_device_apply_result_t motion_result;
