@@ -416,10 +416,10 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
         assert token in servo_h or token in servo_c, token
 
     assert "servo_drive_canopen.c" in cmake
-    assert "servo_drive_canopen_prepare_velocity_mode" in motion_c
-    assert "servo_drive_canopen_update_target_velocity" in motion_c
-    assert "servo_drive_canopen_prepare_position_mode" in motion_c
-    assert "servo_drive_canopen_configure_steer_rpdo" in motion_c
+    assert "canopen_pdo_profile.h" in motion_c
+    assert "canopen_pdo_build_position_rpdo1" in motion_c
+    assert "servo_drive_canopen_configure_steer_rpdo(canopen" not in motion_c
+    assert "servo_drive_canopen_prepare_position_mode(canopen" not in motion_c
     assert "canopen_master_service_queue_pdo" in motion_c
     assert "servo_drive_canopen_run_absolute_position_mode" in lift_c
     assert "ECU_CANOPEN_RPDO2_BASE" in config_h
@@ -461,9 +461,9 @@ def test_servo_motion_uses_bc_canopen_command_sequences(root: pathlib.Path) -> N
     ]:
         assert token in servo_h or token in servo_c or token in config_h, token
 
-    assert "servo_drive_canopen_prepare_velocity_mode(canopen" in motion_c
-    assert "servo_drive_canopen_update_target_velocity(canopen" in motion_c
-    assert "servo_drive_canopen_configure_steer_rpdo(canopen" in motion_c
+    assert "ECU_CANOPEN_COMMISSIONING_POLICY_MAPPING_VERIFY_ONLY" in config_h
+    assert "servo_drive_canopen_configure_steer_rpdo(canopen" not in motion_c
+    assert "servo_drive_canopen_prepare_position_mode(canopen" not in motion_c
     assert "canopen_master_service_queue_pdo_batch(canopen" in motion_c
     position_func = servo_c.split("static bool servo_drive_canopen_run_position_mode", 1)[1]
     assert position_func.index("ECU_CANOPEN_OBJ_TARGET_POSITION") < position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION")
@@ -1393,7 +1393,17 @@ def test_canopen_command_cache_updates_only_after_successful_queueing(root: path
     assert "publish_motion_command_snapshot" in executor_c
     assert "read_motion_command_snapshot" in executor_c
     assert "command,\n                                                  command_sequence,\n                                                  now_ms)" in executor_c
+    assert "publish_can3_command_snapshot" in executor_c
+    assert "read_can3_command_snapshot" in executor_c
+    assert "vehicle_command_executor_flush_can3_lift_hydraulic" in executor_c
     assert "lift_hydraulic_device_apply(&s_runtime.lift_hydraulic" in executor_c
+    apply_body = re.search(
+        r"bool vehicle_command_executor_apply[\s\S]*?"
+        r"\n}\n\nbool vehicle_command_executor_flush_can2_motion",
+        executor_c,
+    )
+    assert apply_body is not None
+    assert "lift_hydraulic_device_apply(&s_runtime.lift_hydraulic" not in apply_body.group(0)
     assert "command,\n                                    now_ms)" in executor_c
 
     motion_after_failure = motion_c.split("state->last_result = ok ? ECU_DEVICE_APPLY_OK", 1)[0]

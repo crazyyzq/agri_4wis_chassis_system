@@ -548,6 +548,11 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
     canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen, now_ms);
+    (void)vehicle_command_executor_flush_can3_lift_hydraulic(
+        &s_runtime.executor,
+        &s_runtime.can3_lift_hydraulic_canopen,
+        &s_runtime.dio,
+        now_ms);
     commissioning_debug_scan_can3(&s_runtime.commissioning_debug,
                                   &s_runtime.can3_lift_hydraulic_canopen,
                                   now_ms);

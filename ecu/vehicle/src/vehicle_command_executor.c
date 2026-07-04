@@ -17,6 +17,7 @@ typedef struct {
     local_io_device_state_t local_io;
     warning_light_device_state_t warning_light;
     vehicle_motion_command_mailbox_t motion_mailbox;
+    vehicle_can3_command_mailbox_t can3_mailbox;
 } vehicle_executor_runtime_t;
 
 static vehicle_executor_runtime_t s_runtime;
@@ -70,6 +71,21 @@ static bool read_motion_command_snapshot(const vehicle_motion_command_mailbox_t 
 
     *sequence = read_sequence_after;
     return true;
+}
+
+static void publish_can3_command_snapshot(vehicle_can3_command_mailbox_t *mailbox,
+                                          const vehicle_actuator_command_t *command,
+                                          uint32_t now_ms)
+{
+    publish_motion_command_snapshot(mailbox, command, now_ms);
+}
+
+static bool read_can3_command_snapshot(const vehicle_can3_command_mailbox_t *mailbox,
+                                       vehicle_actuator_command_t *command,
+                                       uint32_t *sequence,
+                                       uint32_t *timestamp_ms)
+{
+    return read_motion_command_snapshot(mailbox, command, sequence, timestamp_ms);
 }
 
 static void vehicle_executor_runtime_init_once(void)
@@ -137,14 +153,9 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
 
     vehicle_executor_runtime_init_once();
     publish_motion_command_snapshot(&s_runtime.motion_mailbox, command, now_ms);
+    publish_can3_command_snapshot(&s_runtime.can3_mailbox, command, now_ms);
     executor->motion_result = ECU_DEVICE_APPLY_OK;
-    executor->lift_hydraulic_result =
-        lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
-                                    io->can3_lift_hydraulic_canopen,
-                                    io->dio,
-                                    config,
-                                    command,
-                                    now_ms);
+    executor->lift_hydraulic_result = ECU_DEVICE_APPLY_OK;
     executor->local_io_result = local_io_device_apply(&s_runtime.local_io,
                                                       io->dio,
                                                       config,
@@ -205,6 +216,42 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
                                      now_ms);
     update_executor_motion_diagnostics(executor);
     return executor->motion_result == ECU_DEVICE_APPLY_OK;
+}
+
+bool vehicle_command_executor_flush_can3_lift_hydraulic(
+    vehicle_executor_state_t *executor,
+    canopen_master_service_t *can3_lift_hydraulic_canopen,
+    dio_service_t *dio,
+    uint32_t now_ms)
+{
+    const ecu_hardware_config_t *config = ecu_hardware_config_default();
+    vehicle_actuator_command_t command;
+    uint32_t command_sequence;
+    uint32_t command_timestamp_ms;
+
+    if (executor == 0 || can3_lift_hydraulic_canopen == 0 || dio == 0) {
+        return false;
+    }
+
+    vehicle_executor_runtime_init_once();
+    if (!read_can3_command_snapshot(&s_runtime.can3_mailbox,
+                                    &command,
+                                    &command_sequence,
+                                    &command_timestamp_ms)) {
+        executor->lift_hydraulic_result = ECU_DEVICE_APPLY_OK;
+        return true;
+    }
+    (void)command_sequence;
+    (void)command_timestamp_ms;
+
+    executor->lift_hydraulic_result =
+        lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
+                                    can3_lift_hydraulic_canopen,
+                                    dio,
+                                    config,
+                                    &command,
+                                    now_ms);
+    return executor->lift_hydraulic_result == ECU_DEVICE_APPLY_OK;
 }
 
 void vehicle_command_executor_get_state(const vehicle_executor_state_t *executor,
