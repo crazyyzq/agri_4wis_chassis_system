@@ -28,12 +28,12 @@ find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 project(agri_chassis_control_cpu0)
 
 # Downloadable commissioning image selector.  The default "safe" profile keeps
-# the firmware built with no steering PDO output.  The "steer4_remote" profile
-# is a bounded field-commissioning image for Node5..8 steering only; it keeps
-# drive-wheel RPDO, CAN3 RPDO, maintenance SDO writes, flash-save and local
-# brake-control paths closed.
-set(ECU_COMMISSIONING_PROFILE "safe" CACHE STRING "safe|steer4_remote")
-set_property(CACHE ECU_COMMISSIONING_PROFILE PROPERTY STRINGS safe steer4_remote)
+# the firmware built with no steering PDO output.  The "steer4_remote_90"
+# profile is the V10 field-commissioning image for Node5..8 steering only; it
+# keeps drive-wheel RPDO, CAN3 RPDO, maintenance SDO writes, flash-save and
+# local brake-control paths closed.
+set(ECU_COMMISSIONING_PROFILE "safe" CACHE STRING "safe|steer4_remote|steer4_remote_90")
+set_property(CACHE ECU_COMMISSIONING_PROFILE PROPERTY STRINGS safe steer4_remote steer4_remote_90)
 
 # SEGGER emits HPM_SDK_LIB_ITF include directories before app include
 # directories.  Put the application source directory at the front of that
@@ -57,7 +57,17 @@ sdk_ld_options("-lm")
 
 if(ECU_COMMISSIONING_PROFILE STREQUAL "steer4_remote")
     sdk_compile_definitions(-DECU_BUILD_PROFILE_STEER4_REMOTE=1)
+    sdk_compile_definitions(-DECU_BUILD_PROFILE_STEER4_REMOTE_90=0)
     sdk_compile_definitions(-DECU_BUILD_PROFILE_TEXT=\"steer4_remote\")
+    sdk_compile_definitions(-DECU_CANOPEN_COMMISSIONING_POLICY=4)
+    sdk_compile_definitions(-DECU_COMMISSIONING_STEER_ONLY_MODE=1)
+    sdk_compile_definitions(-DECU_ENABLE_MAINTENANCE_SDO_WRITES=0)
+    sdk_compile_definitions(-DECU_ENABLE_COMMISSIONING_POWER_DEBUG=0)
+    sdk_compile_definitions(-DECU_ENABLE_COMMISSIONING_CANOPEN_SCAN=0)
+elseif(ECU_COMMISSIONING_PROFILE STREQUAL "steer4_remote_90")
+    sdk_compile_definitions(-DECU_BUILD_PROFILE_STEER4_REMOTE=1)
+    sdk_compile_definitions(-DECU_BUILD_PROFILE_STEER4_REMOTE_90=1)
+    sdk_compile_definitions(-DECU_BUILD_PROFILE_TEXT=\"steer4_remote_90\")
     sdk_compile_definitions(-DECU_CANOPEN_COMMISSIONING_POLICY=4)
     sdk_compile_definitions(-DECU_COMMISSIONING_STEER_ONLY_MODE=1)
     sdk_compile_definitions(-DECU_ENABLE_MAINTENANCE_SDO_WRITES=0)
@@ -65,9 +75,10 @@ if(ECU_COMMISSIONING_PROFILE STREQUAL "steer4_remote")
     sdk_compile_definitions(-DECU_ENABLE_COMMISSIONING_CANOPEN_SCAN=0)
 elseif(ECU_COMMISSIONING_PROFILE STREQUAL "safe")
     sdk_compile_definitions(-DECU_BUILD_PROFILE_STEER4_REMOTE=0)
+    sdk_compile_definitions(-DECU_BUILD_PROFILE_STEER4_REMOTE_90=0)
     sdk_compile_definitions(-DECU_BUILD_PROFILE_TEXT=\"safe\")
 else()
-    message(FATAL_ERROR "Unsupported ECU_COMMISSIONING_PROFILE='${ECU_COMMISSIONING_PROFILE}'. Use 'safe' or 'steer4_remote'.")
+    message(FATAL_ERROR "Unsupported ECU_COMMISSIONING_PROFILE='${ECU_COMMISSIONING_PROFILE}'. Use 'safe', 'steer4_remote' or 'steer4_remote_90'.")
 endif()
 
 # CANopenNode is imported vendor middleware. Keep application warnings visible

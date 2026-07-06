@@ -65,6 +65,10 @@
 #define ECU_BUILD_PROFILE_STEER4_REMOTE  (0)
 #endif
 
+#ifndef ECU_BUILD_PROFILE_STEER4_REMOTE_90
+#define ECU_BUILD_PROFILE_STEER4_REMOTE_90 (0)
+#endif
+
 #ifndef ECU_DEBUG_MONITOR_PERIOD_MS
 #define ECU_DEBUG_MONITOR_PERIOD_MS      (500U)
 #endif
@@ -249,7 +253,11 @@
 #define ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS (1000)
 #define ECU_CANOPEN_STEER_POSITION_NEUTRAL_DEADBAND_COUNTS  (1500)
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_COUNTS_PER_SEC  (1000000)
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (1000000)
+#else
 #define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (500000)
+#endif
 #define ECU_CANOPEN_STEER_SETUP_SETTLE_MS                   (100U)
 /* V8 remote steering commissioning starts with a deliberately slow, small and
  * explicitly-authorized control envelope.  These values are independent from
@@ -258,12 +266,32 @@
  */
 #define ECU_STEER_REMOTE_COMMISSION_AUTH_MAGIC              (0x53544552UL)
 #define ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL           (0x0FU)
+#ifndef ECU_STEER_REMOTE_COMMISSION_MAX_DEG
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+#define ECU_STEER_REMOTE_COMMISSION_MAX_DEG                 (90.0f)
+#else
 #define ECU_STEER_REMOTE_COMMISSION_MAX_DEG                 (5.0f)
+#endif
+#endif
 #define ECU_STEER_REMOTE_COMMISSION_PERIOD_MS               (100U)
 #define ECU_STEER_REMOTE_COMMISSION_TRIGGER_THRESHOLD_COUNTS (5000)
 #define ECU_STEER_REMOTE_COMMISSION_NEUTRAL_MS              (300U)
 #define ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS     (250U)
 #define ECU_STEER_REMOTE_COMMISSION_POST_COMMAND_TPDO_TIMEOUT_MS (250U)
+#define ECU_STEER_REMOTE_COMMISSION_CENTER_TOLERANCE_COUNTS (10000)
+#define ECU_STEER_REMOTE_COMMISSION_RAMP_COUNTS_PER_SEC     (250000)
+#define ECU_STEER_REMOTE_COMMISSION_SYNC_TIMEOUT_MS         (50U)
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+/* Field commissioning workaround: the HPM classic CAN receive path currently
+ * observes Node8 TPDO0 (0x188) but not Node8 TPDO1 (0x288), although the
+ * external analyzer confirms 0x288 is present on the bus.  Keep this limited to
+ * the downloadable steering-only profile; normal/safe builds must not accept a
+ * missing TPDO1 status/fault frame as healthy feedback.
+ */
+#define ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND       (1U)
+#else
+#define ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND       (0U)
+#endif
 /* Analyzer-only PDO capture switch.  Default is disabled because real drives
  * have not yet confirmed their RPDO mapping/readback.  Setting this to 1 is
  * only for a bounded CAN analyzer capture on an unpopulated actuator bus; it is
@@ -433,7 +461,11 @@ typedef enum {
 #define ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH (0x0022U)
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
 #define ECU_REMOTE_MAX_SPEED_KPH          (6.0f)
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+#define ECU_REMOTE_MAX_STEER_DEG          (90.0f)
+#else
 #define ECU_REMOTE_MAX_STEER_DEG          (45.0f)
+#endif
 /* Vehicle geometry used by four-wheel kinematics.
  *
  * Wheelbase is the longitudinal distance between front and rear axle centers.

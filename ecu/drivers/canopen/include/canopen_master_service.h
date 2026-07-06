@@ -230,8 +230,6 @@ typedef struct {
     bool sync_in_flight;
     uint8_t tpdo0_observer_registered_mask;
     uint8_t tpdo1_observer_registered_mask;
-    uint8_t tpdo0_hal_fallback_registered_mask;
-    uint8_t tpdo1_hal_fallback_registered_mask;
     uint8_t steer_tpdo_observer_error_mask;
     bool steer_tpdo_observer_ready;
     uint32_t tpdo_observer_registration_error_count;

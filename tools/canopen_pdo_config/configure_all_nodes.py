@@ -265,6 +265,7 @@ def make_plan(bus_names: list[str], node_ids: list[int], bitrate: int, backend: 
                 "role": NODE_ROLES[node_id],
                 "rpdo0": f"0x{0x200 + node_id:03X}",
                 "rpdo1": f"0x{0x300 + node_id:03X}",
+                "rpdo2": f"0x{0x400 + node_id:03X}",
                 "tpdo0": f"0x{0x180 + node_id:03X}",
                 "tpdo1": f"0x{0x280 + node_id:03X}",
             })

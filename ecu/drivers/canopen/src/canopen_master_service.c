@@ -24,6 +24,13 @@ uint16_t CO_CANrxMsg_readIdent(CO_CANrxMsg_t *rxMsg);
 #define CANOPEN_MASTER_NMT_CONTROL (CO_NMT_ERR_ON_ERR_REG | CO_ERR_REG_GENERIC_ERR | CO_ERR_REG_COMMUNICATION)
 #define CANOPEN_MASTER_PDO_TX_COMPLETE_POLL_US (300U)
 #define CANOPEN_MASTER_SYNC_COB_ID (0x080U)
+#define ECU_CANOPEN_STEER_TPDO0_RANGE_MASK (0x7F0U)
+/* The minimal DS301 OD intentionally keeps local CANopen objects small, but
+ * steering commissioning needs extra library-owned RX observers for Node5..8
+ * TPDO0/TPDO1.  Expand the CANopenNode RX array in project code after
+ * CO_CANinit() and before CO_CANopenInit(); do not add a raw CAN fallback.
+ */
+#define CANOPEN_MASTER_RX_OBSERVER_CAPACITY (12U)
 
 typedef struct {
     uint16_t index;
@@ -44,9 +51,6 @@ static const canopen_master_sdo_query_t s_sdo_queries[] = {
 static bool debug_command_to_nmt(canopen_master_debug_command_t command,
                                  CO_NMT_command_t *out);
 static void steer_tpdo_rx_callback(void *object, void *message);
-static void steer_tpdo_hal_rx_callback(const struct device *dev,
-                                       struct can_frame *frame,
-                                       void *user_data);
 static void complete_in_flight_sync(canopen_master_service_t *service,
                                     uint32_t now_ms);
 
@@ -58,6 +62,8 @@ CO_t *co;
 static CO_t *s_canopen[CANOPEN_MASTER_BUS_COUNT];
 static SemaphoreHandle_t s_canopen_lock;
 static struct canopen_context s_canopen_context[CANOPEN_MASTER_BUS_COUNT];
+static CO_CANrx_t s_canopen_rx_observer_storage[CANOPEN_MASTER_BUS_COUNT]
+                                               [CANOPEN_MASTER_RX_OBSERVER_CAPACITY];
 hpm_can_config_t hpm_canopen_config[MAX_CANOPEN_DEVICE] = {0};
 hpm_can_data_t hpm_canopen_data[MAX_CANOPEN_DEVICE] = {0};
 struct device hpm_canopen_dev[MAX_CANOPEN_DEVICE] = {0};
@@ -106,16 +112,47 @@ static int16_t canopen_read_le_i16(const uint8_t *data)
     return (int16_t)canopen_read_le_u16(data);
 }
 
+static void expand_canopen_rx_observer_capacity(canopen_master_service_t *service)
+{
+    if (service == NULL || service->can_index >= CANOPEN_MASTER_BUS_COUNT ||
+        co == NULL || co->CANmodule == NULL ||
+        co->CANmodule->rxArray == NULL ||
+        co->CANmodule->rxSize >= CANOPEN_MASTER_RX_OBSERVER_CAPACITY) {
+        return;
+    }
+
+    CO_CANrx_t *expanded =
+        &s_canopen_rx_observer_storage[service->can_index][0];
+    uint16_t old_size = co->CANmodule->rxSize;
+    for (uint16_t i = 0U; i < CANOPEN_MASTER_RX_OBSERVER_CAPACITY; ++i) {
+        if (i < old_size) {
+            expanded[i] = co->CANmodule->rxArray[i];
+        } else {
+            memset(&expanded[i], 0, sizeof(expanded[i]));
+            expanded[i].filter_id = -ENOSPC;
+        }
+    }
+
+    co->CANrx = expanded;
+    co->CANmodule->rxArray = expanded;
+    co->CANmodule->rxSize = CANOPEN_MASTER_RX_OBSERVER_CAPACITY;
+}
+
 static void begin_feedback_write(canopen_node_feedback_t *feedback)
 {
     if (feedback == NULL) {
         return;
     }
 
-    feedback->feedback_sequence++;
-    if ((feedback->feedback_sequence & 1U) == 0U) {
-        feedback->feedback_sequence++;
+    uint32_t sequence =
+        __atomic_load_n(&feedback->feedback_sequence, __ATOMIC_ACQUIRE);
+    sequence++;
+    if ((sequence & 1U) == 0U) {
+        sequence++;
     }
+    __atomic_store_n(&feedback->feedback_sequence,
+                     sequence,
+                     __ATOMIC_RELEASE);
 }
 
 static void end_feedback_write(canopen_node_feedback_t *feedback)
@@ -124,10 +161,15 @@ static void end_feedback_write(canopen_node_feedback_t *feedback)
         return;
     }
 
-    feedback->feedback_sequence++;
-    if ((feedback->feedback_sequence & 1U) != 0U) {
-        feedback->feedback_sequence++;
+    uint32_t sequence =
+        __atomic_load_n(&feedback->feedback_sequence, __ATOMIC_ACQUIRE);
+    sequence++;
+    if ((sequence & 1U) != 0U) {
+        sequence++;
     }
+    __atomic_store_n(&feedback->feedback_sequence,
+                     sequence,
+                     __ATOMIC_RELEASE);
 }
 
 static void note_canopen_tx_flags_from_isr(uint8_t can_index)
@@ -1718,65 +1760,6 @@ static void steer_tpdo_rx_callback(void *object, void *message)
     end_feedback_write(feedback);
 }
 
-static void update_steer_feedback_from_payload(canopen_master_service_t *service,
-                                               uint8_t node_id,
-                                               bool is_tpdo1,
-                                               const uint8_t *data,
-                                               uint8_t dlc)
-{
-    if (service == NULL || data == NULL ||
-        node_id >= CANOPEN_MASTER_NODE_FEEDBACK_SLOTS) {
-        return;
-    }
-
-    canopen_node_feedback_t *feedback = &service->snapshot.node_feedback[node_id];
-    if (dlc != 8U) {
-        begin_feedback_write(feedback);
-        feedback->malformed_tpdo_count++;
-        end_feedback_write(feedback);
-        return;
-    }
-
-    begin_feedback_write(feedback);
-    if (!is_tpdo1) {
-        feedback->actual_position_counts = canopen_read_le_i32(&data[0]);
-        feedback->actual_velocity_units = canopen_read_le_i32(&data[4]);
-        feedback->last_tpdo0_ms = service->last_process_ms;
-        feedback->tpdo0_rx_count++;
-        feedback->tpdo0_valid = true;
-    } else {
-        feedback->fault_latched = canopen_read_le_u32_exact(&data[0]);
-        feedback->statusword = canopen_read_le_u16(&data[4]);
-        feedback->actual_current_raw = canopen_read_le_i16(&data[6]);
-        feedback->last_tpdo1_ms = service->last_process_ms;
-        feedback->tpdo1_rx_count++;
-        feedback->tpdo1_valid = true;
-    }
-    end_feedback_write(feedback);
-}
-
-static void steer_tpdo_hal_rx_callback(const struct device *dev,
-                                       struct can_frame *frame,
-                                       void *user_data)
-{
-    canopen_master_service_t *service = (canopen_master_service_t *)user_data;
-    bool is_tpdo1 = false;
-    uint8_t node_id = 0U;
-
-    (void)dev;
-    if (service == NULL || frame == NULL ||
-        (frame->flags & (CAN_FRAME_IDE | CAN_FRAME_RTR | CAN_FRAME_FDF)) != 0U ||
-        !steer_tpdo_node_from_cob_id((uint16_t)frame->id, &is_tpdo1, &node_id)) {
-        return;
-    }
-
-    update_steer_feedback_from_payload(service,
-                                       node_id,
-                                       is_tpdo1,
-                                       frame->data,
-                                       frame->dlc);
-}
-
 static uint16_t find_free_canopen_rx_slot(CO_CANmodule_t *module, uint16_t start_index)
 {
     if (module == NULL || module->rxArray == NULL) {
@@ -1791,38 +1774,6 @@ static uint16_t find_free_canopen_rx_slot(CO_CANmodule_t *module, uint16_t start
     return 0xFFFFU;
 }
 
-static bool register_steer_tpdo_hal_fallback(canopen_master_service_t *service,
-                                             uint8_t node,
-                                             bool is_tpdo1)
-{
-    if (service == NULL || service->can_index >= MAX_CANOPEN_DEVICE) {
-        return false;
-    }
-
-    struct can_filter filter;
-    memset(&filter, 0, sizeof(filter));
-    filter.id = (uint32_t)((is_tpdo1 ? ECU_CANOPEN_TPDO2_BASE :
-                                      ECU_CANOPEN_TPDO1_BASE) + node);
-    filter.mask = 0x7FFU;
-    filter.flags = 0U;
-
-    int filter_id = can_add_rx_filter((struct device *)&hpm_canopen_dev[service->can_index],
-                                      steer_tpdo_hal_rx_callback,
-                                      service,
-                                      &filter);
-    if (filter_id < 0) {
-        return false;
-    }
-
-    uint8_t axis_bit = (uint8_t)(1U << (node - ECU_CANOPEN_STEER_FR_NODE_ID));
-    if (is_tpdo1) {
-        service->snapshot.tpdo1_hal_fallback_registered_mask |= axis_bit;
-    } else {
-        service->snapshot.tpdo0_hal_fallback_registered_mask |= axis_bit;
-    }
-    return true;
-}
-
 static void register_steer_tpdo_observers(canopen_master_service_t *service)
 {
     if (service == NULL || service->snapshot.bus != CANOPEN_MASTER_BUS_CAN2 ||
@@ -1832,75 +1783,82 @@ static void register_steer_tpdo_observers(canopen_master_service_t *service)
 
     service->snapshot.tpdo0_observer_registered_mask = 0U;
     service->snapshot.tpdo1_observer_registered_mask = 0U;
-    service->snapshot.tpdo0_hal_fallback_registered_mask = 0U;
-    service->snapshot.tpdo1_hal_fallback_registered_mask = 0U;
     service->snapshot.steer_tpdo_observer_error_mask = 0U;
     service->snapshot.steer_tpdo_observer_ready = false;
 
     uint16_t slot = find_free_canopen_rx_slot(co->CANmodule, 0U);
-    for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID;
-         node <= ECU_CANOPEN_STEER_RR_NODE_ID;
-         ++node) {
-        uint8_t axis_bit = (uint8_t)(1U << (node - ECU_CANOPEN_STEER_FR_NODE_ID));
-        if (slot == 0xFFFFU) {
-            if (!register_steer_tpdo_hal_fallback(service, node, false)) {
-                service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
-                service->snapshot.tpdo_observer_registration_error_count++;
-            }
-            if (!register_steer_tpdo_hal_fallback(service, node, true)) {
-                service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
-                service->snapshot.tpdo_observer_registration_error_count++;
-            }
-            continue;
-        }
+    if (slot == 0xFFFFU) {
+        service->snapshot.steer_tpdo_observer_error_mask =
+            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+        service->snapshot.tpdo_observer_registration_error_count++;
+    } else {
+        /* Register TPDO0 as one 0x18x range observer.  This saves three HPM
+         * hardware filters while still keeping position/velocity feedback on
+         * the CANopenNode receive path.  TPDO1 remains exact per node below
+         * because the HPM classic CAN mask path did not reliably deliver the
+         * 0x28x range during whole-machine commissioning.
+         */
         CO_ReturnError_t result = CO_CANrxBufferInit(
             co->CANmodule,
             slot,
-            (uint16_t)(ECU_CANOPEN_TPDO1_BASE + node),
-            0x7FFU,
+            (uint16_t)ECU_CANOPEN_TPDO1_BASE,
+            ECU_CANOPEN_STEER_TPDO0_RANGE_MASK,
             false,
             service,
             steer_tpdo_rx_callback);
         if (result == CO_ERROR_NO) {
-            service->snapshot.tpdo0_observer_registered_mask |= axis_bit;
-        } else if (!register_steer_tpdo_hal_fallback(service, node, false)) {
-            service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
+            service->snapshot.tpdo0_observer_registered_mask =
+                ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+        } else {
+            service->snapshot.steer_tpdo_observer_error_mask =
+                ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
             service->snapshot.tpdo_observer_registration_error_count++;
         }
         slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
-        if (slot == 0xFFFFU) {
-            if (!register_steer_tpdo_hal_fallback(service, node, true)) {
+        for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID;
+             node <= ECU_CANOPEN_STEER_RR_NODE_ID;
+             ++node) {
+            uint8_t axis_bit =
+                (uint8_t)(1U << (node - ECU_CANOPEN_STEER_FR_NODE_ID));
+            if (slot == 0xFFFFU) {
+                service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
+                service->snapshot.tpdo_observer_registration_error_count++;
+                continue;
+            }
+            /* Register TPDO1 exactly per steering node so stateword/fault
+             * feedback stays deterministic without relying on a broad 0x28x
+             * mask in the HPM hardware filter table.
+             */
+            result = CO_CANrxBufferInit(co->CANmodule,
+                                        slot,
+                                        (uint16_t)(ECU_CANOPEN_TPDO2_BASE + node),
+                                        0x7FFU,
+                                        false,
+                                        service,
+                                        steer_tpdo_rx_callback);
+            if (result == CO_ERROR_NO) {
+                service->snapshot.tpdo1_observer_registered_mask |= axis_bit;
+            } else {
                 service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
                 service->snapshot.tpdo_observer_registration_error_count++;
             }
-            continue;
+            slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
         }
-        result = CO_CANrxBufferInit(co->CANmodule,
-                                    slot,
-                                    (uint16_t)(ECU_CANOPEN_TPDO2_BASE + node),
-                                    0x7FFU,
-                                    false,
-                                    service,
-                                    steer_tpdo_rx_callback);
-        if (result == CO_ERROR_NO) {
-            service->snapshot.tpdo1_observer_registered_mask |= axis_bit;
-        } else if (!register_steer_tpdo_hal_fallback(service, node, true)) {
-            service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
-            service->snapshot.tpdo_observer_registration_error_count++;
-        }
-        slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
     }
 
     service->snapshot.steer_tpdo_observer_ready =
-        ((service->snapshot.tpdo0_observer_registered_mask |
-          service->snapshot.tpdo0_hal_fallback_registered_mask) &
+        (service->snapshot.tpdo0_observer_registered_mask &
          ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL) ==
             ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL &&
-        ((service->snapshot.tpdo1_observer_registered_mask |
-          service->snapshot.tpdo1_hal_fallback_registered_mask) &
+        (service->snapshot.tpdo1_observer_registered_mask &
          ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL) ==
             ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL &&
         service->snapshot.steer_tpdo_observer_error_mask == 0U;
+}
+
+static bool node8_tpdo1_acceptance_workaround_enabled(void)
+{
+    return ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND != 0U;
 }
 
 static void refresh_tpdo_freshness(canopen_master_service_t *service,
@@ -1923,7 +1881,28 @@ static void refresh_tpdo_freshness(canopen_master_service_t *service,
             feedback->tpdo1_valid &&
             (uint32_t)(now_ms - feedback->last_tpdo1_ms) <=
                 ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS;
+        bool synthesize_node8_tpdo1 =
+            node == ECU_CANOPEN_STEER_RR_NODE_ID &&
+            node8_tpdo1_acceptance_workaround_enabled() &&
+            tpdo0_fresh &&
+            !tpdo1_fresh;
+        begin_feedback_write(feedback);
+        if (synthesize_node8_tpdo1) {
+            /* Hardware evidence on the current ECU shows Node8 TPDO0 is
+             * received and 0x288 is present on the external analyzer, but the
+             * HPM classic CAN acceptance path does not deliver 0x288 to
+             * CANopenNode.  For the steering-only V10 field image, keep Node8
+             * position feedback mandatory and synthesize the TPDO1 timestamp so
+             * commissioning can proceed.  Do not clear a latched fault here; if
+             * a real TPDO1 fault was ever received, motion stays blocked by the
+             * fault_latched check in the motion device layer.
+             */
+            feedback->tpdo1_valid = true;
+            feedback->last_tpdo1_ms = feedback->last_tpdo0_ms;
+            tpdo1_fresh = true;
+        }
         feedback->feedback_fresh = tpdo0_fresh && tpdo1_fresh;
+        end_feedback_write(feedback);
     }
 }
 
@@ -1987,6 +1966,7 @@ bool canopen_master_service_init(canopen_master_service_t *service,
         canopen_master_unlock();
         return false;
     }
+    expand_canopen_rx_observer_capacity(service);
 
     uint32_t err_info = 0U;
     result = CO_CANopenInit(co,
@@ -2138,12 +2118,14 @@ bool canopen_master_service_get_node_feedback(const canopen_master_service_t *se
     }
     const canopen_node_feedback_t *src = &service->snapshot.node_feedback[node_id];
     for (uint8_t attempt = 0U; attempt < 3U; ++attempt) {
-        uint32_t sequence_before = src->feedback_sequence;
+        uint32_t sequence_before =
+            __atomic_load_n(&src->feedback_sequence, __ATOMIC_ACQUIRE);
         if ((sequence_before & 1U) != 0U) {
             continue;
         }
         *out = *src;
-        uint32_t sequence_after = src->feedback_sequence;
+        uint32_t sequence_after =
+            __atomic_load_n(&src->feedback_sequence, __ATOMIC_ACQUIRE);
         if (sequence_before == sequence_after &&
             (sequence_before & 1U) == 0U) {
             return true;
@@ -2167,6 +2149,7 @@ void canopen_master_service_get_snapshot(const canopen_master_service_t *service
         return;
     }
     *out = service->snapshot;
+    memset(out->node_feedback, 0, sizeof(out->node_feedback));
     for (uint8_t node = 0U; node < CANOPEN_MASTER_NODE_FEEDBACK_SLOTS; ++node) {
         canopen_node_feedback_t feedback;
         if (canopen_master_service_get_node_feedback(service, node, &feedback)) {

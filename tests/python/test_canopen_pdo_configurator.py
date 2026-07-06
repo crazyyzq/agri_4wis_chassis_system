@@ -44,6 +44,34 @@ def test_node13_tpdo1_cob_id_is_0x28d(root: pathlib.Path) -> None:
     assert by_object[(0x1801, 0x01)].value == 0x0000028D
 
 
+def test_v2_profile_adds_rpdo2_and_synchronous_types(root: pathlib.Path) -> None:
+    profiles = load_tool(root, "pdo_profiles")
+    ops = profiles.build_node_configuration(13)
+    by_object = {(op.index, op.subindex): op for op in ops if op.kind == "download"}
+
+    assert by_object[(0x1400, 0x02)].value == 1
+    assert by_object[(0x1401, 0x02)].value == 1
+    assert by_object[(0x1402, 0x01)].value == 0x0000040D
+    assert by_object[(0x1402, 0x02)].value == 4
+    assert by_object[(0x1602, 0x00)].value == 1
+    assert by_object[(0x1602, 0x01)].value == 0x60C10120
+    assert by_object[(0x1800, 0x02)].value == 1
+    assert by_object[(0x1801, 0x02)].value == 4
+
+
+def test_v2_reserved_pdos_are_uniformly_disabled(root: pathlib.Path) -> None:
+    profiles = load_tool(root, "pdo_profiles")
+    ops = profiles.build_node_configuration(5)
+    by_object = {(op.index, op.subindex): op for op in ops if op.kind == "download"}
+
+    assert by_object[(0x1403, 0x01)].value == 0x80000000 | (0x500 + 5)
+    assert by_object[(0x1603, 0x00)].value == 0
+    assert by_object[(0x1802, 0x01)].value == 0x80000000 | (0x380 + 5)
+    assert by_object[(0x1A02, 0x00)].value == 0
+    assert by_object[(0x1803, 0x01)].value == 0x80000000 | (0x480 + 5)
+    assert by_object[(0x1A03, 0x00)].value == 0
+
+
 def test_bus_node_mapping_is_separated(root: pathlib.Path) -> None:
     profiles = load_tool(root, "pdo_profiles")
     assert profiles.BUS_NODES["can1"] == [1, 2, 3, 4, 5, 6, 7, 8]

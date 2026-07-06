@@ -3,12 +3,15 @@
 
 #include "motion_device.h"
 #include "canopen_pdo_profile.h"
+#include "hpm_common.h"
 #include "servo_drive_canopen.h"
 
 #define ECU_STEER_GROUP_PDO_FRAME_COUNT (ECU_WHEEL_COUNT * 2U)
 #define ECU_NODE5_STEER_PDO_FRAME_COUNT (2U)
 
+ATTR_PLACE_AT_NONCACHEABLE_BSS
 volatile ecu_steer_commissioning_control_t g_ecu_steer_commissioning_control;
+ATTR_PLACE_AT_NONCACHEABLE_BSS
 volatile ecu_steer_calibration_override_t g_ecu_steer_calibration_override;
 
 bool ecu_commissioning_node5_pdo_runtime_authorized(void)
@@ -22,18 +25,30 @@ bool ecu_commissioning_node5_pdo_runtime_authorized(void)
 
 static void clear_steer_commissioning_authorization(motion_device_state_t *state)
 {
+#if !ECU_BUILD_PROFILE_STEER4_REMOTE_90
     g_ecu_steer_commissioning_control.steer_remote_commission_enable = false;
     g_ecu_steer_commissioning_control.enabled_axis_mask = 0U;
+#endif
     if (state != NULL) {
         state->steer_commission_authorization_clear_count++;
         state->selected_axis_mask = 0U;
         state->steer_commission_nmt_sent_mask = 0U;
         state->steer_commission_neutral_since_ms = 0U;
         state->steer_commission_last_sync_ms = 0U;
+        state->steer_commission_sync_wait_start_ms = 0U;
+        state->steer_commission_sync_complete_ms = 0U;
+        state->steer_commission_sync_complete_count_before = 0U;
+        state->steer_commission_centered = false;
+        state->steer_commission_post_command_is_centering = false;
         state->steer_commission_post_command_tpdo_pending = false;
         state->steer_commission_post_command_axis_mask = 0U;
         state->steer_commission_post_command_missing_mask = 0U;
         state->steer_commission_post_command_start_ms = 0U;
+        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+            state->steer_commission_ramped_target_valid[wheel] = false;
+            state->steer_commission_ramped_target_counts[wheel] = 0;
+        }
+        state->steer_commission_ramp_last_ms = 0U;
         state->steer_next_group_valid = false;
         state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_AUTH;
     }
@@ -179,16 +194,24 @@ bool motion_device_get_effective_steer_calibration(
     }
 
     steer_axis_calibration_t override_axis[ECU_WHEEL_COUNT];
-    uint32_t sequence_before = g_ecu_steer_calibration_override.sequence;
+    uint32_t sequence_before =
+        __atomic_load_n(&g_ecu_steer_calibration_override.sequence,
+                        __ATOMIC_ACQUIRE);
+    if ((sequence_before & 1U) != 0U) {
+        return false;
+    }
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         override_axis[wheel] = g_ecu_steer_calibration_override.axis[wheel];
     }
-    uint32_t sequence_after = g_ecu_steer_calibration_override.sequence;
+    uint32_t sequence_after =
+        __atomic_load_n(&g_ecu_steer_calibration_override.sequence,
+                        __ATOMIC_ACQUIRE);
 
-    /* If J-Link is editing the RAM structure while this task reads it, reject
-     * the cycle.  The operator can update sequence after completing all fields.
+    /* J-Link RAM calibration updates use an odd/even sequence protocol:
+     * odd means "writer is editing", even means "stable".  Reject unstable or
+     * torn reads so a half-written zero/min/max never reaches the actuator path.
      */
-    if (sequence_before != sequence_after) {
+    if (sequence_before != sequence_after || (sequence_after & 1U) != 0U) {
         return false;
     }
 
@@ -554,6 +577,18 @@ static bool steer_all_axes_have_remote_evidence(motion_device_state_t *state,
 static bool steer_commissioning_authorization_valid(uint32_t now_ms,
                                                     uint8_t *axis_mask)
 {
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+    /* V10 full-range steering commissioning does not use J-Link as a motion
+     * enable switch.  J-Link is only allowed to load RAM calibration.  Runtime
+     * motion still requires the normal remote/safety interlocks before any PDO
+     * can be queued.
+     */
+    (void)now_ms;
+    if (axis_mask != NULL) {
+        *axis_mask = ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+    }
+    return true;
+#else
     uint8_t mask = g_ecu_steer_commissioning_control.enabled_axis_mask &
                    ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
     bool valid =
@@ -565,8 +600,10 @@ static bool steer_commissioning_authorization_valid(uint32_t now_ms,
         *axis_mask = valid ? mask : 0U;
     }
     return valid;
+#endif
 }
 
+#if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
 static bool steer_commissioning_axis_feedback_ready(
     const canopen_master_service_t *canopen,
     const ecu_hardware_config_t *config,
@@ -611,10 +648,11 @@ static bool steer_commissioning_axis_calibration_ready(
                                                          calibration,
                                                          NULL) &&
            steer_commissioning_build_targets(calibration,
-                                             axis_mask,
-                                             0.0f,
-                                             targets);
+                                              axis_mask,
+                                              0.0f,
+                                              targets);
 }
+#endif
 
 static bool steer_commissioning_remote_conditions_ok(
     const vehicle_actuator_command_t *command)
@@ -664,11 +702,17 @@ static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
     }
     if (commissioning_policy_allows_steer4_remote()) {
         uint8_t axis_mask = 0U;
-        if (!steer_commissioning_authorization_valid(now_ms, &axis_mask) ||
-            !steer_commissioning_remote_conditions_ok(command) ||
-            !steer_commissioning_axis_calibration_ready(config, axis_mask) ||
-            !steer_commissioning_axis_feedback_ready(canopen, config, axis_mask)) {
+        if (!steer_commissioning_authorization_valid(now_ms, &axis_mask)) {
             return MOTION_STEER_INHIBIT_AXIS_NOT_READY;
+        }
+        if (command->source != COMMAND_SOURCE_REMOTE) {
+            return MOTION_STEER_INHIBIT_COMMAND_SOURCE_NOT_AUTHORIZED;
+        }
+        if (!steer_commissioning_remote_conditions_ok(command)) {
+            return MOTION_STEER_INHIBIT_REMOTE_DISARMED;
+        }
+        if (state->steer_group_degraded) {
+            return MOTION_STEER_INHIBIT_GROUP_DEGRADED;
         }
         state->selected_axis_mask = axis_mask;
         return MOTION_STEER_INHIBIT_NONE;
@@ -716,7 +760,11 @@ static bool motion_device_update_steer_safety_gate(
 
     if (!allowed) {
         if (commissioning_policy_allows_steer4_remote() &&
-            state->steer_commission_state == STEER_REMOTE_COMMISSION_ACTIVE) {
+            (state->steer_commission_state == STEER_REMOTE_COMMISSION_ACTIVE ||
+             state->steer_commission_state == STEER_REMOTE_COMMISSION_CENTERING ||
+             state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE ||
+             state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE ||
+             state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO)) {
             state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
             clear_steer_commissioning_authorization(state);
         }
@@ -1313,7 +1361,10 @@ static void update_steer_remote_commissioning_state(
         return;
     }
 
-    if (state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE &&
+    if (!state->steer_commission_centered &&
+        state->steer_commission_state != STEER_REMOTE_COMMISSION_CENTERING &&
+        state->steer_commission_state != STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE &&
+        state->steer_commission_state != STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE &&
         state->steer_commission_state != STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO) {
         if (!command->steer_commission_steering_neutral ||
             !steering_command_is_neutral(command)) {
@@ -1343,14 +1394,18 @@ static void update_steer_remote_commissioning_state(
         return;
     }
     if (!steer_commissioning_axis_calibration_ready(config, axis_mask)) {
-        state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
-        clear_steer_commissioning_authorization(state);
+        state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_CALIBRATION;
         return;
     }
-    if (state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO) {
+    if (state->steer_commission_state == STEER_REMOTE_COMMISSION_CENTERING ||
+        state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE ||
+        state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE ||
+        state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO) {
         return;
     }
-    if (state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE) {
+    if (!state->steer_commission_centered) {
+        state->steer_commission_state = STEER_REMOTE_COMMISSION_CENTERING;
+    } else if (state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE) {
         state->steer_commission_state = STEER_REMOTE_COMMISSION_AXIS_READY;
     }
 }
@@ -1386,19 +1441,127 @@ static bool selected_targets_changed(const motion_device_state_t *state,
     return false;
 }
 
-static void start_post_command_tpdo_window(motion_device_state_t *state,
+static bool center_feedback_within_tolerance(
+    const motion_device_state_t *state,
+    const canopen_master_service_t *canopen,
+    const ecu_hardware_config_t *config,
+    const steer_axis_calibration_t calibration[ECU_WHEEL_COUNT],
+    uint8_t axis_mask)
+{
+    (void)state;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t axis_bit = (uint8_t)(1U << wheel);
+        if ((axis_mask & axis_bit) == 0U) {
+            continue;
+        }
+
+        canopen_node_feedback_t feedback;
+        uint8_t node_id = config->steer_nodes[wheel].node_id;
+        if (!canopen_master_service_get_node_feedback(canopen, node_id, &feedback) ||
+            !feedback.feedback_fresh ||
+            feedback.fault_latched != 0U ||
+            abs_i32_delta(feedback.actual_position_counts,
+                          calibration[wheel].straight_zero_offset_counts) >
+                ECU_STEER_REMOTE_COMMISSION_CENTER_TOLERANCE_COUNTS) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void initialize_commissioning_ramp_from_feedback(
+    motion_device_state_t *state,
+    const canopen_master_service_t *canopen,
+    const ecu_hardware_config_t *config,
+    const steer_axis_calibration_t calibration[ECU_WHEEL_COUNT],
+    uint8_t axis_mask,
+    uint32_t now_ms)
+{
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t axis_bit = (uint8_t)(1U << wheel);
+        if ((axis_mask & axis_bit) == 0U) {
+            state->steer_commission_ramped_target_valid[wheel] = false;
+            state->steer_commission_ramped_target_counts[wheel] = 0;
+            continue;
+        }
+
+        canopen_node_feedback_t feedback;
+        uint8_t node_id = config->steer_nodes[wheel].node_id;
+        if (canopen_master_service_get_node_feedback(canopen, node_id, &feedback) &&
+            feedback.feedback_fresh &&
+            feedback.fault_latched == 0U) {
+            state->steer_commission_ramped_target_counts[wheel] =
+                feedback.actual_position_counts;
+        } else {
+            state->steer_commission_ramped_target_counts[wheel] =
+                calibration[wheel].straight_zero_offset_counts;
+        }
+        state->steer_commission_ramped_target_valid[wheel] = true;
+    }
+    state->steer_commission_ramp_last_ms = now_ms;
+}
+
+static void ramp_commissioning_targets(
+    motion_device_state_t *state,
+    const steer_axis_calibration_t calibration[ECU_WHEEL_COUNT],
+    const int32_t desired_targets[ECU_WHEEL_COUNT],
+    uint8_t axis_mask,
+    uint32_t now_ms,
+    int32_t out_targets[ECU_WHEEL_COUNT])
+{
+    uint32_t elapsed_ms = state->steer_commission_ramp_last_ms == 0U ?
+                          ECU_STEER_REMOTE_COMMISSION_PERIOD_MS :
+                          (uint32_t)(now_ms - state->steer_commission_ramp_last_ms);
+    int64_t max_step = ((int64_t)ECU_STEER_REMOTE_COMMISSION_RAMP_COUNTS_PER_SEC *
+                        (int64_t)elapsed_ms) / 1000;
+    if (max_step < 1) {
+        max_step = 1;
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t axis_bit = (uint8_t)(1U << wheel);
+        if ((axis_mask & axis_bit) == 0U) {
+            out_targets[wheel] = 0;
+            continue;
+        }
+
+        int32_t current = state->steer_commission_ramped_target_valid[wheel] ?
+                          state->steer_commission_ramped_target_counts[wheel] :
+                          calibration[wheel].straight_zero_offset_counts;
+        int64_t delta = (int64_t)desired_targets[wheel] - (int64_t)current;
+        int32_t next = desired_targets[wheel];
+        if (delta > max_step) {
+            next = current + (int32_t)max_step;
+        } else if (delta < -max_step) {
+            next = current - (int32_t)max_step;
+        }
+        out_targets[wheel] = clamp_i32(next,
+                                       calibration[wheel].minimum_position_counts,
+                                       calibration[wheel].maximum_position_counts);
+        state->steer_commission_ramped_target_counts[wheel] = out_targets[wheel];
+        state->steer_commission_ramped_target_valid[wheel] = true;
+    }
+
+    state->steer_commission_ramp_last_ms = now_ms;
+}
+
+static bool start_post_command_tpdo_window(motion_device_state_t *state,
                                            canopen_master_service_t *canopen,
                                            const ecu_hardware_config_t *config,
                                            uint8_t axis_mask,
+                                           bool is_centering,
                                            uint32_t now_ms)
 {
     uint8_t selected_mask = axis_mask & ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+    if (selected_mask == 0U) {
+        return false;
+    }
 
-    state->steer_commission_post_command_tpdo_pending = selected_mask != 0U;
+    state->steer_commission_post_command_tpdo_pending = true;
     state->steer_commission_post_command_axis_mask = selected_mask;
     state->steer_commission_post_command_missing_mask = selected_mask;
-    state->steer_commission_post_command_start_ms = now_ms;
-    state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO;
+    state->steer_commission_post_command_start_ms = 0U;
+    state->steer_commission_post_command_is_centering = is_centering;
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         state->steer_commission_tpdo0_count_before[wheel] = 0U;
@@ -1415,9 +1578,52 @@ static void start_post_command_tpdo_window(motion_device_state_t *state,
         }
     }
 
+    canopen_master_snapshot_t snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    canopen_master_service_get_snapshot(canopen, &snapshot);
+    state->steer_commission_sync_complete_count_before =
+        snapshot.sync_tx_complete_count;
+    state->steer_commission_sync_wait_start_ms = now_ms;
+    state->steer_commission_sync_complete_ms = 0U;
+
     if (canopen_master_service_send_sync(canopen, now_ms)) {
         state->steer_commission_last_sync_ms = now_ms;
+        state->steer_commission_state = STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE;
+        return true;
     }
+    state->steer_commission_post_command_tpdo_pending = false;
+    state->steer_commission_post_command_axis_mask = 0U;
+    state->steer_commission_post_command_missing_mask = 0U;
+    state->steer_commission_post_command_is_centering = false;
+    state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+    return false;
+}
+
+static bool post_command_sync_complete(motion_device_state_t *state,
+                                       const canopen_master_service_t *canopen,
+                                       uint32_t now_ms)
+{
+    canopen_master_snapshot_t snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    canopen_master_service_get_snapshot(canopen, &snapshot);
+    if (snapshot.sync_tx_complete_count >
+            state->steer_commission_sync_complete_count_before &&
+        snapshot.last_sync_tx_complete_ms >=
+            state->steer_commission_sync_wait_start_ms) {
+        state->steer_commission_sync_complete_ms =
+            snapshot.last_sync_tx_complete_ms;
+        state->steer_commission_post_command_start_ms = now_ms;
+        state->steer_commission_state =
+            STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO;
+        return true;
+    }
+    if ((uint32_t)(now_ms - state->steer_commission_sync_wait_start_ms) >=
+        ECU_STEER_REMOTE_COMMISSION_SYNC_TIMEOUT_MS) {
+        state->steer_commission_post_command_timeout_count++;
+        state->steer_commission_last_post_command_timeout_ms = now_ms;
+        state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+    }
+    return false;
 }
 
 static bool post_command_tpdo_window_complete(motion_device_state_t *state,
@@ -1441,7 +1647,6 @@ static bool post_command_tpdo_window_complete(motion_device_state_t *state,
         uint8_t node_id = config->steer_nodes[wheel].node_id;
         if (!canopen_master_service_get_node_feedback(canopen, node_id, &feedback) ||
             feedback.tpdo0_rx_count <= state->steer_commission_tpdo0_count_before[wheel] ||
-            feedback.tpdo1_rx_count <= state->steer_commission_tpdo1_count_before[wheel] ||
             !feedback.feedback_fresh ||
             feedback.fault_latched != 0U) {
             missing_mask |= axis_bit;
@@ -1457,7 +1662,11 @@ static bool post_command_tpdo_window_complete(motion_device_state_t *state,
     state->steer_commission_post_command_axis_mask = 0U;
     state->steer_commission_post_command_missing_mask = 0U;
     state->steer_commission_post_command_start_ms = 0U;
-    state->steer_commission_state = STEER_REMOTE_COMMISSION_ACTIVE;
+    state->steer_commission_state =
+        state->steer_commission_post_command_is_centering ?
+        STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE :
+        STEER_REMOTE_COMMISSION_ACTIVE;
+    state->steer_commission_post_command_is_centering = false;
     return true;
 }
 
@@ -1477,9 +1686,7 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
                                             config,
                                             &state->last_motion_command,
                                             now_ms);
-    if (state->steer_commission_state == STEER_REMOTE_COMMISSION_TPDO_MONITOR ||
-        state->steer_commission_state == STEER_REMOTE_COMMISSION_AXIS_READY ||
-        state->steer_commission_state == STEER_REMOTE_COMMISSION_ACTIVE) {
+    if (state->steer_commission_state == STEER_REMOTE_COMMISSION_TPDO_MONITOR) {
         send_commissioning_sync_if_due(canopen, state, now_ms);
     }
 
@@ -1499,12 +1706,31 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
             return ECU_DEVICE_APPLY_OK;
         }
         uint8_t completed_axis_mask = state->steer_active_group_axis_mask;
-        start_post_command_tpdo_window(state,
-                                       canopen,
-                                       config,
-                                       completed_axis_mask,
-                                       now_ms);
+        bool was_centering =
+            state->steer_commission_state == STEER_REMOTE_COMMISSION_CENTERING;
+        if (!start_post_command_tpdo_window(state,
+                                            canopen,
+                                            config,
+                                            completed_axis_mask,
+                                            was_centering,
+                                            now_ms)) {
+            fail_active_steer_group(state, canopen, now_ms);
+            clear_steer_commissioning_authorization(state);
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
         finish_completed_steer_group(state, now_ms);
+    }
+
+    if (state->steer_commission_state ==
+        STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE) {
+        if (!post_command_sync_complete(state, canopen, now_ms)) {
+            if (state->steer_commission_state == STEER_REMOTE_COMMISSION_FAULT) {
+                clear_steer_commissioning_authorization(state);
+                return ECU_DEVICE_APPLY_REJECTED;
+            }
+            return ECU_DEVICE_APPLY_OK;
+        }
     }
 
     if (state->steer_commission_post_command_tpdo_pending) {
@@ -1525,6 +1751,78 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
     if (state->steer_commission_state == STEER_REMOTE_COMMISSION_AXIS_READY) {
         state->steer_commission_state = STEER_REMOTE_COMMISSION_ACTIVE;
     }
+    if (state->steer_commission_state == STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE) {
+        uint8_t axis_mask = state->selected_axis_mask &
+                            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+        steer_axis_calibration_t calibration[ECU_WHEEL_COUNT];
+        if (!motion_device_get_effective_steer_calibration(config,
+                                                           axis_mask,
+                                                           calibration,
+                                                           NULL)) {
+            clear_steer_commissioning_authorization(state);
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
+        if (center_feedback_within_tolerance(state,
+                                             canopen,
+                                             config,
+                                             calibration,
+                                             axis_mask)) {
+            state->steer_commission_centered = true;
+            initialize_commissioning_ramp_from_feedback(state,
+                                                        canopen,
+                                                        config,
+                                                        calibration,
+                                                        axis_mask,
+                                                        now_ms);
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_ACTIVE;
+            return ECU_DEVICE_APPLY_OK;
+        }
+        send_commissioning_sync_if_due(canopen, state, now_ms);
+        if ((uint32_t)(now_ms - state->steer_commission_sync_complete_ms) >=
+            ECU_STEER_REMOTE_COMMISSION_POST_COMMAND_TPDO_TIMEOUT_MS) {
+            state->steer_commission_post_command_timeout_count++;
+            state->steer_commission_last_post_command_timeout_ms = now_ms;
+            clear_steer_commissioning_authorization(state);
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
+        return ECU_DEVICE_APPLY_OK;
+    }
+
+    if (state->steer_commission_state == STEER_REMOTE_COMMISSION_CENTERING) {
+        uint8_t axis_mask = state->selected_axis_mask &
+                            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+        steer_axis_calibration_t calibration[ECU_WHEEL_COUNT];
+        int32_t center_targets[ECU_WHEEL_COUNT] = {0};
+        if (!motion_device_get_effective_steer_calibration(config,
+                                                           axis_mask,
+                                                           calibration,
+                                                           NULL) ||
+            !steer_commissioning_build_targets(calibration,
+                                               axis_mask,
+                                               0.0f,
+                                               center_targets)) {
+            clear_steer_commissioning_authorization(state);
+            state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
+        if ((uint32_t)(now_ms - state->steer_realtime_last_flush_ms) <
+            ECU_STEER_REMOTE_COMMISSION_PERIOD_MS) {
+            return ECU_DEVICE_APPLY_OK;
+        }
+        state->steer_realtime_last_flush_ms = now_ms;
+        if (!queue_steer4_remote_group(canopen,
+                                       config,
+                                       state,
+                                       center_targets,
+                                       axis_mask,
+                                       now_ms)) {
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
+        return ECU_DEVICE_APPLY_OK;
+    }
+
     if (state->steer_commission_state != STEER_REMOTE_COMMISSION_ACTIVE) {
         return ECU_DEVICE_APPLY_OK;
     }
@@ -1537,7 +1835,8 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
     uint8_t axis_mask = state->selected_axis_mask &
                         ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
     steer_axis_calibration_t calibration[ECU_WHEEL_COUNT];
-    int32_t targets[ECU_WHEEL_COUNT] = {0};
+    int32_t desired_targets[ECU_WHEEL_COUNT] = {0};
+    int32_t ramped_targets[ECU_WHEEL_COUNT] = {0};
     if (!motion_device_get_effective_steer_calibration(config,
                                                        axis_mask,
                                                        calibration,
@@ -1545,16 +1844,22 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
         !steer_commissioning_build_targets(calibration,
                                            axis_mask,
                                            state->last_motion_command.target_steer_deg[0],
-                                           targets)) {
+                                           desired_targets)) {
         clear_steer_commissioning_authorization(state);
         state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
         return ECU_DEVICE_APPLY_REJECTED;
     }
-    if (!selected_targets_changed(state, targets, axis_mask)) {
+    ramp_commissioning_targets(state,
+                               calibration,
+                               desired_targets,
+                               axis_mask,
+                               now_ms,
+                               ramped_targets);
+    if (!selected_targets_changed(state, ramped_targets, axis_mask)) {
         canopen_master_service_note_pdo_same_target_coalesced(canopen);
         return ECU_DEVICE_APPLY_OK;
     }
-    if (!queue_steer4_remote_group(canopen, config, state, targets, axis_mask, now_ms)) {
+    if (!queue_steer4_remote_group(canopen, config, state, ramped_targets, axis_mask, now_ms)) {
         return ECU_DEVICE_APPLY_REJECTED;
     }
     return ECU_DEVICE_APPLY_OK;

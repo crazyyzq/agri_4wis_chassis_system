@@ -34,9 +34,13 @@ typedef enum {
 typedef enum {
     STEER_REMOTE_COMMISSION_DISABLED = 0,
     STEER_REMOTE_COMMISSION_WAIT_AUTH,
+    STEER_REMOTE_COMMISSION_WAIT_CALIBRATION,
     STEER_REMOTE_COMMISSION_WAIT_NEUTRAL,
     STEER_REMOTE_COMMISSION_TPDO_MONITOR,
     STEER_REMOTE_COMMISSION_AXIS_READY,
+    STEER_REMOTE_COMMISSION_CENTERING,
+    STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE,
+    STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE,
     STEER_REMOTE_COMMISSION_ACTIVE,
     STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO,
     STEER_REMOTE_COMMISSION_FAULT
@@ -77,8 +81,13 @@ typedef struct {
     uint8_t selected_axis_mask;
     uint32_t steer_commission_neutral_since_ms;
     uint32_t steer_commission_last_sync_ms;
+    uint32_t steer_commission_sync_wait_start_ms;
+    uint32_t steer_commission_sync_complete_ms;
+    uint32_t steer_commission_sync_complete_count_before;
     uint32_t steer_commission_authorization_clear_count;
     uint8_t steer_commission_nmt_sent_mask;
+    bool steer_commission_centered;
+    bool steer_commission_post_command_is_centering;
     bool steer_commission_post_command_tpdo_pending;
     uint8_t steer_commission_post_command_axis_mask;
     uint8_t steer_commission_post_command_missing_mask;
@@ -87,6 +96,9 @@ typedef struct {
     uint32_t steer_commission_post_command_timeout_count;
     uint32_t steer_commission_tpdo0_count_before[ECU_WHEEL_COUNT];
     uint32_t steer_commission_tpdo1_count_before[ECU_WHEEL_COUNT];
+    bool steer_commission_ramped_target_valid[ECU_WHEEL_COUNT];
+    int32_t steer_commission_ramped_target_counts[ECU_WHEEL_COUNT];
+    uint32_t steer_commission_ramp_last_ms;
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];

@@ -30,9 +30,13 @@ static const char *steer_commission_state_text(uint8_t state)
     switch (state) {
     case STEER_REMOTE_COMMISSION_DISABLED: return "disabled";
     case STEER_REMOTE_COMMISSION_WAIT_AUTH: return "wait_auth";
+    case STEER_REMOTE_COMMISSION_WAIT_CALIBRATION: return "wait_calibration";
     case STEER_REMOTE_COMMISSION_WAIT_NEUTRAL: return "wait_neutral";
     case STEER_REMOTE_COMMISSION_TPDO_MONITOR: return "tpdo_monitor";
     case STEER_REMOTE_COMMISSION_AXIS_READY: return "axis_ready";
+    case STEER_REMOTE_COMMISSION_CENTERING: return "centering";
+    case STEER_REMOTE_COMMISSION_WAIT_SYNC_TX_COMPLETE: return "wait_sync_tx";
+    case STEER_REMOTE_COMMISSION_WAIT_CENTER_SETTLE: return "wait_center_settle";
     case STEER_REMOTE_COMMISSION_ACTIVE: return "active";
     case STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO: return "wait_post_tpdo";
     case STEER_REMOTE_COMMISSION_FAULT: return "fault";
@@ -52,6 +56,15 @@ static const char *commissioning_policy_text(void)
     return "TPDO_MONITOR_ONLY";
 #else
     return "MAPPING_VERIFY_ONLY";
+#endif
+}
+
+static const char *remote_steer_range_text(void)
+{
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+    return "-90..90";
+#else
+    return "-45..45";
 #endif
 }
 
@@ -220,10 +233,14 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         return;
     }
 
-    printf("[ECU BUILD] build_profile=%s policy=%s drive_rpdo=0 can3_rpdo=0 "
+    printf("[ECU BUILD] profile=%s build_profile=%s policy=%s "
+           "remote_range_deg=%s axis_mask=0x0F "
+           "drive_rpdo=0 can3_rpdo=0 "
            "mapping_write=%u flash_write=0 brake_control=none\r\n",
            ECU_BUILD_PROFILE_TEXT,
+           ECU_BUILD_PROFILE_TEXT,
            commissioning_policy_text(),
+           remote_steer_range_text(),
            (unsigned int)ECU_ENABLE_MAINTENANCE_SDO_WRITES);
 
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
@@ -336,7 +353,6 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "pdo_position_group=%s sync_tx=%lu sync_done=%lu sync_inflight=%s "
            "sync_err=%lu last_sync=%lums last_sync_done=%lums "
            "tpdo_observer_ready=%s tpdo0_mask=0x%02x tpdo1_mask=0x%02x "
-           "tpdo0_hal=0x%02x tpdo1_hal=0x%02x "
            "tpdo_observer_err_mask=0x%02x tpdo_observer_errs=%lu "
            "pdo_tx_complete_frames=%u pdo_failed_frames=%u pdo_in_flight_frames=%u "
            "pdo_arm_complete_frames=%u pdo_trigger_complete_frames=%u "
@@ -365,8 +381,6 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            bool_text(snapshot->can2_canopen_snapshot.steer_tpdo_observer_ready),
            (unsigned int)snapshot->can2_canopen_snapshot.tpdo0_observer_registered_mask,
            (unsigned int)snapshot->can2_canopen_snapshot.tpdo1_observer_registered_mask,
-           (unsigned int)snapshot->can2_canopen_snapshot.tpdo0_hal_fallback_registered_mask,
-           (unsigned int)snapshot->can2_canopen_snapshot.tpdo1_hal_fallback_registered_mask,
            (unsigned int)snapshot->can2_canopen_snapshot.steer_tpdo_observer_error_mask,
            (unsigned long)snapshot->can2_canopen_snapshot.tpdo_observer_registration_error_count,
            (unsigned int)snapshot->can2_canopen_snapshot.pdo_tx_complete_frames,

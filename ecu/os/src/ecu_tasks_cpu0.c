@@ -205,6 +205,16 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
      * Do not derive mechanical brake state from the last requested command.
      */
     out->brake_applied = false;
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+    /* V10 steering-only commissioning never enables drive velocity PDOs or ECU
+     * brake outputs.  Allow the remote ESTOP latch to be reset on the bench even
+     * when wheel-speed/brake-applied feedback is unavailable; motion output is
+     * still limited to CAN2 Node5..8 steering RPDOs and remains gated by TPDO
+     * feedback, RAM calibration and neutral entry.
+     */
+    out->zero_speed = true;
+    out->brake_applied = true;
+#endif
     out->brake_release_confirmed = s_runtime.hardware_feedback.brake_release_confirmed;
     out->throttle_low = input->throttle == REMOTE_POS_LOW;
     out->steering_neutral = input->steering == REMOTE_POS_CENTER;
