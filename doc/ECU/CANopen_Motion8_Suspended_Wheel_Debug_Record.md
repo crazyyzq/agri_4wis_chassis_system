@@ -1,0 +1,172 @@
+# CANopen Node1-8 悬空整车遥控同步调试记录
+
+日期：2026-07-07
+
+## 1. 测试目的
+
+验证当前 PDO 标准是否能支持后续 ECU 遥控整车控制：
+
+- Node1-4 行走轮速度控制；
+- Node5-8 转向轮绝对位置控制；
+- 正 Ackermann、反 Ackermann、蟹行、自转四种模式；
+- 位置目标和速度目标都按同一次“遥控采样”的四轮快照发送；
+- 任一周期不排队旧目标，只发送当前最新目标。
+
+本次测试先绕过 ECU，直接用 CAN 分析仪驱动 ECU-CAN2 上的 8 个 CANopen 节点。这样可以把驱动器 PDO、SYNC、控制字、模式字问题和 ECU 任务调度问题分开。
+
+## 2. 接线和前提
+
+- CAN 分析仪 CAN1：接 ECU-CAN2 / 运动 CANopen 网络。
+- 驱动器节点：
+  - Node1-4：行走轮；
+  - Node5-8：转向轮。
+- 轮子已悬空，允许低速转动。
+- PDO 已按 `current7 + sync1` 保存到驱动器 Flash：
+  - RPDO0：`0x6040 controlword + 0x6060 mode=3 + 0x60FF target velocity`
+  - RPDO1：`0x6040 controlword + 0x6060 mode=1 + 0x607A target position`
+  - TPDO0：`0x6064 actual position + 0x606C actual velocity`
+  - TPDO1：`0x2183 latched fault + 0x6041 statusword + 0x221C actual current`
+
+## 3. 测试工具
+
+新增脚本：
+
+```powershell
+python tools\canopen_motion_debug\motion8_remote_sim_debug.py --allow-motion ...
+```
+
+脚本行为：
+
+1. 对 Node1-8 发送 NMT Operational。
+2. 通过 SDO 设置控制源、模式和转向 profile 参数。
+3. Node5-8 每个控制周期发送：
+   - 4 帧 RPDO1 arm：`0x002F + mode=1 + target position`
+   - 1 帧 SYNC
+   - 4 帧 RPDO1 trigger：`0x003F + mode=1 + target position`
+   - 1 帧 SYNC
+4. Node1-4 每个控制周期发送：
+   - 4 帧 RPDO0：`0x000F + mode=3 + target velocity`
+   - 1 帧 SYNC
+5. 结束时多次发送速度 0，然后发送 `0x0000 + mode=3 + velocity=0` 失能行走输出。
+
+## 4. 测试结果
+
+### 4.1 小幅正 Ackermann 冒烟测试
+
+命令：
+
+```powershell
+python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
+  --allow-motion `
+  --speed-kph 0.12 `
+  --steer-deg 4 `
+  --period-ms 80 `
+  --samples-per-segment 24 `
+  --modes ackermann `
+  --fault-reset-before-test `
+  --log-dir out\motion8_ackermann_smoke
+```
+
+结果：
+
+- Node1-8 均收到 TPDO0/TPDO1；
+- EMCY 数量：0；
+- 停止后 Node1-4 `0x606C actual_velocity` 均为 0；
+- 转向 Node5-8 停止后实际位置回到接近 0 count。
+
+### 4.2 四模式 50 ms 周期测试
+
+命令：
+
+```powershell
+python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
+  --allow-motion `
+  --speed-kph 0.30 `
+  --steer-deg 10 `
+  --period-ms 50 `
+  --samples-per-segment 45 `
+  --modes ackermann,reverse_ackermann,crab,spin `
+  --log-dir out\motion8_all_modes_030kph_10deg
+```
+
+结果：
+
+- command_count：210；
+- feedback_count：10040；
+- EMCY 数量：0；
+- Node1-8 均持续返回 TPDO0/TPDO1；
+- 最大脚本发送耗时约 8.254 ms；
+- 停止后 Node1-4 实际速度均为 0。
+
+### 4.3 四模式 20 ms 周期测试
+
+命令：
+
+```powershell
+python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
+  --allow-motion `
+  --speed-kph 0.20 `
+  --steer-deg 8 `
+  --period-ms 20 `
+  --samples-per-segment 45 `
+  --modes ackermann,reverse_ackermann,crab,spin `
+  --log-dir out\motion8_all_modes_020kph_8deg_20ms
+```
+
+结果：
+
+- command_count：210；
+- feedback_count：10063；
+- EMCY 数量：0；
+- Node1-8 均持续返回 TPDO0/TPDO1；
+- 最大脚本发送耗时约 7.339 ms；
+- 停止后 Node1-4 实际速度均为 0。
+
+结论：驱动器和总线能够接受“4 个转向 arm + SYNC + 4 个转向 trigger + SYNC + 4 个速度 RPDO + SYNC”的 20 ms 遥控节奏。Python 分析仪脚本都能做到，ECU C 代码的发送开销应低于脚本。
+
+## 5. 回写到 ECU 代码的修改
+
+本次测试暴露并修正了两个 ECU 侧问题：
+
+1. 同步 TPDO 启动死锁。
+   - 原逻辑：安全门先要求转向轴 `MOTION_STEER_AXIS_READY`，但 ready 状态又要在 realtime ready 阶段才会设置。
+   - 修正：只要 TPDO0/TPDO1 新鲜且 `0x2183 latched fault == 0`，就把对应转向轴提升为 READY。
+   - 空闲未 ready 时，ECU 会周期性发送 SYNC，用于拉取同步 TPDO 反馈。
+
+2. 行走安全停止覆盖延迟。
+   - 原逻辑：行走速度缓存只在命令变化或 500 ms refresh 时更新。
+   - 风险：安全门关闭、刹车释放撤销或遥控失效时，之前非零速度可能不会立即被最新 0 速度覆盖。
+   - 修正：`motion_device_apply()` 每个控制周期都更新 RAM 中的四轮速度快照；CAN 发送仍只由 `motion_device_flush_realtime()` 统一调度。
+
+## 6. ECU 接入规则
+
+后续 ECU 真机遥控时应保持：
+
+- vehicle/control 层只生成四轮 coherent snapshot；
+- CAN2 motion task 统一发 RPDO；
+- 转向和速度都通过 CANopen service 单一 FIFO 调度；
+- 不允许 remote/parser/debug helper 直接发运动 CAN；
+- 安全门关闭时必须覆盖为：
+  - 行走速度 0；
+  - 行走控制字 disable voltage；
+  - 转向停止新目标组；
+  - 故障和超时可诊断。
+
+## 7. 下一步整车验证
+
+1. 编译 `ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED` 配置。
+2. 若只调转向，保持 `ECU_COMMISSIONING_STEER_ONLY_MODE=1`。
+3. 若要行走轮也跟随遥控，确认轮子悬空或现场具备安全条件后再设：
+
+```c
+#define ECU_COMMISSIONING_STEER_ONLY_MODE (0U)
+```
+
+4. 用 CAN 分析仪检查 ECU 输出顺序：
+
+```text
+Node5..8 RPDO1 arm -> SYNC -> Node5..8 RPDO1 trigger -> SYNC
+Node1..4 RPDO0 velocity -> SYNC
+```
+
+5. 遥控急停、P 档、失联时必须看到 Node1-4 速度清零并失能。

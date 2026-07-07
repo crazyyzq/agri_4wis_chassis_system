@@ -369,6 +369,7 @@ def test_canopennode_debug_commands_are_sequence_gated(root: pathlib.Path) -> No
 def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.Path) -> None:
     controlcan_py = read(root, "tools/can/controlcan.py")
     monitor_py = read(root, "tools/can/can2_monitor.py")
+    motion_debug_py = read(root, "tools/canopen_motion_debug/motion8_remote_sim_debug.py")
     modbus_py = read(root, "tools/modbus/rtu_probe.py")
 
     for token in [
@@ -387,6 +388,11 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
     assert "default=1000000" in monitor_py
     assert "receive" in monitor_py
     assert ".transmit(" not in monitor_py
+    assert "--allow-motion" in motion_debug_py
+    assert "Node1..4 drive wheels" in motion_debug_py
+    assert "Node5..8 steering axes" in motion_debug_py
+    assert "CONTROL_DISABLE_VOLTAGE" in motion_debug_py
+    assert "SYNC_COB_ID" in motion_debug_py
     assert "COM10" in modbus_py
     assert "serial.Serial" in modbus_py
     assert "read_holding_registers" in modbus_py

@@ -471,7 +471,22 @@ static bool steer_all_axes_have_remote_evidence(motion_device_state_t *state,
 {
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         uint8_t node_id = config->steer_nodes[wheel].node_id;
+        canopen_node_feedback_t feedback;
+        bool feedback_ready =
+            canopen_master_service_get_node_feedback(canopen, node_id, &feedback) &&
+            feedback.feedback_fresh &&
+            feedback.fault_latched == 0U;
+        if (feedback_ready) {
+            state->steer_axis_remote_verified[wheel] = true;
+            state->steer_axis_config_state[wheel] = MOTION_STEER_AXIS_READY;
+            state->steer_pdo_configured[wheel] = true;
+            state->steer_position_mode_ready[wheel] = true;
+            state->steer_last_position_valid[wheel] = true;
+            state->steer_last_position_counts[wheel] =
+                feedback.actual_position_counts;
+        }
         bool has_evidence =
+            feedback_ready ||
             state->steer_axis_remote_verified[wheel] ||
             canopen_master_service_has_node_evidence(canopen, node_id);
         if (!has_evidence ||
@@ -2204,12 +2219,15 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                 config->drive_speed_kph_to_counts_per_sec) :
             0;
 
-        if (changed || refresh_due) {
-            ok = cache_latest_drive_velocity(state,
-                                             wheel,
-                                             velocity_units,
-                                             drive_allowed) && ok;
-        }
+        /* This is only a RAM mailbox update; CAN submission remains owned by
+         * motion_device_flush_realtime().  Update it every control pass so a
+         * safety inhibit or brake-release transition immediately overwrites a
+         * previous nonzero velocity instead of waiting for the 500 ms refresh.
+         */
+        ok = cache_latest_drive_velocity(state,
+                                         wheel,
+                                         velocity_units,
+                                         drive_allowed) && ok;
         if (!commissioning_policy_allows_drive_rpdo()) {
             state->drive_last_velocity_valid[wheel] = true;
             state->drive_last_velocity_units[wheel] = 0;
