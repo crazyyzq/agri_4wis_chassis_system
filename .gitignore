@@ -3,6 +3,7 @@
 
 # Build and generated output
 /tmp/
+/out/
 /build/
 **/build/
 **/*_build/

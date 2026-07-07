@@ -15,6 +15,7 @@
         .role = (role_), \
         .rpdo0_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO0_BASE + (node_)), \
         .rpdo1_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO1_BASE + (node_)), \
+        .rpdo3_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO3_BASE + (node_)), \
         .tpdo0_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_TPDO0_BASE + (node_)), \
         .tpdo1_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_TPDO1_BASE + (node_)), \
         .required_mode = (int8_t)CONTRACT_MODE_FOR_ROLE(role_), \
@@ -60,6 +61,13 @@ static void write_le_u16(uint8_t *data, uint16_t value)
 {
     data[0] = (uint8_t)(value & 0xFFU);
     data[1] = (uint8_t)((value >> 8U) & 0xFFU);
+}
+
+static void write_le_i16(uint8_t *data, int16_t value)
+{
+    uint16_t raw = (uint16_t)value;
+    data[0] = (uint8_t)(raw & 0xFFU);
+    data[1] = (uint8_t)((raw >> 8U) & 0xFFU);
 }
 
 static void write_le_i32(uint8_t *data, int32_t value)
@@ -168,6 +176,7 @@ bool canopen_pdo_profile_init(uint8_t node_id,
     profile->role = contract->role;
     profile->rpdo0_cob_id = contract->rpdo0_cob_id;
     profile->rpdo1_cob_id = contract->rpdo1_cob_id;
+    profile->rpdo3_cob_id = contract->rpdo3_cob_id;
     profile->tpdo0_cob_id = contract->tpdo0_cob_id;
     profile->tpdo1_cob_id = contract->tpdo1_cob_id;
     profile->required_mode = contract->required_mode;
@@ -221,5 +230,29 @@ bool canopen_pdo_build_position_rpdo1(
     write_le_u16(&request->data[0], controlword);
     request->data[2] = (uint8_t)CANOPEN_PDO_MODE_PROFILE_POSITION;
     write_le_i32(&request->data[3], target_position);
+    return true;
+}
+
+bool canopen_pdo_build_current_rpdo3(
+    const canopen_node_pdo_profile_t *profile,
+    uint16_t controlword,
+    int16_t command_current_10ma,
+    canopen_master_pdo_request_t *request,
+    uint32_t group_sequence,
+    canopen_master_pdo_phase_t phase)
+{
+    if (profile == 0 || request == 0) {
+        return false;
+    }
+
+    memset(request, 0, sizeof(*request));
+    request->cob_id = profile->rpdo3_cob_id;
+    request->size = 5U;
+    request->node_id = profile->node_id;
+    request->group_sequence = group_sequence;
+    request->phase = phase;
+    write_le_u16(&request->data[0], controlword);
+    request->data[2] = (uint8_t)CANOPEN_PDO_MODE_CURRENT;
+    write_le_i16(&request->data[3], command_current_10ma);
     return true;
 }

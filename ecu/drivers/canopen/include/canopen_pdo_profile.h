@@ -9,12 +9,14 @@
 
 #define CANOPEN_PDO_STANDARD_RPDO0_BASE ((uint16_t)ECU_CANOPEN_RPDO1_BASE)
 #define CANOPEN_PDO_STANDARD_RPDO1_BASE ((uint16_t)ECU_CANOPEN_RPDO2_BASE)
+#define CANOPEN_PDO_STANDARD_RPDO3_BASE ((uint16_t)ECU_CANOPEN_RPDO4_BASE)
 #define CANOPEN_PDO_STANDARD_TPDO0_BASE ((uint16_t)ECU_CANOPEN_TPDO1_BASE)
 #define CANOPEN_PDO_STANDARD_TPDO1_BASE ((uint16_t)ECU_CANOPEN_TPDO2_BASE)
 #define CANOPEN_PDO_STANDARD_MAX_NODE_ID (127U)
 
 #define CANOPEN_PDO_MODE_PROFILE_POSITION (1)
 #define CANOPEN_PDO_MODE_PROFILE_VELOCITY (3)
+#define CANOPEN_PDO_MODE_CURRENT (4)
 
 typedef enum {
     CANOPEN_AXIS_ROLE_DRIVE_VELOCITY = 0,
@@ -28,6 +30,7 @@ typedef struct {
     canopen_axis_role_t role;
     uint16_t rpdo0_cob_id; /* DS301 RPDO0 command COB-ID. */
     uint16_t rpdo1_cob_id; /* DS301 RPDO1 command COB-ID. */
+    uint16_t rpdo3_cob_id; /* DS301 RPDO3 current command COB-ID. */
     uint16_t tpdo0_cob_id; /* DS301 TPDO0 feedback COB-ID. */
     uint16_t tpdo1_cob_id; /* DS301 TPDO1 feedback COB-ID. */
     int8_t required_mode;  /* 0x03 velocity or 0x01 position. */
@@ -40,6 +43,7 @@ typedef struct {
     canopen_axis_role_t role;
     uint16_t rpdo0_cob_id;
     uint16_t rpdo1_cob_id;
+    uint16_t rpdo3_cob_id;
     uint16_t tpdo0_cob_id;
     uint16_t tpdo1_cob_id;
     int8_t required_mode;
@@ -81,6 +85,14 @@ bool canopen_pdo_build_position_rpdo1(
     const canopen_node_pdo_profile_t *profile,
     uint16_t controlword,
     int32_t target_position,
+    canopen_master_pdo_request_t *request,
+    uint32_t group_sequence,
+    canopen_master_pdo_phase_t phase);
+
+bool canopen_pdo_build_current_rpdo3(
+    const canopen_node_pdo_profile_t *profile,
+    uint16_t controlword,
+    int16_t command_current_10ma,
     canopen_master_pdo_request_t *request,
     uint32_t group_sequence,
     canopen_master_pdo_phase_t phase);

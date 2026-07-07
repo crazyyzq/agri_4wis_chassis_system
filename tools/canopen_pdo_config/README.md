@@ -1,12 +1,11 @@
 # CANopen PDO Configurator
 
-独立工具，用 USB-CAN 分析仪配置 BC/BC2 驱动器 Node1~13 的 V2 统一 PDO 映射。
+独立工具，用 USB-CAN 分析仪配置 BC/BC2 驱动器 Node1~13 的统一 PDO 映射。
 
 ## Current vehicle status
 
 当前整车 Node1~13 的 PDO 配置必须以项目最新统一 PDO 规范为准。该工具仅用于离线维护、
-替换新驱动器、恢复出厂或明确人工批准的重配。禁止在 ECU 接入总线、
-车辆可运动或普通调试时运行。
+替换新驱动器、恢复出厂或明确人工批准的重配。禁止在 ECU 接入总线、车辆可运动或普通调试时运行。
 
 ## Physical wiring
 
@@ -15,22 +14,29 @@
 - ECU must stay powered off or physically disconnected from these CAN buses
 - CAN bitrate: 1 Mbit/s, standard 11-bit CAN ID
 
-## V2 PDO profile
+## V4 current7 synchronous PDO profile
 
-All Node1..13 use the same active PDO layout. Only node ID, bus, COB-ID and
-runtime role differ.
+All Node1..13 use the same active PDO layout. Only node ID, bus, COB-ID and runtime role differ.
 
 | PDO | COB-ID | Mapping | DLC | Transmission type |
 |---|---:|---|---:|---:|
 | RPDO0 velocity | `0x200 + node` | `6040:00` + `6060:00` + `60FF:00` | 7 | 1 |
 | RPDO1 position | `0x300 + node` | `6040:00` + `6060:00` + `607A:00` | 7 | 1 |
 | RPDO2 interpolation | `0x400 + node` | `60C1:01` | 4 | 4 |
+| RPDO3 torque/current | `0x500 + node` | `6040:00` + `6060:00` + `2340:00` | 5 | 1 |
 | TPDO0 motion feedback | `0x180 + node` | `6064:00` + `606C:00` | 8 | 1 |
 | TPDO1 health feedback | `0x280 + node` | `2183:00` + `6041:00` + `221C:00` | 8 | 4 |
 
-Reserved PDOs are kept uniformly disabled:
+`6060:00` is deliberately mapped into RPDO0/RPDO1/RPDO3.  It costs one byte in velocity/position commands, but every realtime command carries its required mode and is safer during field commissioning if a drive was reset, manually changed, or incompletely initialized.
 
-- RPDO3: `1403` / `1603`
+`2340:00` is signed int16 in 10 mA units.  Example: `+50` means `+0.5 A`; `-50` means `-0.5 A`.
+
+TPDO2/TPDO3 are not part of the active feedback contract. The tool clears their
+mapping counts (`1A02:00`, `1A03:00`) to zero so they carry no payload and do
+not consume cyclic bandwidth. Some drives do not retain the COB-ID disable bit
+for `1802:01` / `1803:01` after power cycling, so the zero mapping count is the
+verification contract for these unmanaged PDOs:
+
 - TPDO2: `1802` / `1A02`
 - TPDO3: `1803` / `1A03`
 
@@ -129,7 +135,7 @@ out/canopen_pdo_config/<timestamp>/
 
 ## What this tool never does
 
-- It does not send motion RPDO frames on `0x200+node`, `0x300+node`, or `0x400+node`
+- It does not send motion RPDO frames on `0x200+node`, `0x300+node`, `0x400+node`, or `0x500+node`
 - It does not send broadcast NMT Operational
 - It does not send broadcast reset
 - It does not enable motors or prove that motors can move

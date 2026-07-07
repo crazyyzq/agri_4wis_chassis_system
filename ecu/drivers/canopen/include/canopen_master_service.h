@@ -125,6 +125,8 @@ typedef struct {
     uint8_t trigger_frame_count;
     uint8_t axis_mask;
     bool position_group;
+    bool sync_after_arm;
+    bool sync_after_trigger;
 } canopen_master_pdo_group_descriptor_t;
 
 typedef struct {
@@ -287,6 +289,8 @@ typedef struct {
     bool active_pdo_cancel_requested;
     bool active_pdo_cancel_after_inflight;
     bool active_pdo_trigger_started;
+    bool active_pdo_arm_sync_sent;
+    bool active_pdo_trigger_sync_sent;
     uint8_t active_pdo_trigger_complete_frames_at_cancel;
 } canopen_master_service_t;
 

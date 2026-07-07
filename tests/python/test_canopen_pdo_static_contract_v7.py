@@ -27,7 +27,11 @@ def test_mapping_record_document_contains_complete_node_contract(root: pathlib.P
         "1600:01 = 0x60400010",
         "1600:02 = 0x60600008",
         "1600:03 = 0x60FF0020",
+        "1600:00 = 3",
+        "1601:02 = 0x60600008",
         "1601:03 = 0x607A0020",
+        "1601:00 = 3",
+        "1603:03 = 0x23400010",
         "1A00:01 = 0x60640020",
         "1A00:02 = 0x606C0020",
         "1A01:01 = 0x21830020",
@@ -122,7 +126,10 @@ def test_contract_builders_use_frozen_standard_wire_format(root: pathlib.Path) -
     velocity = source.split("bool canopen_pdo_build_velocity_rpdo0", 1)[1].split(
         "bool canopen_pdo_build_position_rpdo1", 1
     )[0]
-    position = source.split("bool canopen_pdo_build_position_rpdo1", 1)[1]
+    position = source.split("bool canopen_pdo_build_position_rpdo1", 1)[1].split(
+        "bool canopen_pdo_build_current_rpdo3", 1
+    )[0]
+    current = source.split("bool canopen_pdo_build_current_rpdo3", 1)[1]
 
     assert "request->cob_id = profile->rpdo0_cob_id" in velocity
     assert "request->size = 7U" in velocity
@@ -133,6 +140,11 @@ def test_contract_builders_use_frozen_standard_wire_format(root: pathlib.Path) -
     assert "request->size = 7U" in position
     assert "request->data[2] = (uint8_t)CANOPEN_PDO_MODE_PROFILE_POSITION" in position
     assert "write_le_i32(&request->data[3], target_position)" in position
+
+    assert "request->cob_id = profile->rpdo3_cob_id" in current
+    assert "request->size = 5U" in current
+    assert "request->data[2] = (uint8_t)CANOPEN_PDO_MODE_CURRENT" in current
+    assert "write_le_i16(&request->data[3], command_current_10ma)" in current
 
     steer_builder = motion.split("static bool build_steer_rpdo_request", 1)[1].split(
         "static int32_t rate_limit_target_counts", 1
@@ -230,6 +242,10 @@ def test_production_debug_sdo_writes_are_default_denied(root: pathlib.Path) -> N
         "ECU_CANOPEN_OBJ_RPDO1_MAPPING",
         "ECU_CANOPEN_OBJ_RPDO2_COMM_PARAM",
         "ECU_CANOPEN_OBJ_RPDO2_MAPPING",
+        "ECU_CANOPEN_OBJ_RPDO3_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_RPDO3_MAPPING",
+        "ECU_CANOPEN_OBJ_RPDO4_COMM_PARAM",
+        "ECU_CANOPEN_OBJ_RPDO4_MAPPING",
         "ECU_CANOPEN_OBJ_TPDO1_COMM_PARAM",
         "ECU_CANOPEN_OBJ_TPDO1_MAPPING",
         "ECU_CANOPEN_OBJ_TPDO2_COMM_PARAM",

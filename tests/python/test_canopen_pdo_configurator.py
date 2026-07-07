@@ -30,6 +30,7 @@ def test_node5_rpdo1_configuration_matches_manual(root: pathlib.Path) -> None:
     assert by_object[(0x1601, 0x01)].value == 0x60400010
     assert by_object[(0x1601, 0x02)].value == 0x60600008
     assert by_object[(0x1601, 0x03)].value == 0x607A0020
+    assert by_object[(0x1601, 0x00)].value == 3
 
     sdo = load_tool(root, "canopen_sdo")
     frame = sdo.encode_sdo_download(5, 0x1401, 0x01, 4, 0x00000305)
@@ -51,6 +52,12 @@ def test_v2_profile_adds_rpdo2_and_synchronous_types(root: pathlib.Path) -> None
 
     assert by_object[(0x1400, 0x02)].value == 1
     assert by_object[(0x1401, 0x02)].value == 1
+    assert by_object[(0x1600, 0x02)].value == 0x60600008
+    assert by_object[(0x1600, 0x03)].value == 0x60FF0020
+    assert by_object[(0x1600, 0x00)].value == 3
+    assert by_object[(0x1601, 0x02)].value == 0x60600008
+    assert by_object[(0x1601, 0x03)].value == 0x607A0020
+    assert by_object[(0x1601, 0x00)].value == 3
     assert by_object[(0x1402, 0x01)].value == 0x0000040D
     assert by_object[(0x1402, 0x02)].value == 4
     assert by_object[(0x1602, 0x00)].value == 1
@@ -59,17 +66,28 @@ def test_v2_profile_adds_rpdo2_and_synchronous_types(root: pathlib.Path) -> None
     assert by_object[(0x1801, 0x02)].value == 4
 
 
-def test_v2_reserved_pdos_are_uniformly_disabled(root: pathlib.Path) -> None:
+def test_v2_rpdo3_current_and_unmanaged_tpdos_are_zero_mapped(root: pathlib.Path) -> None:
     profiles = load_tool(root, "pdo_profiles")
     ops = profiles.build_node_configuration(5)
     by_object = {(op.index, op.subindex): op for op in ops if op.kind == "download"}
+    expected = profiles.expected_mapping_values(5)
 
-    assert by_object[(0x1403, 0x01)].value == 0x80000000 | (0x500 + 5)
-    assert by_object[(0x1603, 0x00)].value == 0
+    assert by_object[(0x1403, 0x01)].value == 0x500 + 5
+    assert by_object[(0x1403, 0x02)].value == 1
+    assert by_object[(0x1603, 0x01)].value == 0x60400010
+    assert by_object[(0x1603, 0x02)].value == 0x60600008
+    assert by_object[(0x1603, 0x03)].value == 0x23400010
+    assert by_object[(0x1603, 0x00)].value == 3
     assert by_object[(0x1802, 0x01)].value == 0x80000000 | (0x380 + 5)
+    assert by_object[(0x1802, 0x01)].verify is False
     assert by_object[(0x1A02, 0x00)].value == 0
     assert by_object[(0x1803, 0x01)].value == 0x80000000 | (0x480 + 5)
+    assert by_object[(0x1803, 0x01)].verify is False
     assert by_object[(0x1A03, 0x00)].value == 0
+    assert "0x1802:1" not in expected
+    assert "0x1803:1" not in expected
+    assert expected["0x1A02:0"] == 0
+    assert expected["0x1A03:0"] == 0
 
 
 def test_bus_node_mapping_is_separated(root: pathlib.Path) -> None:

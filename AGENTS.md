@@ -498,7 +498,7 @@ $env:GNURISCV_TOOLCHAIN_PATH = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\toolchai
 
 $cmake = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\cmake\bin\cmake.exe").Path
 $ninja = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe").Path
-$py = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\python\python.exe").Path
+$py = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\python3\python.exe").Path
 
 & $cmake -S "$repo\ecu\apps\agri_chassis_control_cpu0" `
   -B "$repo\tmp\cmake_cpu0" `

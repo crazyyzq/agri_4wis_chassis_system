@@ -134,7 +134,10 @@ def test_v8_remote_commissioning_uses_selected_axis_0f_1f_and_never_drive_or_can
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" not in remote_commission_block
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" not in remote_commission_block
     assert "commissioning_policy_allows_drive_rpdo" in motion_c
-    assert "return false;" in motion_c.split("commissioning_policy_allows_drive_rpdo", 1)[1].split("}", 1)[0]
+    drive_policy_block = motion_c.split("commissioning_policy_allows_drive_rpdo", 1)[1].split(
+        "static bool commissioning_policy_allows_can3_rpdo", 1
+    )[0]
+    assert "ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED" in drive_policy_block
     assert "commissioning_policy_allows_can3_rpdo" in motion_c
     assert "return false;" in motion_c.split("commissioning_policy_allows_can3_rpdo", 1)[1].split("}", 1)[0]
 
@@ -281,7 +284,7 @@ def test_v9_commit_b_sync_is_gated_and_has_inflight_completion(root: pathlib.Pat
         "service->pdo_queue_count != 0U",
         "pdo_group_is_active(service)",
         "service->sync_in_flight",
-        "service->sync_in_flight_submit_ms = now_ms",
+        "send_sync_frame(service, now_ms)",
     ]:
         assert token in send_sync_fn, token
 
@@ -511,7 +514,8 @@ def test_v10_steering_tpdo_observer_limits_hardware_filters_without_hal_fallback
     assert observer_fn.count("CO_CANrxBufferInit") == 2
     assert "ECU_CANOPEN_TPDO1_BASE" in observer_fn
     assert "ECU_CANOPEN_TPDO2_BASE + node" in observer_fn
-    assert "for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID" in observer_fn
+    assert "for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID" in observer_fn
+    assert "bool steering_node = node >= ECU_CANOPEN_STEER_FR_NODE_ID" in observer_fn
 
 
 def test_v10_node8_tpdo1_acceptance_workaround_is_profile_scoped_and_position_gated(root: pathlib.Path) -> None:

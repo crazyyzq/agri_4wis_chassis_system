@@ -464,7 +464,7 @@ def test_servo_motion_uses_bc_canopen_command_sequences(root: pathlib.Path) -> N
     assert "ECU_CANOPEN_COMMISSIONING_POLICY_MAPPING_VERIFY_ONLY" in config_h
     assert "servo_drive_canopen_configure_steer_rpdo(canopen" not in motion_c
     assert "servo_drive_canopen_prepare_position_mode(canopen" not in motion_c
-    assert "canopen_master_service_queue_pdo_batch(canopen" in motion_c
+    assert "canopen_master_service_queue_pdo_batch_with_descriptor(" in motion_c
     position_func = servo_c.split("static bool servo_drive_canopen_run_position_mode", 1)[1]
     assert position_func.index("ECU_CANOPEN_OBJ_TARGET_POSITION") < position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION")
     assert position_func.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION") < position_func.index("SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION")
@@ -500,7 +500,9 @@ def test_motion_device_separates_servo_setup_from_realtime_targets(root: pathlib
     assert "servo_drive_canopen_update_relative_position" not in servo_h
     assert "servo_drive_canopen_update_relative_position" not in servo_c
     assert "ECU_CANOPEN_OBJ_TARGET_VELOCITY" in servo_c
-    assert "send_drive_target_update" in motion_c
+    assert "build_drive_velocity_rpdo_request" in motion_c
+    assert "cache_latest_drive_velocity" in motion_c
+    assert "queue_drive_group" in motion_c
     assert "motion_device_flush_realtime" in motion_h
     assert "motion_device_flush_realtime" in motion_c
     assert "state->steer_last_target_update_ms[wheel]" in motion_c
@@ -559,13 +561,15 @@ def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
 
     assert "motion_device_flush_realtime" in motion_c
     assert "steer_axis_realtime_ready" in motion_c
-    assert "canopen_master_service_has_node_evidence" in motion_c
+    assert "canopen_master_service_get_node_feedback" in motion_c
     assert "MOTION_STEER_AXIS_READY" in motion_c
     assert "build_steer_rpdo_request" in motion_c
     assert "queue_steer_group" in motion_c
     assert "canopen_master_service_pdo_queue_available(canopen) < ECU_STEER_GROUP_PDO_FRAME_COUNT" in motion_c
     assert "canopen_master_service_pdo_group_pending(canopen, state->steer_active_group_sequence)" in motion_c
-    assert "canopen_master_service_queue_pdo_batch(canopen" in motion_c
+    assert "canopen_master_service_queue_pdo_batch_with_descriptor(" in motion_c
+    assert "sync_after_arm = true" in motion_c
+    assert "sync_after_trigger = true" in motion_c
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM" in motion_c
     assert "SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_TRIGGER" in motion_c
     assert motion_c.index("SERVO_DRIVE_CONTROL_ABSOLUTE_UPDATE_ARM") < motion_c.index(
@@ -781,7 +785,9 @@ def test_v4_unverified_steering_axes_are_not_realtime_ready(root: pathlib.Path) 
 
     ready_body = motion_c.split("static bool steer_axis_realtime_ready", 1)[1]
     ready_body = ready_body.split("static bool all_steer_axes_realtime_ready", 1)[0]
-    assert "canopen_master_service_has_node_evidence" in ready_body
+    assert "canopen_master_service_get_node_feedback" in ready_body
+    assert "feedback.feedback_fresh" in ready_body
+    assert "feedback.fault_latched == 0U" in ready_body
     assert "steer_axis_remote_verified" in ready_body
     assert "MOTION_STEER_AXIS_READY" in ready_body
     assert "command_queue_count == 0U && !canopen->sdo_download_active" not in ready_body
