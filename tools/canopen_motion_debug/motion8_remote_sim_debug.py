@@ -395,9 +395,10 @@ class Motion8Debug:
             time.sleep(0.04)
         self.send_drive_group((0, 0, 0, 0), enable=False)
 
-    def run_plan(self, speed_kph: float, steer_deg: float, period_ms: int,
-                 samples_per_segment: int, modes: list[str], profile_velocity: int,
-                 profile_accel: int, fault_reset: bool) -> dict[str, object]:
+    def run_plan(self, speed_kph: float, steer_deg: float, spin_deg: float,
+                 period_ms: int, samples_per_segment: int, modes: list[str],
+                 profile_velocity: int, profile_accel: int,
+                 fault_reset: bool) -> dict[str, object]:
         self.setup_nodes(profile_velocity, profile_accel, fault_reset)
         before = self.read_node_state("before.json")
         self.stop_all()
@@ -411,7 +412,7 @@ class Motion8Debug:
             elif mode == "reverse_ackermann":
                 target = self.build_ackermann(speed_kph, steer_deg, reverse=True)
             elif mode == "spin":
-                target = self.build_spin(speed_kph, 25.0)
+                target = self.build_spin(speed_kph, spin_deg)
             elif mode == "crab":
                 target = self.build_crab(speed_kph, steer_deg)
             else:
@@ -459,6 +460,7 @@ class Motion8Debug:
         summary = {
             "speed_kph": speed_kph,
             "steer_deg": steer_deg,
+            "spin_deg": spin_deg,
             "period_ms": period_ms,
             "samples_per_segment": samples_per_segment,
             "modes": modes,
@@ -479,6 +481,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-motion", action="store_true", help="required: confirms wheels are lifted and free")
     parser.add_argument("--speed-kph", type=float, default=0.30)
     parser.add_argument("--steer-deg", type=float, default=10.0)
+    parser.add_argument("--spin-deg", type=float, default=45.0)
     parser.add_argument("--period-ms", type=int, default=50)
     parser.add_argument("--samples-per-segment", type=int, default=60)
     parser.add_argument("--modes", default="ackermann,reverse_ackermann,crab,spin")
@@ -503,6 +506,7 @@ def main() -> int:
             summary = debug.run_plan(
                 args.speed_kph,
                 args.steer_deg,
+                args.spin_deg,
                 args.period_ms,
                 args.samples_per_segment,
                 modes,

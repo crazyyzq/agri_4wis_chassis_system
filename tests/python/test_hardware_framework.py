@@ -389,6 +389,7 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
     assert "receive" in monitor_py
     assert ".transmit(" not in monitor_py
     assert "--allow-motion" in motion_debug_py
+    assert "--spin-deg" in motion_debug_py
     assert "Node1..4 drive wheels" in motion_debug_py
     assert "Node5..8 steering axes" in motion_debug_py
     assert "CONTROL_DISABLE_VOLTAGE" in motion_debug_py

@@ -124,6 +124,69 @@ python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
 
 结论：驱动器和总线能够接受“4 个转向 arm + SYNC + 4 个转向 trigger + SYNC + 4 个速度 RPDO + SYNC”的 20 ms 遥控节奏。Python 分析仪脚本都能做到，ECU C 代码的发送开销应低于脚本。
 
+### 4.4 四模式 20 ms 全角度测试
+
+命令：
+
+```powershell
+python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
+  --allow-motion `
+  --speed-kph 2.0 `
+  --steer-deg 45 `
+  --spin-deg 45 `
+  --period-ms 20 `
+  --samples-per-segment 60 `
+  --modes ackermann,reverse_ackermann,crab,spin `
+  --log-dir out\motion8_all_modes_2kph_45deg_20ms
+```
+
+结果：
+
+- command_count：270；
+- feedback_count：12921；
+- EMCY 数量：0；
+- Node1-8 均持续返回 TPDO0/TPDO1；
+- 最大脚本发送耗时约 7.043 ms；
+- 停止后 Node1-7 实际速度为 0，Node8 读回 -63，接近零速；
+- Node5-8 停止后实际位置回到接近 0 count；
+- 该测试确认 `±45°` 全角度范围下，四个转向轴可以跟随正 Ackermann、反 Ackermann、蟹行、自转的连续遥控目标。
+
+### 4.5 四模式 20 ms 肉眼可见速度测试
+
+命令：
+
+```powershell
+python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
+  --allow-motion `
+  --speed-kph 6.0 `
+  --steer-deg 45 `
+  --spin-deg 45 `
+  --period-ms 20 `
+  --samples-per-segment 60 `
+  --modes ackermann,reverse_ackermann,crab,spin `
+  --log-dir out\motion8_all_modes_6kph_45deg_20ms
+```
+
+结果：
+
+- command_count：270；
+- feedback_count：12944；
+- EMCY 数量：0；
+- Node1-8 均持续返回 TPDO0/TPDO1；
+- 最大脚本发送耗时约 7.178 ms；
+- 停止后 Node1-8 `0x606C actual_velocity` 均为 0；
+- Node1-4 最大反馈速度约为 0.57M 到 0.67M 计数/s；
+- Node5-8 最大反馈速度约为 3.26M 到 3.53M 计数/s；
+- 该测试确认悬空状态下，速度达到肉眼可见范围时，四轮速度和四轮转向仍能按同一遥控周期同步更新，且无驱动器 EMCY。
+
+### 4.6 对后续 ECU 遥控接入的结论
+
+- `20 ms` 遥控周期可以作为 ECU 初始整车控制周期；
+- 速度和转向应继续使用“整车同一采样快照 -> CAN2 统一调度”的模型；
+- 正 Ackermann、反 Ackermann、蟹行、自转都可以用当前 RPDO0/RPDO1 布局实现；
+- 自转不能再使用写死角度，测试工具和 ECU 控制层都应把自转角度/半径作为明确参数或由遥控量计算；
+- 真实落地行走前仍需单独确认轮胎接地负载下的加速度、转向回中、急停、遥控失联和刹车释放策略。
+
 ## 5. 回写到 ECU 代码的修改
 
 本次测试暴露并修正了两个 ECU 侧问题：
