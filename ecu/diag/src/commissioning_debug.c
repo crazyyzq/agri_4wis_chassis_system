@@ -84,9 +84,9 @@ bool commissioning_debug_apply_power_request(commissioning_debug_context_t *cont
         return false;
     }
 
-    command->target_speed_kph = 0.0f;
+    command->target_speed_mps = 0.0f;
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        command->target_wheel_speed_kph[wheel] = 0.0f;
+        command->target_wheel_speed_mps[wheel] = 0.0f;
         command->target_steer_deg[wheel] = 0.0f;
     }
     command->height_rate_mm_s = 0.0f;

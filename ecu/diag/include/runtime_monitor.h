@@ -96,7 +96,7 @@ typedef struct {
     ecu_command_source_t source;
     ecu_motion_mode_t motion_mode;
     ecu_gear_request_t active_gear;
-    int32_t target_speed_centi_kph;
+    int32_t target_speed_milli_mps;
     int32_t target_steer_centi_deg[ECU_WHEEL_COUNT];
     bool brake_release;
     bool high_voltage_enable;
@@ -117,6 +117,11 @@ typedef struct {
     uint8_t steer_commission_post_command_axis_mask;
     uint8_t steer_commission_post_command_missing_mask;
     uint32_t steer_commission_post_command_timeout_count;
+    bool presteer_drive_hold_active;
+    bool presteer_target_reached;
+    uint8_t presteer_mode;
+    uint8_t presteer_missing_axis_mask;
+    uint32_t presteer_timeout_count;
     bool steer_calibration_ram_override_enabled;
     bool steer_calibration_ram_override_valid;
     uint32_t steer_calibration_ram_override_sequence;

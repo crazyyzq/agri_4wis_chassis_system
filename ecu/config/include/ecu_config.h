@@ -211,6 +211,18 @@
 #define ECU_CANOPEN_LIFT_RL_NODE_ID    ECU_CANOPEN_LIFT_LEG3_NODE_ID
 #define ECU_CANOPEN_LIFT_RR_NODE_ID    ECU_CANOPEN_LIFT_LEG4_NODE_ID
 
+/* Drive motor polarity in vehicle leg order.
+ *
+ * Positive vehicle-frame wheel speed means the chassis moves toward the
+ * physical front of the machine when all wheels are straight.  Field wiring
+ * confirms that this requires motor nodes 1 and 4 to receive positive 0x60FF
+ * values, while nodes 2 and 3 must receive negative values.
+ */
+#define ECU_CANOPEN_LEG1_DRIVE_DIRECTION_SIGN (1)
+#define ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN (-1)
+#define ECU_CANOPEN_LEG3_DRIVE_DIRECTION_SIGN (-1)
+#define ECU_CANOPEN_LEG4_DRIVE_DIRECTION_SIGN (1)
+
 /* Default CiA-301 COB-ID bases.  Device adapters build TPDO/RPDO/heartbeat
  * identifiers from these bases plus the node ID unless a device-specific
  * configuration overrides them. */
@@ -245,7 +257,14 @@
 #define ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS (50U)
 #define ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS (1000)
 #define ECU_CANOPEN_DRIVE_PDO_PERIOD_MS           (20U)
-#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_UNITS_PER_SEC (2000000)
+/* Drive velocity is ramped in a few discrete commissioning-friendly bands.
+ * Reversal is intentionally the slowest path so a D/R sign change first eases
+ * through zero instead of commanding an abrupt torque step.
+ */
+#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_SMALL_UNITS_PER_SEC    (600000)
+#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_MEDIUM_UNITS_PER_SEC   (1200000)
+#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_LARGE_UNITS_PER_SEC    (2000000)
+#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_REVERSAL_UNITS_PER_SEC (500000)
 #define ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS (1000)
 /* Steering joystick following is transmitted by RPDO at a fixed, moderate
  * cadence.  The vehicle/control layer owns target generation; the CAN2 motion
@@ -254,11 +273,32 @@
 #define ECU_CANOPEN_STEER_PDO_PERIOD_MS  (20U)
 #define ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS (1000)
 #define ECU_CANOPEN_STEER_POSITION_NEUTRAL_DEADBAND_COUNTS  (1500)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_COUNTS_PER_SEC  (1000000)
+/* Steering target smoothing uses discrete error bands.  A small joystick
+ * correction should creep smoothly; only a large steering mismatch is allowed
+ * to use the faster ramp.  Units are drive counts per second at 20 ms PDO
+ * cadence.
+ */
+#define ECU_CANOPEN_STEER_TARGET_ERROR_NEAR_COUNTS                 (25000)
+#define ECU_CANOPEN_STEER_TARGET_ERROR_SMALL_COUNTS                (150000)
+#define ECU_CANOPEN_STEER_TARGET_ERROR_MEDIUM_COUNTS               (450000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC    (180000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC   (350000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC  (650000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (950000)
+/* Spin and crab are not safe to drive while the wheels are still slewing
+ * toward their large steering angles.  The CAN2 motion adapter therefore keeps
+ * drive RPDOs disabled until TPDO position feedback from all four steering
+ * axes is within this window.  50000 counts is about 3.7 degrees with the
+ * installed 490:1 steering reducer and 10000 count/rev encoder feedback.
+ */
+#define ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS             (50000)
+#define ECU_CANOPEN_PRESTEER_TIMEOUT_MS                            (12000U)
+#define ECU_CANOPEN_PRESTEER_REQUIRED_AXIS_MASK \
+    ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL
 #if ECU_BUILD_PROFILE_STEER4_REMOTE_90
-#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (1000000)
+#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (1225000)
 #else
-#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (500000)
+#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (612500)
 #endif
 #define ECU_CANOPEN_STEER_SETUP_SETTLE_MS                   (100U)
 /* V8 remote steering commissioning starts with a deliberately slow, small and
@@ -404,23 +444,55 @@ typedef enum {
  * release.
  */
 #define ECU_BC_SERVO_ENCODER_COUNTS_PER_REV          (10000.0f)
+#define ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC (10.0f)
 #define ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM \
     (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV / 0.1f / 60.0f)
-#define ECU_DRIVE_MAX_RPM_AT_REMOTE_MAX_SPEED        (200.0f)
-#define ECU_STEER_POSITION_SPEED_UNITS               (1666667)
+#define ECU_SERVO_COMMISSIONING_MAX_RPM              (2400.0f)
+#define ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM        (4000000)
+/* Profile acceleration/deceleration objects 0x6083/0x6084 are kept at or below
+ * 50 motor rev/s^2 during commissioning.  With the installed 2500-line encoder
+ * and drive-side 4x decoding, that is 50 * 10000 = 500000 count/s^2.
+ */
+#define ECU_SERVO_COMMISSIONING_MAX_ACCEL_RPS2       (50.0f)
+#define ECU_SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 (500000)
+#define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)
+#define ECU_DRIVE_WHEEL_DIAMETER_M                   (0.580f)
+#define ECU_DRIVE_WHEEL_CIRCUMFERENCE_M              (1.822124f)
+#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_COMMISSIONING_MAX_RPM
+#define ECU_DRIVE_MAX_SPEED_MPS \
+    ((ECU_DRIVE_MOTOR_MAX_RPM / ECU_DRIVE_GEAR_REDUCTION) * \
+     ECU_DRIVE_WHEEL_CIRCUMFERENCE_M / 60.0f)
+/* Current whole-machine commissioning keeps operator speed authority at
+ * 0.50 m/s.  The motor-speed ceiling is separately capped at 2400 rpm
+ * (about 0.842 m/s at the installed 86.6:1 gearbox and 580 mm wheel), but
+ * field tuning stays below that ceiling until brake release, current limit
+ * and drive alarm behavior are verified on each wheel.
+ */
+#define ECU_DRIVE_COMMISSIONING_MAX_SPEED_MPS        (0.50f)
+#define ECU_STEER_GEAR_REDUCTION                     (490.0f)
+#define ECU_STEER_COUNTS_PER_OUTPUT_REV \
+    (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV * ECU_STEER_GEAR_REDUCTION)
+#define ECU_STEER_POSITION_SPEED_UNITS               (4000000)
+#if ECU_STEER_POSITION_SPEED_UNITS > ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM
+#error ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM
+#endif
 #define ECU_LIFT_POSITION_SPEED_UNITS                (833333)
 #define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS     (833333)
 #define ECU_SERVO_COMMAND_CURRENT_RAMP_MA_PER_SEC    (1000)
 
-/* Commissioning scale factors.  These convert high-level vehicle commands into
- * drive counts and remain centralized for motor/gearbox calibration updates on
- * the complete machine. */
-#define ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC \
-    ((ECU_DRIVE_MAX_RPM_AT_REMOTE_MAX_SPEED * ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) / \
-     ECU_REMOTE_MAX_SPEED_KPH)
-/* Field calibration: steering target +500000 counts is +45 degrees (left),
- * and -500000 counts is -45 degrees (right). */
-#define ECU_STEER_DEG_TO_COUNTS               (11111.111f)
+/* Commissioning scale factors.  BC/BC2 0x60FF and 0x606C use velocity units of
+ * 0.1 motor-encoder count/s.  The drive conversion includes the installed
+ * wheel gearbox and 580 mm tire diameter so a vehicle-speed request produces a
+ * motor-side target accepted by the drive. */
+#define ECU_DRIVE_SPEED_MPS_TO_COUNTS_PER_SEC \
+    ((ECU_BC_SERVO_ENCODER_COUNTS_PER_REV * ECU_DRIVE_GEAR_REDUCTION * \
+      ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC) / \
+     ECU_DRIVE_WHEEL_CIRCUMFERENCE_M)
+/* Field calibration from installed steering gearbox:
+ * 2500-line encoder * 4x drive decoding * 490:1 reduction = 4,900,000 counts
+ * per steering output revolution.  Positive target is left, negative is right. */
+#define ECU_STEER_DEG_TO_COUNTS \
+    (ECU_STEER_COUNTS_PER_OUTPUT_REV / 360.0f)
 #define ECU_LIFT_MM_TO_COUNTS                 (100.0f)
 
 /* Local digital outputs stay limited to board-level loads.  Servo brakes are
@@ -466,7 +538,7 @@ typedef enum {
 #define ECU_WARNING_LIGHT_VALUE_OFF (0x0060U)
 #define ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH (0x0022U)
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
-#define ECU_REMOTE_MAX_SPEED_KPH          (6.0f)
+#define ECU_REMOTE_MAX_SPEED_MPS          ECU_DRIVE_COMMISSIONING_MAX_SPEED_MPS
 #if ECU_BUILD_PROFILE_STEER4_REMOTE_90
 #define ECU_REMOTE_MAX_STEER_DEG          (90.0f)
 #else
@@ -480,12 +552,12 @@ typedef enum {
  * until closed-loop position feedback is wired into the command path, the
  * default value below is used by the remote and automatic command builders.
  */
-#define ECU_VEHICLE_WHEELBASE_MIN_MM      (1200.0f)
-#define ECU_VEHICLE_WHEELBASE_MM          (2200.0f)
-#define ECU_VEHICLE_WHEELBASE_MAX_MM      (3200.0f)
-#define ECU_VEHICLE_TRACK_WIDTH_MIN_MM    (1200.0f)
-#define ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM (1800.0f)
-#define ECU_VEHICLE_TRACK_WIDTH_MAX_MM    (2600.0f)
+#define ECU_VEHICLE_WHEELBASE_MIN_MM      (2880.0f)
+#define ECU_VEHICLE_WHEELBASE_MM          (2880.0f)
+#define ECU_VEHICLE_WHEELBASE_MAX_MM      (2880.0f)
+#define ECU_VEHICLE_TRACK_WIDTH_MIN_MM    (1980.0f)
+#define ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM (1980.0f)
+#define ECU_VEHICLE_TRACK_WIDTH_MAX_MM    (2880.0f)
 #define ECU_VEHICLE_MIN_TURN_RADIUS_MM    (1500.0f)
 #define ECU_MOTION_SPIN_STEER_DEG         (45.0f)
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
@@ -657,7 +729,8 @@ typedef struct {
     uint32_t modbus_warning_light_response_timeout_ms;
     uint32_t rs485_baudrate;
     uint32_t rs232_baudrate;
-    float drive_speed_kph_to_counts_per_sec;
+    float drive_speed_mps_to_counts_per_sec;
+    int8_t drive_direction_sign[ECU_WHEEL_COUNT];
     float steer_deg_to_counts;
     float lift_mm_to_counts;
     steer_axis_calibration_t steer_axis_calibration[ECU_WHEEL_COUNT];

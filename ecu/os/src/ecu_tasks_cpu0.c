@@ -291,6 +291,18 @@ static int32_t float_to_centi(float value)
     return (int32_t)scaled;
 }
 
+static int32_t float_to_milli(float value)
+{
+    float scaled = value * 1000.0f;
+    if (scaled > 2147483000.0f) {
+        return 2147483000;
+    }
+    if (scaled < -2147483000.0f) {
+        return -2147483000;
+    }
+    return (int32_t)scaled;
+}
+
 static void build_runtime_monitor_snapshot(uint32_t now_ms,
                                            runtime_monitor_snapshot_t *out)
 {
@@ -375,7 +387,7 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->source = s_runtime.final_command.source;
     out->motion_mode = s_runtime.final_command.motion_mode;
     out->active_gear = s_runtime.final_command.active_gear;
-    out->target_speed_centi_kph = float_to_centi(s_runtime.final_command.target_speed_kph);
+    out->target_speed_milli_mps = float_to_milli(s_runtime.final_command.target_speed_mps);
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         out->target_steer_centi_deg[wheel] =
             float_to_centi(s_runtime.final_command.target_steer_deg[wheel]);
@@ -414,6 +426,16 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.steer_commission_post_command_missing_mask;
     out->steer_commission_post_command_timeout_count =
         s_runtime.executor.steer_commission_post_command_timeout_count;
+    out->presteer_drive_hold_active =
+        s_runtime.executor.presteer_drive_hold_active;
+    out->presteer_target_reached =
+        s_runtime.executor.presteer_target_reached;
+    out->presteer_mode =
+        s_runtime.executor.presteer_mode;
+    out->presteer_missing_axis_mask =
+        s_runtime.executor.presteer_missing_axis_mask;
+    out->presteer_timeout_count =
+        s_runtime.executor.presteer_timeout_count;
     out->steer_calibration_ram_override_sequence =
         g_ecu_steer_calibration_override.sequence;
     out->steer_calibration_ram_override_enabled =
@@ -469,7 +491,7 @@ static status_led_pattern_t select_status_led_pattern(void)
         s_runtime.final_command.high_voltage_enable ||
         s_runtime.final_command.brake_release ||
         s_runtime.final_command.hydraulic_enable ||
-        s_runtime.final_command.target_speed_kph != 0.0f;
+        s_runtime.final_command.target_speed_mps != 0.0f;
     if (active_output) {
         return STATUS_LED_PATTERN_ACTIVE;
     }

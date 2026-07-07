@@ -390,6 +390,10 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
     assert ".transmit(" not in monitor_py
     assert "--allow-motion" in motion_debug_py
     assert "--spin-deg" in motion_debug_py
+    assert "--smooth-commissioning-scenario" in motion_debug_py
+    assert "SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 = 500_000" in motion_debug_py
+    assert "--profile-accel\", type=int, default=SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2" in motion_debug_py
+    assert "profile acceleration" in motion_debug_py
     assert "Node1..4 drive wheels" in motion_debug_py
     assert "Node5..8 steering axes" in motion_debug_py
     assert "CONTROL_DISABLE_VOLTAGE" in motion_debug_py
@@ -430,7 +434,7 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
     assert "canopen_master_service_queue_pdo" in motion_c
     assert "servo_drive_canopen_run_absolute_position_mode" not in lift_c
     assert "ECU_CANOPEN_RPDO2_BASE" in config_h
-    assert "ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC" in config_h
+    assert "ECU_DRIVE_SPEED_MPS_TO_COUNTS_PER_SEC" in config_h
     assert "ECU_STEER_DEG_TO_COUNTS" in config_h
     assert "ECU_LIFT_MM_TO_COUNTS" in config_h
 
@@ -923,7 +927,14 @@ def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) 
 
     assert "#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)" in config_h
     assert "#define ECU_REMOTE_MAX_STEER_DEG          (45.0f)" in config_h
-    assert "#define ECU_STEER_POSITION_SPEED_UNITS               (1666667)" in config_h
+    assert "#define ECU_STEER_POSITION_SPEED_UNITS               (4000000)" in config_h
+    assert "#define ECU_SERVO_COMMISSIONING_MAX_RPM              (2400.0f)" in config_h
+    assert "#define ECU_SERVO_COMMISSIONING_MAX_ACCEL_RPS2       (50.0f)" in config_h
+    assert "#define ECU_SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 (500000)" in config_h
+    assert "#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_COMMISSIONING_MAX_RPM" in config_h
+    assert "ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM" in config_h
+    assert "#define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)" in config_h
+    assert "#define ECU_STEER_GEAR_REDUCTION                     (490.0f)" in config_h
     assert "apply_commissioning_steer_only_direct_targets" in command_arbiter_c
     assert "out->target_steer_deg[wheel] = steer_deg" in command_arbiter_c
 
@@ -1360,10 +1371,10 @@ def test_motion_command_cache_does_not_memcmp_struct_padding(root: pathlib.Path)
         "state->last_motion_command.source != command->source",
         "state->last_motion_command.motion_mode != command->motion_mode",
         "state->last_motion_command.active_gear != command->active_gear",
-        "state->last_motion_command.target_speed_kph != command->target_speed_kph",
+        "state->last_motion_command.target_speed_mps != command->target_speed_mps",
         "state->last_motion_command.brake_release != command->brake_release",
-        "state->last_motion_command.target_wheel_speed_kph[wheel]",
-        "command->target_wheel_speed_kph[wheel]",
+        "state->last_motion_command.target_wheel_speed_mps[wheel]",
+        "command->target_wheel_speed_mps[wheel]",
         "state->last_motion_command.target_steer_deg[wheel]",
         "command->target_steer_deg[wheel]",
     ]:
@@ -1503,8 +1514,8 @@ def test_commissioning_power_debug_can_request_hv_without_motion(root: pathlib.P
         "command->brake_release = false",
         "command->hydraulic_enable = false",
         "command->hydraulic_valve_mask = 0U",
-        "command->target_speed_kph = 0.0f",
-        "command->target_wheel_speed_kph[wheel] = 0.0f",
+        "command->target_speed_mps = 0.0f",
+        "command->target_wheel_speed_mps[wheel] = 0.0f",
     ]:
         assert token in apply_block.group(0), token
 
@@ -1984,7 +1995,7 @@ def test_remote_command_generation_uses_sbus_analog_channels(root: pathlib.Path)
     assert "decode_error_limit =" in mapper_c
     assert "credibility_error =" in mapper_c
     assert "motion_control_build_candidate" in arbiter_c
-    assert "ECU_REMOTE_MAX_SPEED_KPH" in config_h
+    assert "ECU_REMOTE_MAX_SPEED_MPS" in config_h
     assert "ECU_REMOTE_MAX_STEER_DEG" in config_h
     assert "ECU_REMOTE_MAX_HEIGHT_RATE_MM_S" in config_h
     assert "ECU_REMOTE_MAX_TRACK_RATE_MM_S" in config_h

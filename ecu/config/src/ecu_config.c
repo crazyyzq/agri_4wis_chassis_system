@@ -144,7 +144,13 @@ static const ecu_hardware_config_t s_hardware_config = {
     .modbus_warning_light_response_timeout_ms = ECU_MODBUS_WARNING_LIGHT_RESPONSE_TIMEOUT_MS,
     .rs485_baudrate = ECU_RS485_BAUDRATE,
     .rs232_baudrate = ECU_RS232_BAUDRATE,
-    .drive_speed_kph_to_counts_per_sec = ECU_DRIVE_SPEED_KPH_TO_COUNTS_PER_SEC,
+    .drive_speed_mps_to_counts_per_sec = ECU_DRIVE_SPEED_MPS_TO_COUNTS_PER_SEC,
+    .drive_direction_sign = {
+        ECU_CANOPEN_LEG1_DRIVE_DIRECTION_SIGN,
+        ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN,
+        ECU_CANOPEN_LEG3_DRIVE_DIRECTION_SIGN,
+        ECU_CANOPEN_LEG4_DRIVE_DIRECTION_SIGN
+    },
     .steer_deg_to_counts = ECU_STEER_DEG_TO_COUNTS,
     .lift_mm_to_counts = ECU_LIFT_MM_TO_COUNTS,
 

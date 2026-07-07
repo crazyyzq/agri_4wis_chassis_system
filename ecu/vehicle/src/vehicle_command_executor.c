@@ -134,6 +134,16 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.steer_commission_post_command_missing_mask;
     executor->steer_commission_post_command_timeout_count =
         s_runtime.motion.steer_commission_post_command_timeout_count;
+    executor->presteer_drive_hold_active =
+        s_runtime.motion.presteer_drive_hold_active;
+    executor->presteer_target_reached =
+        s_runtime.motion.presteer_target_reached;
+    executor->presteer_mode =
+        (uint8_t)s_runtime.motion.presteer_mode;
+    executor->presteer_missing_axis_mask =
+        s_runtime.motion.presteer_missing_axis_mask;
+    executor->presteer_timeout_count =
+        s_runtime.motion.presteer_timeout_count;
 }
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor)

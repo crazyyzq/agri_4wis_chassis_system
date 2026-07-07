@@ -65,7 +65,7 @@ def test_auto_motion_command_sets_consistent_gear_and_brake_release(root: pathli
     for token in [
         "auto_gear_from_speed",
         "auto_requests_brake_release",
-        "out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph)",
+        "out->active_gear = auto_gear_from_speed(auto_request->target_speed_mps)",
         "out->brake_release = auto_requests_brake_release(auto_request)",
     ]:
         assert token in text if token.startswith("auto_") else token in auto_block, token
@@ -81,26 +81,26 @@ def test_reverse_ackermann_uses_rear_as_driving_forward(root: pathlib.Path) -> N
         "motion_mode_reverses_driving_direction",
         "mode == ECU_MOTION_MODE_REVERSE_ACKERMANN",
         "apply_driving_direction_to_speed",
-        "return motion_mode_reverses_driving_direction(mode) ? -speed_kph : speed_kph",
-        "remote_speed_command_kph(const remote_control_request_t *remote, ecu_motion_mode_t mode)",
+        "return motion_mode_reverses_driving_direction(mode) ? -speed_mps : speed_mps",
+        "remote_speed_command_mps(const remote_control_request_t *remote, ecu_motion_mode_t mode)",
         "apply_driving_direction_to_speed(mode, speed)",
-        "auto_speed_command_kph",
+        "auto_speed_command_mps",
         "auto_request->requested_mode",
     ]:
         assert token in arbiter_c, token
 
     remote_call = arbiter_c.split("motion_control_build_candidate(remote->active_motion_mode", 1)[1]
-    assert "remote_speed_command_kph(remote, remote->active_motion_mode)" in remote_call
+    assert "remote_speed_command_mps(remote, remote->active_motion_mode)" in remote_call
 
     auto_block = arbiter_c.split("if (remote != 0 && remote->auto_control_allowed", 1)[1]
-    assert "out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph)" in auto_block
-    assert "auto_speed_command_kph(auto_request)" in auto_block
+    assert "out->active_gear = auto_gear_from_speed(auto_request->target_speed_mps)" in auto_block
+    assert "auto_speed_command_mps(auto_request)" in auto_block
 
     reverse_kinematics = kinematics_c[
         kinematics_c.index("void four_wheel_kinematics_build_reverse_ackermann"):
         kinematics_c.index("void four_wheel_kinematics_build_spin")
     ]
-    assert "build_ackermann_from_curvature(speed_kph, steer_input_deg, -1.0f" in reverse_kinematics
+    assert "build_ackermann_from_curvature(speed_mps, steer_input_deg, -1.0f" in reverse_kinematics
 
 
 def test_remote_arming_gear_requests_release_brake_before_active_drive(root: pathlib.Path) -> None:
@@ -153,10 +153,10 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
     motion_device_c = read(root, "ecu/devices/src/motion_device.c")
     command_c = read(root, "ecu/vehicle/src/command_arbiter.c")
 
-    assert "float target_wheel_speed_kph[ECU_WHEEL_COUNT]" in vehicle_h
-    assert "command->target_wheel_speed_kph[wheel]" in motion_device_c
+    assert "float target_wheel_speed_mps[ECU_WHEEL_COUNT]" in vehicle_h
+    assert "command->target_wheel_speed_mps[wheel]" in motion_device_c
     assert "motion_control_build_candidate" in command_c
-    assert "out->target_wheel_speed_kph[wheel]" in motion_c
+    assert "out->target_wheel_speed_mps[wheel]" in motion_c
 
     for token in [
         "build_positive_ackermann_targets",
@@ -188,10 +188,58 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
         "out->target_steer_deg[ECU_WHEEL_LEG2_FRONT_LEFT] = -spin_angle",
         "out->target_steer_deg[ECU_WHEEL_LEG3_REAR_LEFT] = spin_angle",
         "out->target_steer_deg[ECU_WHEEL_LEG4_REAR_RIGHT] = -spin_angle",
-        "out->target_wheel_speed_kph[ECU_WHEEL_LEG2_FRONT_LEFT] = -speed_kph",
-        "out->target_wheel_speed_kph[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_kph",
+        "out->target_wheel_speed_mps[ECU_WHEEL_LEG2_FRONT_LEFT] = -speed_mps",
+        "out->target_wheel_speed_mps[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_mps",
     ]:
         assert token in spin_impl, token
+
+
+def test_motion_units_are_mps_and_realtime_smoothing_is_discrete(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    debug_py = read(root, "tools/canopen_motion_debug/motion8_remote_sim_debug.py")
+
+    for token in [
+        "ECU_DRIVE_SPEED_MPS_TO_COUNTS_PER_SEC",
+        "ECU_DRIVE_MAX_SPEED_MPS",
+        "ECU_DRIVE_COMMISSIONING_MAX_SPEED_MPS",
+        "ECU_REMOTE_MAX_SPEED_MPS",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_SMALL_UNITS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_MEDIUM_UNITS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_LARGE_UNITS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_REVERSAL_UNITS_PER_SEC",
+        "ECU_CANOPEN_LEG1_DRIVE_DIRECTION_SIGN (1)",
+        "ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN (-1)",
+        "ECU_CANOPEN_LEG3_DRIVE_DIRECTION_SIGN (-1)",
+        "ECU_CANOPEN_LEG4_DRIVE_DIRECTION_SIGN (1)",
+    ]:
+        assert token in config_h, token
+
+    assert "drive_direction_sign[ECU_WHEEL_COUNT]" in config_h
+    assert ".drive_direction_sign = {" in config_c
+    assert "ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN" in config_c
+
+    for token in [
+        "select_steer_rate_limit_counts_per_sec",
+        "select_drive_velocity_rate_limit_units_per_sec",
+        "requested < 0 && current > 0",
+        "requested > 0 && current < 0",
+        "drive_direction_sign_is_valid",
+        "config->drive_direction_sign[wheel]",
+        "config->drive_speed_mps_to_counts_per_sec *",
+    ]:
+        assert token in motion_c, token
+
+    assert "--speed-mps" in debug_py
+    assert "DRIVE_DIRECTION_SIGNS = (1, -1, -1, 1)" in debug_py
+    assert "DRIVE_SPEED_MPS_TO_UNITS * DRIVE_DIRECTION_SIGNS[index]" in debug_py
+    assert "drive_sign_from_node" in debug_py
+    assert "speed_kph" not in debug_py
 
 
 def test_four_wheel_ackermann_kinematics_uses_vehicle_geometry(root: pathlib.Path) -> None:
@@ -256,10 +304,62 @@ def test_servo_steering_scale_matches_field_calibration(root: pathlib.Path) -> N
     config_h = read(root, "ecu/config/include/ecu_config.h")
     motion_device_c = read(root, "ecu/devices/src/motion_device.c")
 
-    assert "#define ECU_STEER_DEG_TO_COUNTS               (11111.111f)" in config_h
+    assert "#define ECU_STEER_GEAR_REDUCTION                     (490.0f)" in config_h
+    assert "#define ECU_STEER_DEG_TO_COUNTS" in config_h
+    assert "(ECU_STEER_COUNTS_PER_OUTPUT_REV / 360.0f)" in config_h
     assert "send_steer_command(canopen" in motion_device_c
     assert "command->target_steer_deg[wheel]" in motion_device_c
     assert "config->steer_deg_to_counts" in motion_device_c
+
+
+def test_spin_and_crab_hold_drive_until_steering_feedback_reaches_target(root: pathlib.Path) -> None:
+    """Spin/crab must pre-steer from feedback before any drive velocity is enabled."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS",
+        "ECU_CANOPEN_PRESTEER_TIMEOUT_MS",
+        "ECU_CANOPEN_PRESTEER_REQUIRED_AXIS_MASK",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "presteer_drive_hold_active",
+        "presteer_target_reached",
+        "presteer_missing_axis_mask",
+        "presteer_timeout_count",
+    ]:
+        assert token in motion_h, token
+        assert token in executor_c, token
+        assert token in monitor_c, token
+
+    assert "static bool motion_mode_requires_presteer" in motion_c
+    presteer_fn = motion_c.split("static bool motion_mode_requires_presteer", 1)[1].split(
+        "static bool steer_limit_blocks_target", 1
+    )[0]
+    for token in [
+        "mode == ECU_MOTION_MODE_SPIN",
+        "mode == ECU_MOTION_MODE_CRAB",
+        "canopen_master_service_get_node_feedback",
+        "feedback.feedback_fresh",
+        "feedback.fault_latched == 0U",
+        "abs_i32_delta(feedback.actual_position_counts",
+        "ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS",
+        "return false;",
+    ]:
+        assert token in presteer_fn, token
+
+    apply_fn = motion_c.split("ecu_device_apply_result_t motion_device_apply", 1)[1].split(
+        "ecu_device_apply_result_t motion_device_flush_realtime", 1
+    )[0]
+    assert "presteer_gate_allows_drive(state" in apply_fn
+    assert apply_fn.index("presteer_gate_allows_drive(state") < apply_fn.index("cache_latest_drive_velocity")
+    assert "drive_allowed_by_safety &&" in apply_fn
 
 
 def test_safety_manager_clamps_dangerous_outputs(root: pathlib.Path) -> None:
@@ -268,7 +368,7 @@ def test_safety_manager_clamps_dangerous_outputs(root: pathlib.Path) -> None:
         "brake_release_allowed",
         "hydraulic_enable = false",
         "high_voltage_enable = false",
-        "target_speed_kph = 0.0f",
+        "target_speed_mps = 0.0f",
         "estop_latched",
         "a_class_fault",
     ]

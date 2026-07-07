@@ -119,6 +119,13 @@ typedef struct {
     bool drive_latest_enable_requested[ECU_WHEEL_COUNT];
     bool drive_pending_velocity[ECU_WHEEL_COUNT];
     bool drive_realtime_enabled[ECU_WHEEL_COUNT];
+    bool presteer_drive_hold_active;
+    bool presteer_target_reached;
+    ecu_motion_mode_t presteer_mode;
+    uint8_t presteer_missing_axis_mask;
+    uint32_t presteer_hold_start_ms;
+    uint32_t presteer_timeout_count;
+    uint32_t presteer_last_timeout_ms;
     uint32_t drive_group_complete_count;
     uint32_t drive_group_failure_count;
     uint32_t drive_pdo_tx_error_count[ECU_WHEEL_COUNT];
@@ -177,7 +184,7 @@ bool motion_device_get_effective_steer_calibration(
 
 /* Apply final drive, steering and brake intent to CAN2 motion nodes.
  *
- * Units: speed is kph, steering is degrees, brake_release is logical.
+ * Units: speed is m/s, steering is degrees, brake_release is logical.
  * Dependencies: CAN2 service and project drive/steer CANopen mappings.
  * Timing: unchanged commands are periodically re-queued because a successful
  * local SDO enqueue does not guarantee the remote drive accepted the transfer.

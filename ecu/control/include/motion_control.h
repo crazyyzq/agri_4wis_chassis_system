@@ -4,14 +4,14 @@
 #include "vehicle_types.h"
 
 typedef struct {
-    float max_speed_kph;
+    float max_speed_mps;
     float max_steer_deg;
     float wheelbase_mm;
     float track_width_mm;
 } motion_control_limits_t;
 
 void motion_control_build_candidate(ecu_motion_mode_t mode,
-                                    float speed_kph,
+                                    float speed_mps,
                                     float steer_input_deg,
                                     const motion_control_limits_t *limits,
                                     vehicle_actuator_command_t *out);

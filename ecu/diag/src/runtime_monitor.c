@@ -227,6 +227,20 @@ static void print_centi_value(int32_t value)
            (unsigned long)(magnitude % 100U));
 }
 
+static void print_milli_value(int32_t value)
+{
+    uint32_t magnitude;
+    if (value < 0) {
+        printf("-");
+        magnitude = (uint32_t)(-value);
+    } else {
+        magnitude = (uint32_t)value;
+    }
+    printf("%lu.%03lu",
+           (unsigned long)(magnitude / 1000U),
+           (unsigned long)(magnitude % 1000U));
+}
+
 void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 {
     if (snapshot == 0) {
@@ -441,7 +455,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "steer_commission_axis_mask=0x%02x steer_commission_nmt_sent_mask=0x%02x "
            "steer_commission_auth_clears=%lu "
            "post_tpdo_pending=%s post_tpdo_axis=0x%02x post_tpdo_missing=0x%02x "
-           "post_tpdo_timeouts=%lu\r\n",
+           "post_tpdo_timeouts=%lu "
+           "presteer_hold=%s presteer_ready=%s presteer_mode=%u(%s) "
+           "presteer_missing=0x%02x presteer_timeouts=%lu\r\n",
            bool_text(snapshot->steer_normal_pdo_allowed),
            bool_text(snapshot->steer_safety_inhibited),
            (unsigned int)snapshot->steer_inhibit_reason,
@@ -457,7 +473,13 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            bool_text(snapshot->steer_commission_post_command_tpdo_pending),
            (unsigned int)snapshot->steer_commission_post_command_axis_mask,
            (unsigned int)snapshot->steer_commission_post_command_missing_mask,
-           (unsigned long)snapshot->steer_commission_post_command_timeout_count);
+           (unsigned long)snapshot->steer_commission_post_command_timeout_count,
+           bool_text(snapshot->presteer_drive_hold_active),
+           bool_text(snapshot->presteer_target_reached),
+           (unsigned int)snapshot->presteer_mode,
+           motion_mode_text((ecu_motion_mode_t)snapshot->presteer_mode),
+           (unsigned int)snapshot->presteer_missing_axis_mask,
+           (unsigned long)snapshot->presteer_timeout_count);
 
     printf("[ECU STEER CAL] ram_override=%s valid=%s seq=%lu",
            bool_text(snapshot->steer_calibration_ram_override_enabled),
@@ -642,8 +664,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            source_text(snapshot->source),
            motion_mode_text(snapshot->motion_mode),
            gear_text(snapshot->active_gear));
-    print_centi_value(snapshot->target_speed_centi_kph);
-    printf("kph steer=[");
+    print_milli_value(snapshot->target_speed_milli_mps);
+    printf("m/s steer=[");
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         if (wheel > 0U) {
             printf(",");

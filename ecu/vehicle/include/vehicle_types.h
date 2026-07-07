@@ -24,7 +24,7 @@ typedef struct {
     uint32_t sequence;
     uint32_t timestamp_ms;
     ecu_motion_mode_t requested_mode;
-    float target_speed_kph;
+    float target_speed_mps;
     float target_steer_deg;
     bool request_control;
 } auto_control_request_t;
@@ -33,8 +33,8 @@ typedef struct {
     ecu_command_source_t source;
     ecu_motion_mode_t motion_mode;
     ecu_gear_request_t active_gear;
-    float target_speed_kph;
-    float target_wheel_speed_kph[ECU_WHEEL_COUNT];
+    float target_speed_mps;
+    float target_wheel_speed_mps[ECU_WHEEL_COUNT];
     float target_steer_deg[ECU_WHEEL_COUNT];
     float target_height_mm;
     float height_rate_mm_s;
@@ -77,6 +77,11 @@ typedef struct {
     uint8_t steer_commission_post_command_axis_mask;
     uint8_t steer_commission_post_command_missing_mask;
     uint32_t steer_commission_post_command_timeout_count;
+    bool presteer_drive_hold_active;
+    bool presteer_target_reached;
+    uint8_t presteer_mode;
+    uint8_t presteer_missing_axis_mask;
+    uint32_t presteer_timeout_count;
 } vehicle_executor_state_t;
 
 #endif /* VEHICLE_TYPES_H */

@@ -123,6 +123,11 @@ static float clamp_f32(float value, float min_value, float max_value)
     return value;
 }
 
+static bool drive_direction_sign_is_valid(int8_t sign)
+{
+    return sign == 1 || sign == -1;
+}
+
 static bool steer_axis_calibration_is_valid(const steer_axis_calibration_t *axis)
 {
     if (axis == NULL || !axis->valid) {
@@ -312,6 +317,142 @@ static bool drive_output_allowed(const vehicle_actuator_command_t *command)
 #else
     return command->brake_release;
 #endif
+}
+
+static bool motion_mode_requires_presteer(ecu_motion_mode_t mode)
+{
+    return mode == ECU_MOTION_MODE_SPIN ||
+           mode == ECU_MOTION_MODE_CRAB;
+}
+
+static bool command_requests_drive_motion(const vehicle_actuator_command_t *command)
+{
+    if (command == NULL) {
+        return false;
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        float speed_mps = command->target_wheel_speed_mps[wheel];
+        if (speed_mps > 0.001f || speed_mps < -0.001f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool steering_feedback_is_at_targets(
+    motion_device_state_t *state,
+    const canopen_master_service_t *canopen,
+    const ecu_hardware_config_t *config,
+    const int32_t target_counts[ECU_WHEEL_COUNT],
+    uint8_t *missing_axis_mask)
+{
+    uint8_t missing_mask = 0U;
+
+    if (state == NULL || canopen == NULL || config == NULL ||
+        target_counts == NULL) {
+        if (missing_axis_mask != NULL) {
+            *missing_axis_mask = ECU_CANOPEN_PRESTEER_REQUIRED_AXIS_MASK;
+        }
+        return false;
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t axis_bit = (uint8_t)(1U << wheel);
+        uint8_t node_id = config->steer_nodes[wheel].node_id;
+        canopen_node_feedback_t feedback;
+
+        if ((ECU_CANOPEN_PRESTEER_REQUIRED_AXIS_MASK & axis_bit) == 0U) {
+            continue;
+        }
+
+        bool feedback_ready =
+            canopen_master_service_get_node_feedback(canopen,
+                                                     node_id,
+                                                     &feedback) &&
+            feedback.feedback_fresh &&
+            feedback.fault_latched == 0U;
+        if (!feedback_ready) {
+            missing_mask |= axis_bit;
+            continue;
+        }
+
+        state->steer_last_position_valid[wheel] = true;
+        state->steer_last_position_counts[wheel] =
+            feedback.actual_position_counts;
+        if (abs_i32_delta(feedback.actual_position_counts,
+                          target_counts[wheel]) >
+            ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS) {
+            missing_mask |= axis_bit;
+        }
+    }
+
+    if (missing_axis_mask != NULL) {
+        *missing_axis_mask = missing_mask;
+    }
+    return missing_mask == 0U;
+}
+
+static bool presteer_gate_allows_drive(
+    motion_device_state_t *state,
+    const canopen_master_service_t *canopen,
+    const ecu_hardware_config_t *config,
+    const vehicle_actuator_command_t *command,
+    const int32_t steer_target_counts[ECU_WHEEL_COUNT],
+    bool drive_allowed_by_safety,
+    uint32_t now_ms)
+{
+    bool requires_presteer =
+        command != NULL && motion_mode_requires_presteer(command->motion_mode);
+    bool drive_motion_requested = command_requests_drive_motion(command);
+
+    if (state == NULL || !requires_presteer ||
+        !drive_allowed_by_safety || !drive_motion_requested) {
+        if (state != NULL) {
+            state->presteer_drive_hold_active = false;
+            state->presteer_target_reached = false;
+            state->presteer_missing_axis_mask = 0U;
+            state->presteer_hold_start_ms = 0U;
+            state->presteer_mode =
+                command != NULL ? command->motion_mode : ECU_MOTION_MODE_POSITIVE_ACKERMANN;
+        }
+        return true;
+    }
+
+    state->presteer_mode = command->motion_mode;
+    uint8_t missing_mask = 0U;
+    bool target_reached = steering_feedback_is_at_targets(state,
+                                                         canopen,
+                                                         config,
+                                                         steer_target_counts,
+                                                         &missing_mask);
+    state->presteer_target_reached = target_reached;
+    state->presteer_missing_axis_mask = missing_mask;
+
+    if (target_reached) {
+        state->presteer_drive_hold_active = false;
+        state->presteer_hold_start_ms = 0U;
+        return true;
+    }
+
+    if (!state->presteer_drive_hold_active) {
+        state->presteer_hold_start_ms = now_ms;
+    }
+    state->presteer_drive_hold_active = true;
+
+    if (state->presteer_hold_start_ms != 0U &&
+        (uint32_t)(now_ms - state->presteer_hold_start_ms) >=
+            ECU_CANOPEN_PRESTEER_TIMEOUT_MS) {
+        state->presteer_timeout_count++;
+        state->presteer_last_timeout_ms = now_ms;
+        state->presteer_hold_start_ms = now_ms;
+    }
+
+    /* While held, steering targets continue through the normal PDO path but
+     * drive RPDOs are cached as disabled/zero.  This prevents spin/crab from
+     * rolling sideways before the steering feedback window is reached.
+     */
+    return false;
 }
 
 static bool steer_limit_blocks_target(canopen_master_service_t *canopen,
@@ -583,7 +724,7 @@ static bool steer_commissioning_remote_conditions_ok(
     return command != NULL &&
            command->source == COMMAND_SOURCE_REMOTE &&
            command->steer_commission_interlock_ok &&
-           command->target_speed_kph == 0.0f;
+           command->target_speed_mps == 0.0f;
 }
 
 static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
@@ -721,7 +862,7 @@ static bool command_changed(const motion_device_state_t *state,
     if (state->last_motion_command.source != command->source ||
         state->last_motion_command.motion_mode != command->motion_mode ||
         state->last_motion_command.active_gear != command->active_gear ||
-        state->last_motion_command.target_speed_kph != command->target_speed_kph ||
+        state->last_motion_command.target_speed_mps != command->target_speed_mps ||
         state->last_motion_command.brake_release != command->brake_release ||
         state->last_motion_command.steer_commission_interlock_ok !=
             command->steer_commission_interlock_ok ||
@@ -731,8 +872,8 @@ static bool command_changed(const motion_device_state_t *state,
     }
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        if (state->last_motion_command.target_wheel_speed_kph[wheel] !=
-            command->target_wheel_speed_kph[wheel]) {
+        if (state->last_motion_command.target_wheel_speed_mps[wheel] !=
+            command->target_wheel_speed_mps[wheel]) {
             return true;
         }
         if (state->last_motion_command.target_steer_deg[wheel] !=
@@ -826,13 +967,38 @@ static bool build_node5_steer_rpdo_request(canopen_master_pdo_request_t *request
     return node5_steer_contract_allows(config, request);
 }
 
+static int32_t i32_abs_saturating(int32_t value)
+{
+    if (value == INT32_MIN) {
+        return INT32_MAX;
+    }
+    return value < 0 ? -value : value;
+}
+
+static int32_t select_steer_rate_limit_counts_per_sec(int32_t current,
+                                                      int32_t requested)
+{
+    int32_t error = i32_abs_saturating(requested - current);
+    if (error <= ECU_CANOPEN_STEER_TARGET_ERROR_NEAR_COUNTS) {
+        return ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC;
+    }
+    if (error <= ECU_CANOPEN_STEER_TARGET_ERROR_SMALL_COUNTS) {
+        return ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC;
+    }
+    if (error <= ECU_CANOPEN_STEER_TARGET_ERROR_MEDIUM_COUNTS) {
+        return ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC;
+    }
+    return ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC;
+}
+
 static int32_t rate_limit_target_counts(int32_t current,
                                         int32_t requested,
                                         uint32_t elapsed_ms)
 {
+    int32_t rate_limit = select_steer_rate_limit_counts_per_sec(current,
+                                                                requested);
     int32_t max_delta =
-        (int32_t)((ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_COUNTS_PER_SEC *
-                   elapsed_ms) / 1000U);
+        (int32_t)(((uint32_t)rate_limit * elapsed_ms) / 1000U);
     if (max_delta < ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS) {
         max_delta = ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS;
     }
@@ -847,13 +1013,31 @@ static int32_t rate_limit_target_counts(int32_t current,
     return requested;
 }
 
+static int32_t select_drive_velocity_rate_limit_units_per_sec(int32_t current,
+                                                              int32_t requested)
+{
+    if ((requested < 0 && current > 0) || (requested > 0 && current < 0)) {
+        return ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_REVERSAL_UNITS_PER_SEC;
+    }
+
+    int32_t error = i32_abs_saturating(requested - current);
+    if (error <= ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_SMALL_UNITS_PER_SEC) {
+        return ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_SMALL_UNITS_PER_SEC;
+    }
+    if (error <= ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_MEDIUM_UNITS_PER_SEC) {
+        return ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_MEDIUM_UNITS_PER_SEC;
+    }
+    return ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_LARGE_UNITS_PER_SEC;
+}
+
 static int32_t rate_limit_velocity_units(int32_t current,
                                          int32_t requested,
                                          uint32_t elapsed_ms)
 {
+    int32_t rate_limit =
+        select_drive_velocity_rate_limit_units_per_sec(current, requested);
     int32_t max_delta =
-        (int32_t)((ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_UNITS_PER_SEC *
-                   elapsed_ms) / 1000U);
+        (int32_t)(((uint32_t)rate_limit * elapsed_ms) / 1000U);
     if (max_delta < ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS) {
         max_delta = ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS;
     }
@@ -2211,13 +2395,37 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                                                 command,
                                                                 now_ms);
 
-    bool drive_allowed = drive_output_allowed(command) && steer_allowed;
+    int32_t steer_position_counts[ECU_WHEEL_COUNT] = {0};
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        steer_position_counts[wheel] =
+            scaled_float_to_i32(command->target_steer_deg[wheel],
+                                config->steer_deg_to_counts);
+    }
+
+    bool drive_allowed_by_safety = drive_output_allowed(command) && steer_allowed;
+    bool drive_allowed =
+        drive_allowed_by_safety &&
+        presteer_gate_allows_drive(state,
+                                   canopen,
+                                   config,
+                                   command,
+                                   steer_position_counts,
+                                   drive_allowed_by_safety,
+                                   now_ms);
     bool ok = true;
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        int32_t velocity_units = drive_allowed ?
-            scaled_float_to_i32(command->target_wheel_speed_kph[wheel],
-                                config->drive_speed_kph_to_counts_per_sec) :
-            0;
+        int32_t velocity_units = 0;
+        if (drive_allowed) {
+            int8_t drive_sign = config->drive_direction_sign[wheel];
+            if (!drive_direction_sign_is_valid(drive_sign)) {
+                ok = false;
+            } else {
+                velocity_units = scaled_float_to_i32(
+                    command->target_wheel_speed_mps[wheel],
+                    config->drive_speed_mps_to_counts_per_sec *
+                        (float)drive_sign);
+            }
+        }
 
         /* This is only a RAM mailbox update; CAN submission remains owned by
          * motion_device_flush_realtime().  Update it every control pass so a
@@ -2235,10 +2443,9 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
             state->drive_velocity_mode_ready[wheel] = false;
         }
 
-        int32_t steer_position_counts =
-            scaled_float_to_i32(command->target_steer_deg[wheel],
-                                config->steer_deg_to_counts);
-        ok = cache_latest_steer_target(state, wheel, steer_position_counts) && ok;
+        ok = cache_latest_steer_target(state,
+                                       wheel,
+                                       steer_position_counts[wheel]) && ok;
         if (!commissioning_policy_allows_steer4_remote() &&
             steer_allowed && (changed || refresh_due)) {
             ok = send_steer_command(canopen,

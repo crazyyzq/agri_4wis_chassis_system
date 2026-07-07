@@ -34,7 +34,7 @@ typedef struct {
      * command negative speed while the operator is in D gear because the rear
      * of the machine is treated as the driving-forward direction.
      */
-    float target_wheel_speed_kph[ECU_WHEEL_COUNT];
+    float target_wheel_speed_mps[ECU_WHEEL_COUNT];
 } four_wheel_kinematics_output_t;
 
 /* Build normal four-wheel Ackermann targets.
@@ -42,7 +42,7 @@ typedef struct {
  * Operator view: the vehicle front is the driving-forward direction.  A
  * positive steering input bends the trajectory toward the vehicle-left side.
  */
-void four_wheel_kinematics_build_ackermann(float speed_kph,
+void four_wheel_kinematics_build_ackermann(float speed_mps,
                                            float steer_input_deg,
                                            const four_wheel_kinematics_geometry_t *geometry,
                                            four_wheel_kinematics_output_t *out);
@@ -54,7 +54,7 @@ void four_wheel_kinematics_build_ackermann(float speed_kph,
  * input is still operator-relative, so a positive input bends left from the
  * rear-facing driving frame, which is rightward in the fixed front-facing frame.
  */
-void four_wheel_kinematics_build_reverse_ackermann(float speed_kph,
+void four_wheel_kinematics_build_reverse_ackermann(float speed_mps,
                                                    float steer_input_deg,
                                                    const four_wheel_kinematics_geometry_t *geometry,
                                                    four_wheel_kinematics_output_t *out);
@@ -64,12 +64,12 @@ void four_wheel_kinematics_build_reverse_ackermann(float speed_kph,
  * This is a deliberate commissioning-friendly spin model: steering angles and
  * wheel speed signs are explicit in the confirmed vehicle leg order.
  */
-void four_wheel_kinematics_build_spin(float speed_kph,
+void four_wheel_kinematics_build_spin(float speed_mps,
                                       float spin_angle_deg,
                                       four_wheel_kinematics_output_t *out);
 
 /* Build crab targets with the same steering angle and speed on every wheel. */
-void four_wheel_kinematics_build_crab(float speed_kph,
+void four_wheel_kinematics_build_crab(float speed_mps,
                                       float steer_deg,
                                       four_wheel_kinematics_output_t *out);
 

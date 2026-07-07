@@ -17,9 +17,9 @@ void safety_manager_apply(const vehicle_safety_snapshot_t *safety,
         safety->sbus_failsafe || safety->controlled_stop_active ||
         safety->shutdown_protect_active) {
         command->source = COMMAND_SOURCE_SAFETY;
-        command->target_speed_kph = 0.0f;
+        command->target_speed_mps = 0.0f;
         for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-            command->target_wheel_speed_kph[wheel] = 0.0f;
+            command->target_wheel_speed_mps[wheel] = 0.0f;
         }
         command->height_rate_mm_s = 0.0f;
         command->track_rate_mm_s = 0.0f;

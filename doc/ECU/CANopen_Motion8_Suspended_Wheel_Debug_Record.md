@@ -201,6 +201,11 @@ python tools\canopen_motion_debug\motion8_remote_sim_debug.py `
    - 风险：安全门关闭、刹车释放撤销或遥控失效时，之前非零速度可能不会立即被最新 0 速度覆盖。
    - 修正：`motion_device_apply()` 每个控制周期都更新 RAM 中的四轮速度快照；CAN 发送仍只由 `motion_device_flush_realtime()` 统一调度。
 
+3. 自转/蟹行行走时序。
+   - 原逻辑：自转和蟹行可以在转向轴尚未到目标角度时同时输出行走速度，悬空测试表现为动作逻辑不直观，落地后存在轮胎横向冲击风险。
+   - 修正：ECU 继续由 vehicle/control 层一次性生成四轮 coherent snapshot，但 `motion_device_apply()` 会在自转/蟹行模式下读取 Node5-8 的 TPDO 位置反馈；四个转向轴均进入 `ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS` 窗口前，Node1-4 的 drive RPDO 缓存为禁用/零速度。
+   - 诊断：串口监控输出 `presteer_hold`、`presteer_ready`、`presteer_missing` 和 `presteer_timeouts`，用于判断是哪个转向轴未到位或反馈不新鲜。
+
 ## 6. ECU 接入规则
 
 后续 ECU 真机遥控时应保持：

@@ -11,9 +11,9 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->source = COMMAND_SOURCE_NONE;
     out->motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
     out->active_gear = ECU_GEAR_REQUEST_P;
-    out->target_speed_kph = 0.0f;
+    out->target_speed_mps = 0.0f;
     for (uint8_t i = 0U; i < ECU_WHEEL_COUNT; ++i) {
-        out->target_wheel_speed_kph[i] = 0.0f;
+        out->target_wheel_speed_mps[i] = 0.0f;
         out->target_steer_deg[i] = 0.0f;
     }
     out->target_height_mm = 0.0f;
@@ -70,23 +70,23 @@ static bool motion_mode_reverses_driving_direction(ecu_motion_mode_t mode)
     return mode == ECU_MOTION_MODE_REVERSE_ACKERMANN;
 }
 
-static float apply_driving_direction_to_speed(ecu_motion_mode_t mode, float speed_kph)
+static float apply_driving_direction_to_speed(ecu_motion_mode_t mode, float speed_mps)
 {
     /* Gear and throttle are operator-frame concepts.  In reverse Ackermann the
      * operator drives from the rear-facing frame: D means travel toward the
      * original vehicle rear, so the fixed vehicle-frame speed sign is inverted.
      */
-    return motion_mode_reverses_driving_direction(mode) ? -speed_kph : speed_kph;
+    return motion_mode_reverses_driving_direction(mode) ? -speed_mps : speed_mps;
 }
 
-static float remote_speed_command_kph(const remote_control_request_t *remote, ecu_motion_mode_t mode)
+static float remote_speed_command_mps(const remote_control_request_t *remote, ecu_motion_mode_t mode)
 {
     if (remote->active_gear == ECU_GEAR_REQUEST_P) {
         return 0.0f;
     }
 
     float speed = scale_positive_per_mille(remote->throttle_per_mille,
-                                           ECU_REMOTE_MAX_SPEED_KPH);
+                                           ECU_REMOTE_MAX_SPEED_MPS);
     if (remote->active_gear == ECU_GEAR_REQUEST_R) {
         speed = -speed;
     }
@@ -149,10 +149,10 @@ static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_comma
         return;
     }
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        out->target_wheel_speed_kph[wheel] = 0.0f;
+        out->target_wheel_speed_mps[wheel] = 0.0f;
         out->target_steer_deg[wheel] = steer_deg;
     }
-    out->target_speed_kph = 0.0f;
+    out->target_speed_mps = 0.0f;
 #if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
     out->active_gear = ECU_GEAR_REQUEST_P;
     out->brake_release = false;
@@ -174,12 +174,12 @@ static void apply_commissioning_steer_only_direct_targets(vehicle_actuator_comma
 #endif
 }
 
-static ecu_gear_request_t auto_gear_from_speed(float target_speed_kph)
+static ecu_gear_request_t auto_gear_from_speed(float target_speed_mps)
 {
-    if (target_speed_kph > 0.0f) {
+    if (target_speed_mps > 0.0f) {
         return ECU_GEAR_REQUEST_D;
     }
-    if (target_speed_kph < 0.0f) {
+    if (target_speed_mps < 0.0f) {
         return ECU_GEAR_REQUEST_R;
     }
     return ECU_GEAR_REQUEST_P;
@@ -187,10 +187,10 @@ static ecu_gear_request_t auto_gear_from_speed(float target_speed_kph)
 
 static bool auto_requests_brake_release(const auto_control_request_t *auto_request)
 {
-    return auto_request != 0 && auto_request->target_speed_kph != 0.0f;
+    return auto_request != 0 && auto_request->target_speed_mps != 0.0f;
 }
 
-static float auto_speed_command_kph(const auto_control_request_t *auto_request)
+static float auto_speed_command_mps(const auto_control_request_t *auto_request)
 {
     if (auto_request == 0) {
         return 0.0f;
@@ -200,7 +200,7 @@ static float auto_speed_command_kph(const auto_control_request_t *auto_request)
      * mode", not always fixed vehicle +X.
      */
     return apply_driving_direction_to_speed(auto_request->requested_mode,
-                                           auto_request->target_speed_kph);
+                                           auto_request->target_speed_mps);
 }
 
 static void apply_remote_adjust_command(const remote_control_request_t *remote,
@@ -252,7 +252,7 @@ void command_arbiter_update(const remote_control_request_t *remote,
     /* priority: hardware safety > estop/failsafe > controlled stop > remote > auto. */
     if (remote_has_priority(remote)) {
         motion_control_limits_t limits = {
-            .max_speed_kph = ECU_REMOTE_MAX_SPEED_KPH,
+            .max_speed_mps = ECU_REMOTE_MAX_SPEED_MPS,
             .max_steer_deg = ECU_REMOTE_MAX_STEER_DEG,
             .wheelbase_mm = ECU_VEHICLE_WHEELBASE_MM,
             .track_width_mm = ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM,
@@ -269,16 +269,16 @@ void command_arbiter_update(const remote_control_request_t *remote,
         float steer_deg = scale_signed_per_mille(remote->steer_per_mille,
                                                  ECU_REMOTE_MAX_STEER_DEG);
         motion_control_build_candidate(remote->active_motion_mode,
-                                       remote_speed_command_kph(remote, remote->active_motion_mode),
+                                       remote_speed_command_mps(remote, remote->active_motion_mode),
                                        steer_deg,
                                        &limits,
                                        out);
         apply_commissioning_steer_only_direct_targets(out, remote, steer_deg);
         apply_remote_adjust_command(remote, out);
 #if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
-        out->target_speed_kph = 0.0f;
+        out->target_speed_mps = 0.0f;
         for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-            out->target_wheel_speed_kph[wheel] = 0.0f;
+            out->target_wheel_speed_mps[wheel] = 0.0f;
         }
         out->hydraulic_enable = false;
         out->hydraulic_valve_mask = 0U;
@@ -292,16 +292,16 @@ void command_arbiter_update(const remote_control_request_t *remote,
         auto_request != 0 && auto_request->valid && auto_request->request_control) {
         out->source = COMMAND_SOURCE_AUTO;
         out->motion_mode = auto_request->requested_mode;
-        out->active_gear = auto_gear_from_speed(auto_request->target_speed_kph);
+        out->active_gear = auto_gear_from_speed(auto_request->target_speed_mps);
         out->brake_release = auto_requests_brake_release(auto_request);
         motion_control_limits_t limits = {
-            .max_speed_kph = ECU_REMOTE_MAX_SPEED_KPH,
+            .max_speed_mps = ECU_REMOTE_MAX_SPEED_MPS,
             .max_steer_deg = ECU_REMOTE_MAX_STEER_DEG,
             .wheelbase_mm = ECU_VEHICLE_WHEELBASE_MM,
             .track_width_mm = ECU_VEHICLE_TRACK_WIDTH_DEFAULT_MM,
         };
         motion_control_build_candidate(auto_request->requested_mode,
-                                       auto_speed_command_kph(auto_request),
+                                       auto_speed_command_mps(auto_request),
                                        auto_request->target_steer_deg,
                                        &limits,
                                        out);

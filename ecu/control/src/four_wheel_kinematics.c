@@ -66,10 +66,10 @@ static void clear_output(four_wheel_kinematics_output_t *out)
 }
 
 static void set_all_wheel_speeds(four_wheel_kinematics_output_t *out,
-                                 float speed_kph)
+                                 float speed_mps)
 {
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        out->target_wheel_speed_kph[wheel] = speed_kph;
+        out->target_wheel_speed_mps[wheel] = speed_mps;
     }
 }
 
@@ -107,14 +107,14 @@ static wheel_position_t wheel_position(uint32_t wheel,
 
 static float signed_speed_magnitude(float linear_velocity_x,
                                     float linear_velocity_y,
-                                    float center_speed_kph)
+                                    float center_speed_mps)
 {
     float magnitude = sqrtf((linear_velocity_x * linear_velocity_x) +
                             (linear_velocity_y * linear_velocity_y));
-    return center_speed_kph < 0.0f ? -magnitude : magnitude;
+    return center_speed_mps < 0.0f ? -magnitude : magnitude;
 }
 
-static void build_ackermann_from_curvature(float speed_kph,
+static void build_ackermann_from_curvature(float speed_mps,
                                            float steer_input_deg,
                                            float curvature_sign,
                                            const four_wheel_kinematics_geometry_t *geometry,
@@ -133,7 +133,7 @@ static void build_ackermann_from_curvature(float speed_kph,
     float signed_steer_deg = steer_input_deg * curvature_sign;
 
     if (fabsf(signed_steer_deg) < FOUR_WHEEL_KINEMATICS_STEER_ZERO_EPS_DEG) {
-        set_all_wheel_speeds(out, speed_kph);
+        set_all_wheel_speeds(out, speed_mps);
         return;
     }
 
@@ -155,7 +155,7 @@ static void build_ackermann_from_curvature(float speed_kph,
      * makes zero-speed steering targets valid while preserving D/R direction.
      */
     float steering_angular_rate = 1.0f / turn_radius_mm;
-    float speed_angular_rate = speed_kph / turn_radius_mm;
+    float speed_angular_rate = speed_mps / turn_radius_mm;
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         wheel_position_t position = wheel_position(wheel, &safe_geometry);
@@ -171,28 +171,28 @@ static void build_ackermann_from_curvature(float speed_kph,
          * outer wheels get larger magnitude, and the sign follows the fixed
          * vehicle-frame speed chosen by the command arbiter.
          */
-        float linear_velocity_x = speed_kph - (speed_angular_rate * position.wheel_y_mm);
+        float linear_velocity_x = speed_mps - (speed_angular_rate * position.wheel_y_mm);
         float linear_velocity_y = speed_angular_rate * position.wheel_x_mm;
 
         out->target_steer_deg[wheel] =
             atan2f(axis_velocity_y, axis_velocity_x) *
             FOUR_WHEEL_KINEMATICS_RAD_TO_DEG;
-        out->target_wheel_speed_kph[wheel] =
+        out->target_wheel_speed_mps[wheel] =
             signed_speed_magnitude(linear_velocity_x,
                                    linear_velocity_y,
-                                   speed_kph);
+                                   speed_mps);
     }
 }
 
-void four_wheel_kinematics_build_ackermann(float speed_kph,
+void four_wheel_kinematics_build_ackermann(float speed_mps,
                                            float steer_input_deg,
                                            const four_wheel_kinematics_geometry_t *geometry,
                                            four_wheel_kinematics_output_t *out)
 {
-    build_ackermann_from_curvature(speed_kph, steer_input_deg, 1.0f, geometry, out);
+    build_ackermann_from_curvature(speed_mps, steer_input_deg, 1.0f, geometry, out);
 }
 
-void four_wheel_kinematics_build_reverse_ackermann(float speed_kph,
+void four_wheel_kinematics_build_reverse_ackermann(float speed_mps,
                                                    float steer_input_deg,
                                                    const four_wheel_kinematics_geometry_t *geometry,
                                                    four_wheel_kinematics_output_t *out)
@@ -202,10 +202,10 @@ void four_wheel_kinematics_build_reverse_ackermann(float speed_kph,
      * before calling this function, and this function flips steering curvature
      * into the fixed front-facing vehicle frame.
      */
-    build_ackermann_from_curvature(speed_kph, steer_input_deg, -1.0f, geometry, out);
+    build_ackermann_from_curvature(speed_mps, steer_input_deg, -1.0f, geometry, out);
 }
 
-void four_wheel_kinematics_build_spin(float speed_kph,
+void four_wheel_kinematics_build_spin(float speed_mps,
                                       float spin_angle,
                                       four_wheel_kinematics_output_t *out)
 {
@@ -218,13 +218,13 @@ void four_wheel_kinematics_build_spin(float speed_kph,
     out->target_steer_deg[ECU_WHEEL_LEG3_REAR_LEFT] = spin_angle;
     out->target_steer_deg[ECU_WHEEL_LEG4_REAR_RIGHT] = -spin_angle;
 
-    out->target_wheel_speed_kph[ECU_WHEEL_LEG1_FRONT_RIGHT] = speed_kph;
-    out->target_wheel_speed_kph[ECU_WHEEL_LEG2_FRONT_LEFT] = -speed_kph;
-    out->target_wheel_speed_kph[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_kph;
-    out->target_wheel_speed_kph[ECU_WHEEL_LEG4_REAR_RIGHT] = speed_kph;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG1_FRONT_RIGHT] = speed_mps;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG2_FRONT_LEFT] = -speed_mps;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_mps;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG4_REAR_RIGHT] = speed_mps;
 }
 
-void four_wheel_kinematics_build_crab(float speed_kph,
+void four_wheel_kinematics_build_crab(float speed_mps,
                                       float steer_deg,
                                       four_wheel_kinematics_output_t *out)
 {
@@ -232,7 +232,7 @@ void four_wheel_kinematics_build_crab(float speed_kph,
         return;
     }
     clear_output(out);
-    set_all_wheel_speeds(out, speed_kph);
+    set_all_wheel_speeds(out, speed_mps);
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         out->target_steer_deg[wheel] = steer_deg;
     }

@@ -143,7 +143,7 @@ def test_v8_remote_commissioning_uses_selected_axis_0f_1f_and_never_drive_or_can
 
     assert "ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING" in command_c
     assert "out->active_gear = ECU_GEAR_REQUEST_P" in command_c
-    assert "out->target_speed_kph = 0.0f" in command_c
+    assert "out->target_speed_mps = 0.0f" in command_c
     assert "out->hydraulic_enable = false" in command_c
     assert "remote->throttle_per_mille == 0" in command_c
 
@@ -427,7 +427,7 @@ def test_v10_full_range_90_profile_is_explicit_and_does_not_enable_other_motion(
     assert "#define ECU_STEER_REMOTE_COMMISSION_MAX_DEG                 (90.0f)" in config_h
     assert "#define ECU_REMOTE_MAX_STEER_DEG          (90.0f)" in config_h
     assert "#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS" in config_h
-    assert "(1000000)" in config_h
+    assert "(1225000)" in config_h
     assert "remote_steer_range_text" in monitor_c
     assert "drive_rpdo=0 can3_rpdo=0" in monitor_c
 
