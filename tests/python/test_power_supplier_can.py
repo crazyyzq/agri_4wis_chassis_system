@@ -125,6 +125,22 @@ def test_power_device_decodes_feedback_and_schedules_commands(root: pathlib.Path
         assert token in power_c, token
 
 
+def test_power_accessories_wait_for_high_voltage_feedback(root: pathlib.Path) -> None:
+    power_c = read(root, "ecu/devices/src/power_device.c")
+
+    for token in [
+        "power_device_high_voltage_feedback_ready",
+        "snapshot->bms.positive_contactor_closed",
+        "snapshot->bms.negative_contactor_closed",
+        "bool accessory_enable =",
+        "high_voltage_enable && high_voltage_feedback_ready",
+        "power_device_send_bms_if_due(state, can1, high_voltage_enable",
+        "power_device_send_dcdc12_if_due(state, can1, accessory_enable",
+        "power_device_send_dcac_if_due(state, can1, accessory_enable",
+    ]:
+        assert token in power_c, token
+
+
 def test_cpu0_monitor_reports_can1_power_snapshot(root: pathlib.Path) -> None:
     tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
     monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
@@ -163,14 +179,45 @@ def test_remote_power_request_does_not_require_outputs_that_it_starts(root: path
     assert "preconditions->low_voltage_ok" not in precondition_body
 
 
+def test_remote_power_on_latch_does_not_chatter_on_post_hv_tpdo_gap(root: pathlib.Path) -> None:
+    power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+
+    high_block = power_fsm_c.split("if (input->power == REMOTE_POS_HIGH)", 1)[1]
+    high_block = high_block.split("} else {", 1)[0]
+
+    assert "if (fsm->high_voltage_enable_request)" in high_block
+    assert "fsm->state = REMOTE_POWER_ON;" in high_block
+    assert "return;" in high_block
+    assert high_block.index("if (fsm->high_voltage_enable_request)") < high_block.index(
+        "power_on_preconditions_ok(preconditions)"
+    )
+
+
+def test_remote_power_request_timing_matches_field_enable_gesture(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    power_fsm_h = read(root, "ecu/remote/include/remote_power_fsm.h")
+
+    assert "#define REMOTE_POWER_LONG_PRESS_MS       (350U)" in config_h
+    assert "ECU_SBUS_PPM_HIGH_MIN            (1800U)" in config_h
+    assert ".power_long_press_ms = REMOTE_POWER_LONG_PRESS_MS" in config_c
+    assert "350 ms" in power_fsm_h
+    assert "1800..1950 PPM" in power_fsm_h
+
+
 def test_remote_power_down_request_always_clears_hv_intent(root: pathlib.Path) -> None:
     power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+    power_fsm_h = read(root, "ecu/remote/include/remote_power_fsm.h")
+    remote_manager_c = read(root, "ecu/remote/src/remote_manager.c")
 
     low_position_block = power_fsm_c.split("} else {", 1)[1]
     assert "fsm->high_voltage_enable_request = false;" in low_position_block
+    assert "fsm->high_voltage_disable_request = true;" in low_position_block
     assert low_position_block.index("fsm->high_voltage_enable_request = false;") < low_position_block.index(
         "power_down_preconditions_ok(preconditions)"
     )
+    assert "bool high_voltage_disable_request;" in power_fsm_h
+    assert "manager->request.high_voltage_disable_request = manager->power.high_voltage_disable_request" in remote_manager_c
 
 
 def test_remote_power_center_releases_shutdown_protect_after_fault_clears(root: pathlib.Path) -> None:

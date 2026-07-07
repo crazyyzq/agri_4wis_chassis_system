@@ -61,6 +61,7 @@ typedef struct {
     ipc_snapshot_t cpu0_snapshot;
     status_led_service_t status_led;
     uint32_t last_debug_monitor_ms;
+    uint32_t last_can3_feedback_sync_ms;
 } ecu_runtime_context_t;
 
 static ecu_runtime_context_t s_runtime;
@@ -72,14 +73,14 @@ static ecu_runtime_context_t s_runtime;
  * COM9 visible even when a CAN bus is offline or retransmitting.
  */
 static const ecu_task_descriptor_t s_cpu0_tasks[ECU_TASK_CPU0_COUNT] = {
-    { "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 512U },
-    { "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 512U },
-    { "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 768U },
-    { "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 768U },
-    { "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 512U },
-    { "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 512U },
-    { "io", ECU_CPU0_IO_PERIOD_MS, 16U, 512U },
-    { "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 1536U }
+    { "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 768U },
+    { "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 1024U },
+    { "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 1024U },
+    { "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 1024U },
+    { "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 768U },
+    { "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 1024U },
+    { "io", ECU_CPU0_IO_PERIOD_MS, 16U, 768U },
+    { "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 2048U }
 };
 
 void ecu_task_runtime_init(uint32_t now_ms)
@@ -215,6 +216,31 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
     out->zero_speed = true;
     out->brake_applied = true;
 #endif
+#if ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
+    /* The ECU board has no dedicated brake-applied feedback.  Once high
+     * voltage has been requested, whole-vehicle debug uses fresh TPDO actual
+     * velocity from all four drive motors as the only zero-speed source.
+     *
+     * Before high voltage is requested, the drives may not yet publish TPDOs.
+     * Treat the machine as stopped only for the narrow startup/ESTOP-clear
+     * interlock when the operator is holding throttle low and no previous
+     * high-voltage command is active.  This avoids a commissioning deadlock:
+     * without this pre-HV window, a boot-time SBUS timeout latch could require
+     * drive TPDO zero speed before MOS8 can energize the high-voltage relay
+     * that powers those drives.
+     */
+    bool pre_hv_stationary_window =
+        !s_runtime.final_command.high_voltage_enable &&
+        !s_runtime.power_snapshot.high_voltage_requested &&
+        input->throttle == REMOTE_POS_LOW &&
+        !out->a_class_fault;
+    if (pre_hv_stationary_window) {
+        out->zero_speed = true;
+        out->brake_applied = true;
+    } else {
+        out->brake_applied = out->zero_speed;
+    }
+#endif
     out->brake_release_confirmed = s_runtime.hardware_feedback.brake_release_confirmed;
     out->throttle_low = input->throttle == REMOTE_POS_LOW;
     out->steering_neutral = input->steering == REMOTE_POS_CENTER;
@@ -232,9 +258,45 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
 static void refresh_can2_feedback(void)
 {
     canopen_master_snapshot_t snapshot;
+    bool all_drive_feedback_fresh = true;
+    bool all_drive_zero_speed = true;
+
     canopen_master_service_get_snapshot(&s_runtime.can2_motion_canopen, &snapshot);
     s_runtime.hardware_feedback.can2_motion_online =
         snapshot.initialized && snapshot.can_normal;
+
+    for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
+         node <= ECU_CANOPEN_DRIVE_RR_NODE_ID;
+         ++node) {
+        const canopen_node_feedback_t *feedback = &snapshot.node_feedback[node];
+        if (!feedback->feedback_fresh || feedback->fault_latched != 0U) {
+            all_drive_feedback_fresh = false;
+            all_drive_zero_speed = false;
+            break;
+        }
+        if (feedback->actual_velocity_units >
+                ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS ||
+            feedback->actual_velocity_units <
+                -ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS) {
+            all_drive_zero_speed = false;
+        }
+    }
+
+#if ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
+    /* Whole-vehicle commissioning has no independent brake-applied input.
+     * Use fresh TPDO actual velocity from all four drive axes to decide
+     * whether remote FSMs may treat the machine as stopped.  The tolerance is
+     * intentionally ±3 motor rpm so harmless encoder jitter does not trap the
+     * operator in an unresettable ESTOP or shift-precondition state.
+     */
+    s_runtime.hardware_feedback.zero_speed_confirmed =
+        all_drive_feedback_fresh && all_drive_zero_speed;
+    s_runtime.safety_snapshot.zero_speed_confirmed =
+        s_runtime.hardware_feedback.zero_speed_confirmed;
+#else
+    (void)all_drive_feedback_fresh;
+    (void)all_drive_zero_speed;
+#endif
 }
 
 static void refresh_power_feedback(void)
@@ -271,12 +333,18 @@ static void refresh_lift_hydraulic_feedback(void)
 
 static void refresh_local_io_feedback(void)
 {
-    /* These are physical/observed facts, not command echoes.  Until TPDO
-     * actual velocity and independent brake feedback are integrated, keep them
-     * unavailable instead of falsely confirming a safe mechanical state.
+    /* These are physical/observed facts, not command echoes.  Brake-release
+     * confirmation stays unavailable because the current ECU wiring has no
+     * independent brake-applied/brake-released input.  In the explicit
+     * whole-vehicle motion debug image, zero-speed confirmation is owned by the
+     * CAN2 TPDO feedback path; do not clear it here after CAN2 has sampled all
+     * four drive axes.
      */
     s_runtime.hardware_feedback.brake_release_confirmed = false;
+#if !ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
     s_runtime.hardware_feedback.zero_speed_confirmed = false;
+    s_runtime.safety_snapshot.zero_speed_confirmed = false;
+#endif
 }
 
 static int32_t float_to_centi(float value)
@@ -394,6 +462,8 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     }
     out->brake_release = s_runtime.final_command.brake_release;
     out->high_voltage_enable = s_runtime.final_command.high_voltage_enable;
+    out->high_voltage_relay_latched =
+        s_runtime.executor.high_voltage_relay_latched;
     out->commissioning_power_debug_active =
         s_runtime.commissioning_debug.power_debug_active;
     out->hydraulic_enable = s_runtime.final_command.hydraulic_enable;
@@ -614,6 +684,13 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
     canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen, now_ms);
+    if ((uint32_t)(now_ms - s_runtime.last_can3_feedback_sync_ms) >=
+        ECU_CANOPEN_STEER_PDO_PERIOD_MS) {
+        if (canopen_master_service_send_sync(&s_runtime.can3_lift_hydraulic_canopen,
+                                             now_ms)) {
+            s_runtime.last_can3_feedback_sync_ms = now_ms;
+        }
+    }
     (void)vehicle_command_executor_flush_can3_lift_hydraulic(
         &s_runtime.executor,
         &s_runtime.can3_lift_hydraulic_canopen,

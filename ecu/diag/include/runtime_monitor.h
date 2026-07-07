@@ -100,6 +100,7 @@ typedef struct {
     int32_t target_steer_centi_deg[ECU_WHEEL_COUNT];
     bool brake_release;
     bool high_voltage_enable;
+    bool high_voltage_relay_latched;
     bool commissioning_power_debug_active;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;

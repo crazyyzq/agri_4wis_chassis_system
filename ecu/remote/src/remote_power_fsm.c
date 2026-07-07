@@ -33,6 +33,7 @@ void remote_power_fsm_init(remote_power_fsm_t *fsm, uint32_t now_ms)
     fsm->hold_position = REMOTE_POS_CENTER;
     fsm->hold_since_ms = now_ms;
     fsm->high_voltage_enable_request = false;
+    fsm->high_voltage_disable_request = false;
     fsm->orderly_shutdown_request = false;
     fsm->request_rejected = false;
     fsm->diagnostic = DIAG_OK;
@@ -48,11 +49,13 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
     }
 
     fsm->request_rejected = false;
+    fsm->high_voltage_disable_request = false;
     fsm->orderly_shutdown_request = false;
 
     if (preconditions->estop_latched || preconditions->a_class_fault) {
         fsm->state = REMOTE_POWER_SHUTDOWN_PROTECT;
         fsm->high_voltage_enable_request = false;
+        fsm->high_voltage_disable_request = true;
         fsm->diagnostic = preconditions->a_class_fault ? DIAG_A_CLASS_FAULT : DIAG_CONTROLLED_STOP_ACTIVE;
         return;
     }
@@ -78,6 +81,11 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
     }
 
     if (input->power == REMOTE_POS_HIGH) {
+        if (fsm->high_voltage_enable_request) {
+            fsm->state = REMOTE_POWER_ON;
+            fsm->diagnostic = DIAG_OK;
+            return;
+        }
         if (power_on_preconditions_ok(preconditions)) {
             fsm->state = REMOTE_POWER_ON;
             fsm->high_voltage_enable_request = true;
@@ -90,6 +98,7 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
         }
     } else {
         fsm->high_voltage_enable_request = false;
+        fsm->high_voltage_disable_request = true;
         if (power_down_preconditions_ok(preconditions)) {
             fsm->state = REMOTE_POWER_OFF;
             fsm->orderly_shutdown_request = true;

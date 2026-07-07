@@ -7,6 +7,8 @@ typedef struct {
     remote_estop_state_t state;
     ecu_estop_source_t estop_source;
     uint32_t reset_since_ms;
+    remote_position_t last_ch13_position;
+    bool ch13_position_initialized;
     diag_code_t diagnostic;
 } remote_estop_fsm_t;
 

@@ -12,7 +12,8 @@
 #define REMOTE_NEUTRAL_QUALIFY_MS        (300U)
 #define REMOTE_FAILSAFE_TIMEOUT_MS       (100U)
 #define REMOTE_DOMAIN_EVENT_GUARD_MS     (150U)
-#define REMOTE_POWER_LONG_PRESS_MS      (1000U)
+#define REMOTE_POWER_LONG_PRESS_MS       (350U)
+#define REMOTE_ESTOP_CENTER_HOLD_MS     (1000U)
 #define REMOTE_EVENT_MODE_REQUEST_TTL_MS (250U)
 #define REMOTE_EVENT_POWER_REQUEST_TTL_MS (500U)
 #define REMOTE_EVENT_ESTOP_RESET_TTL_MS (1000U)
@@ -67,6 +68,10 @@
 
 #ifndef ECU_BUILD_PROFILE_STEER4_REMOTE_90
 #define ECU_BUILD_PROFILE_STEER4_REMOTE_90 (0)
+#endif
+
+#ifndef ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
+#define ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION (0)
 #endif
 
 #ifndef ECU_DEBUG_MONITOR_PERIOD_MS
@@ -256,6 +261,10 @@
  */
 #define ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS (50U)
 #define ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS (1000)
+#define ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE      (3.0f)
+#define ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS \
+    ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
+                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_CANOPEN_DRIVE_PDO_PERIOD_MS           (20U)
 /* Drive velocity is ramped in a few discrete commissioning-friendly bands.
  * Reversal is intentionally the slowest path so a D/R sign change first eases
@@ -505,11 +514,13 @@ typedef enum {
 #define ECU_DIO_HEADLIGHT_MASK           (1UL << 3)
 #define ECU_DIO_LEFT_INDICATOR_MASK      (1UL << 4)
 #define ECU_DIO_RIGHT_INDICATOR_MASK     (1UL << 5)
+#define ECU_DIO_HIGH_VOLTAGE_RELAY_MASK  (1UL << 7)
 #define ECU_DIO_MANAGED_OUTPUT_MASK      (ECU_DIO_HYDRAULIC_ENABLE_MASK | \
                                                 ECU_DIO_HORN_MASK | \
                                                 ECU_DIO_HEADLIGHT_MASK | \
                                                 ECU_DIO_LEFT_INDICATOR_MASK | \
-                                                ECU_DIO_RIGHT_INDICATOR_MASK)
+                                                ECU_DIO_RIGHT_INDICATOR_MASK | \
+                                                ECU_DIO_HIGH_VOLTAGE_RELAY_MASK)
 
 #define ECU_HYD_VALVE_TRACK_EXTEND_MASK  (1UL << 8)
 #define ECU_HYD_VALVE_TRACK_RETRACT_MASK (1UL << 9)
@@ -705,6 +716,7 @@ typedef struct {
     uint32_t dio_headlight_mask;
     uint32_t dio_left_indicator_mask;
     uint32_t dio_right_indicator_mask;
+    uint32_t dio_high_voltage_relay_mask;
     uint32_t dio_managed_output_mask;
     bool dio_active_high;
     uint32_t hydraulic_track_extend_mask;

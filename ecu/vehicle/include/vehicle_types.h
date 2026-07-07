@@ -47,6 +47,7 @@ typedef struct {
     bool steer_commission_interlock_ok;
     bool steer_commission_steering_neutral;
     bool high_voltage_enable;
+    bool high_voltage_disable_request;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
     indicator_mode_t indicator_mode;
@@ -63,6 +64,7 @@ typedef struct {
     ecu_device_apply_result_t lift_hydraulic_result;
     ecu_device_apply_result_t local_io_result;
     ecu_device_apply_result_t warning_light_result;
+    bool high_voltage_relay_latched;
     bool steer_normal_pdo_allowed;
     bool steer_safety_inhibited;
     uint8_t steer_inhibit_reason;

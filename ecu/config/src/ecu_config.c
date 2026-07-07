@@ -120,6 +120,7 @@ static const ecu_hardware_config_t s_hardware_config = {
     .dio_headlight_mask = ECU_DIO_HEADLIGHT_MASK,
     .dio_left_indicator_mask = ECU_DIO_LEFT_INDICATOR_MASK,
     .dio_right_indicator_mask = ECU_DIO_RIGHT_INDICATOR_MASK,
+    .dio_high_voltage_relay_mask = ECU_DIO_HIGH_VOLTAGE_RELAY_MASK,
     .dio_managed_output_mask = ECU_DIO_MANAGED_OUTPUT_MASK | ECU_HYD_VALVE_MANAGED_MASK,
     .dio_active_high = true,
     .hydraulic_track_extend_mask = ECU_HYD_VALVE_TRACK_EXTEND_MASK,

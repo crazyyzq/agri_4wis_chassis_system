@@ -9,6 +9,7 @@
 typedef struct {
     uint32_t apply_count;
     uint32_t last_output_mask;
+    bool high_voltage_relay_latched;
     ecu_device_apply_result_t last_result;
 } local_io_device_state_t;
 
@@ -19,10 +20,14 @@ typedef struct {
  */
 void local_io_device_init(local_io_device_state_t *state);
 
-/* Apply final horn, headlight and indicator requests to DIO.
+/* Apply final board-level output requests to DIO.
  *
  * Units: all fields are logical outputs after safety clamping.
  * Dependencies: DIO masks and active polarity from hardware config.
+ * High-voltage relay output is MOS8 / EX_OUT8.  The physical output is latched:
+ * a high-voltage-enable command closes the relay and keeps it closed; an
+ * explicit high-voltage-disable request or safety clamp opens it.  The GPIO is
+ * active high, so GPIO high closes the relay and GPIO low opens it.
  * Servo brake outputs are intentionally excluded; they are controlled through
  * the BC/BC2 drive terminal outputs over CANopen.
  * Failure behavior: invalid arguments return an error; this function does not

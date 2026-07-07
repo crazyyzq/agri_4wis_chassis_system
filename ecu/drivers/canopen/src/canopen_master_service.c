@@ -25,11 +25,12 @@ uint16_t CO_CANrxMsg_readIdent(CO_CANrxMsg_t *rxMsg);
 #define CANOPEN_MASTER_NMT_CONTROL (CO_NMT_ERR_ON_ERR_REG | CO_ERR_REG_GENERIC_ERR | CO_ERR_REG_COMMUNICATION)
 #define CANOPEN_MASTER_PDO_TX_COMPLETE_POLL_US (300U)
 #define CANOPEN_MASTER_SYNC_COB_ID (0x080U)
-#define ECU_CANOPEN_STEER_TPDO0_RANGE_MASK (0x7F0U)
+#define ECU_CANOPEN_TPDO0_RANGE_MASK (0x7F0U)
 /* The minimal DS301 OD intentionally keeps local CANopen objects small, but
  * motion commissioning needs extra library-owned RX observers for CAN2
- * Node1..8 TPDO0/TPDO1.  Expand the CANopenNode RX array in project code after
- * CO_CANinit() and before CO_CANopenInit(); do not add a raw CAN fallback.
+ * Node1..8 and CAN3 Node9..13 TPDO0/TPDO1.  Expand the CANopenNode RX array in
+ * project code after CO_CANinit() and before CO_CANopenInit(); do not add a raw
+ * CAN fallback.
  */
 #define CANOPEN_MASTER_RX_OBSERVER_CAPACITY (12U)
 
@@ -1896,23 +1897,57 @@ static void handle_debug_command(canopen_master_service_t *service)
     }
 }
 
-static bool can2_motion_tpdo_node_from_cob_id(uint16_t cob_id,
-                                              bool *is_tpdo1,
-                                              uint8_t *node_id)
+static bool bus_tpdo_node_range(canopen_master_bus_t bus,
+                                uint8_t *first_node,
+                                uint8_t *last_node,
+                                uint8_t *required_mask)
 {
-    if (is_tpdo1 == NULL || node_id == NULL) {
+    if (first_node == NULL || last_node == NULL || required_mask == NULL) {
         return false;
     }
 
-    if (cob_id >= (uint16_t)(ECU_CANOPEN_TPDO1_BASE + ECU_CANOPEN_DRIVE_FR_NODE_ID) &&
-        cob_id <= (uint16_t)(ECU_CANOPEN_TPDO1_BASE + ECU_CANOPEN_STEER_RR_NODE_ID)) {
+    switch (bus) {
+    case CANOPEN_MASTER_BUS_CAN2:
+        *first_node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
+        *last_node = ECU_CANOPEN_STEER_RR_NODE_ID;
+        *required_mask = 0xFFU;
+        return true;
+    case CANOPEN_MASTER_BUS_CAN3:
+        *first_node = ECU_CANOPEN_LIFT_FR_NODE_ID;
+        *last_node = ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID;
+        *required_mask = 0x1FU;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool bus_tpdo_node_from_cob_id(canopen_master_bus_t bus,
+                                      uint16_t cob_id,
+                                      bool *is_tpdo1,
+                                      uint8_t *node_id)
+{
+    uint8_t first_node = 0U;
+    uint8_t last_node = 0U;
+    uint8_t required_mask = 0U;
+
+    if (is_tpdo1 == NULL || node_id == NULL) {
+        return false;
+    }
+    if (!bus_tpdo_node_range(bus, &first_node, &last_node, &required_mask)) {
+        return false;
+    }
+    (void)required_mask;
+
+    if (cob_id >= (uint16_t)(ECU_CANOPEN_TPDO1_BASE + first_node) &&
+        cob_id <= (uint16_t)(ECU_CANOPEN_TPDO1_BASE + last_node)) {
         *is_tpdo1 = false;
         *node_id = (uint8_t)(cob_id - ECU_CANOPEN_TPDO1_BASE);
         return true;
     }
 
-    if (cob_id >= (uint16_t)(ECU_CANOPEN_TPDO2_BASE + ECU_CANOPEN_DRIVE_FR_NODE_ID) &&
-        cob_id <= (uint16_t)(ECU_CANOPEN_TPDO2_BASE + ECU_CANOPEN_STEER_RR_NODE_ID)) {
+    if (cob_id >= (uint16_t)(ECU_CANOPEN_TPDO2_BASE + first_node) &&
+        cob_id <= (uint16_t)(ECU_CANOPEN_TPDO2_BASE + last_node)) {
         *is_tpdo1 = true;
         *node_id = (uint8_t)(cob_id - ECU_CANOPEN_TPDO2_BASE);
         return true;
@@ -1933,7 +1968,10 @@ static void steer_tpdo_rx_callback(void *object, void *message)
     }
 
     uint16_t cob_id = CO_CANrxMsg_readIdent(rx_msg);
-    if (!can2_motion_tpdo_node_from_cob_id(cob_id, &is_tpdo1, &node_id) ||
+    if (!bus_tpdo_node_from_cob_id(service->snapshot.bus,
+                                   cob_id,
+                                   &is_tpdo1,
+                                   &node_id) ||
         node_id >= CANOPEN_MASTER_NODE_FEEDBACK_SLOTS) {
         service->snapshot.node_feedback[0].unexpected_tpdo_count++;
         return;
@@ -1981,10 +2019,17 @@ static uint16_t find_free_canopen_rx_slot(CO_CANmodule_t *module, uint16_t start
     return 0xFFFFU;
 }
 
-static void register_steer_tpdo_observers(canopen_master_service_t *service)
+static void register_bus_tpdo_observers(canopen_master_service_t *service)
 {
-    if (service == NULL || service->snapshot.bus != CANOPEN_MASTER_BUS_CAN2 ||
-        co == NULL || co->CANmodule == NULL) {
+    uint8_t first_node = 0U;
+    uint8_t last_node = 0U;
+    uint8_t required_mask = 0U;
+
+    if (service == NULL || co == NULL || co->CANmodule == NULL ||
+        !bus_tpdo_node_range(service->snapshot.bus,
+                             &first_node,
+                             &last_node,
+                             &required_mask)) {
         return;
     }
 
@@ -1995,80 +2040,60 @@ static void register_steer_tpdo_observers(canopen_master_service_t *service)
 
     uint16_t slot = find_free_canopen_rx_slot(co->CANmodule, 0U);
     if (slot == 0xFFFFU) {
-        service->snapshot.steer_tpdo_observer_error_mask =
-            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+        service->snapshot.steer_tpdo_observer_error_mask = required_mask;
         service->snapshot.tpdo_observer_registration_error_count++;
     } else {
-        /* Register TPDO0 as one 0x18x range observer.  This saves three HPM
-         * hardware filters while still keeping position/velocity feedback on
-         * the CANopenNode receive path.  TPDO1 remains exact per node below
-         * because the HPM classic CAN mask path did not reliably deliver the
-         * 0x28x range during whole-machine commissioning.
+        /* Register TPDO0 as one 0x18x range observer.  This keeps
+         * position/velocity feedback on the CANopenNode receive path with low
+         * hardware-filter usage.
          */
         CO_ReturnError_t result = CO_CANrxBufferInit(
             co->CANmodule,
             slot,
             (uint16_t)ECU_CANOPEN_TPDO1_BASE,
-            ECU_CANOPEN_STEER_TPDO0_RANGE_MASK,
+            ECU_CANOPEN_TPDO0_RANGE_MASK,
             false,
             service,
             steer_tpdo_rx_callback);
         if (result == CO_ERROR_NO) {
-            service->snapshot.tpdo0_observer_registered_mask =
-                ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+            service->snapshot.tpdo0_observer_registered_mask = required_mask;
         } else {
-            service->snapshot.steer_tpdo_observer_error_mask =
-                ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL;
+            service->snapshot.steer_tpdo_observer_error_mask = required_mask;
             service->snapshot.tpdo_observer_registration_error_count++;
         }
         slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
-        for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
-             node <= ECU_CANOPEN_STEER_RR_NODE_ID;
-             ++node) {
-            bool steering_node = node >= ECU_CANOPEN_STEER_FR_NODE_ID;
-            uint8_t axis_bit = steering_node ?
-                (uint8_t)(1U << (node - ECU_CANOPEN_STEER_FR_NODE_ID)) : 0U;
-            if (slot == 0xFFFFU) {
-                if (steering_node) {
-                    service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
-                }
-                service->snapshot.tpdo_observer_registration_error_count++;
-                continue;
-            }
-            /* Register TPDO1 exactly per CAN2 motion node so stateword/fault
-             * feedback stays deterministic without relying on a broad 0x28x
-             * mask in the HPM hardware filter table.  The steering readiness
-             * mask intentionally tracks only Node5..8; drive feedback is still
-             * stored by node ID for diagnostics and velocity validation.
+        if (slot == 0xFFFFU) {
+            service->snapshot.steer_tpdo_observer_error_mask |= required_mask;
+            service->snapshot.tpdo_observer_registration_error_count++;
+        } else {
+            /* Register TPDO1 as one 0x28x range observer.  Stateword/current
+             * feedback is still node-deterministic because the callback derives
+             * the node from the received COB-ID before updating the per-node
+             * sequence-locked feedback slot.  Keeping TPDO0/TPDO1 to two RX
+             * filters avoids losing the last node when all eight CAN2 motion
+             * axes are present.
              */
             result = CO_CANrxBufferInit(co->CANmodule,
                                         slot,
-                                        (uint16_t)(ECU_CANOPEN_TPDO2_BASE + node),
-                                        0x7FFU,
+                                        (uint16_t)ECU_CANOPEN_TPDO2_BASE,
+                                        ECU_CANOPEN_TPDO0_RANGE_MASK,
                                         false,
                                         service,
                                         steer_tpdo_rx_callback);
             if (result == CO_ERROR_NO) {
-                if (steering_node) {
-                    service->snapshot.tpdo1_observer_registered_mask |= axis_bit;
-                }
+                service->snapshot.tpdo1_observer_registered_mask = required_mask;
             } else {
-                if (steering_node) {
-                    service->snapshot.steer_tpdo_observer_error_mask |= axis_bit;
-                }
+                service->snapshot.steer_tpdo_observer_error_mask |= required_mask;
                 service->snapshot.tpdo_observer_registration_error_count++;
             }
-            slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
         }
     }
 
     service->snapshot.steer_tpdo_observer_ready =
-        (service->snapshot.tpdo0_observer_registered_mask &
-         ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL) ==
-            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL &&
-        (service->snapshot.tpdo1_observer_registered_mask &
-         ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL) ==
-            ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL &&
+        (service->snapshot.tpdo0_observer_registered_mask & required_mask) ==
+            required_mask &&
+        (service->snapshot.tpdo1_observer_registered_mask & required_mask) ==
+            required_mask &&
         service->snapshot.steer_tpdo_observer_error_mask == 0U;
 }
 
@@ -2080,12 +2105,23 @@ static bool node8_tpdo1_acceptance_workaround_enabled(void)
 static void refresh_tpdo_freshness(canopen_master_service_t *service,
                                    uint32_t now_ms)
 {
+    uint8_t first_node = 0U;
+    uint8_t last_node = 0U;
+    uint8_t required_mask = 0U;
+
     if (service == NULL) {
         return;
     }
+    if (!bus_tpdo_node_range(service->snapshot.bus,
+                             &first_node,
+                             &last_node,
+                             &required_mask)) {
+        return;
+    }
+    (void)required_mask;
 
-    for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
-         node <= ECU_CANOPEN_STEER_RR_NODE_ID &&
+    for (uint8_t node = first_node;
+         node <= last_node &&
          node < CANOPEN_MASTER_NODE_FEEDBACK_SLOTS;
          ++node) {
         canopen_node_feedback_t *feedback = &service->snapshot.node_feedback[node];
@@ -2204,7 +2240,7 @@ bool canopen_master_service_init(canopen_master_service_t *service,
         return false;
     }
 
-    register_steer_tpdo_observers(service);
+    register_bus_tpdo_observers(service);
     CO_CANsetNormalMode(co->CANmodule);
     service->snapshot.initialized = true;
     service->snapshot.can_normal = true;

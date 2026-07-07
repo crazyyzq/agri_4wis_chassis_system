@@ -23,6 +23,7 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->steer_commission_interlock_ok = false;
     out->steer_commission_steering_neutral = false;
     out->high_voltage_enable = false;
+    out->high_voltage_disable_request = false;
     out->hydraulic_enable = false;
     out->hydraulic_valve_mask = 0U;
     out->indicator_mode = INDICATOR_OFF;
@@ -262,6 +263,7 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->active_gear = remote->active_gear;
         out->brake_release = remote_requests_brake_release(remote);
         out->high_voltage_enable = remote->high_voltage_enable_request;
+        out->high_voltage_disable_request = remote->high_voltage_disable_request;
         out->indicator_mode = remote->indicator_mode;
         out->horn_on = remote->horn_on;
         out->headlight_on = remote->headlight_on;
@@ -306,5 +308,6 @@ void command_arbiter_update(const remote_control_request_t *remote,
                                        &limits,
                                        out);
         out->high_voltage_enable = remote->high_voltage_enable_request;
+        out->high_voltage_disable_request = remote->high_voltage_disable_request;
     }
 }

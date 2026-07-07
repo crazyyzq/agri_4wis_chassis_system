@@ -9,6 +9,7 @@ typedef struct {
     remote_position_t hold_position;
     uint32_t hold_since_ms;
     bool high_voltage_enable_request;
+    bool high_voltage_disable_request;
     bool orderly_shutdown_request;
     bool request_rejected;
     diag_code_t diagnostic;
@@ -25,7 +26,12 @@ void remote_power_fsm_init(remote_power_fsm_t *fsm, uint32_t now_ms);
 /* Update the remote power FSM from CH4.
  *
  * CH4 high held for config->power_long_press_ms requests high voltage.
- * CH4 low held for config->power_long_press_ms requests orderly shutdown.
+ * CH4 low held for config->power_long_press_ms requests high-voltage relay
+ * release.  The release request is emitted even if orderly shutdown
+ * preconditions reject the higher-level state transition, because MOS8 must
+ * not remain latched after the operator explicitly disables high voltage.
+ * The field value is 350 ms.  CH4 high still uses the shared SBUS high
+ * threshold, so 1800..1950 PPM is accepted as a right-stick power request.
  * Rejected requests are reported immediately and are not queued.
  */
 void remote_power_fsm_update(remote_power_fsm_t *fsm,

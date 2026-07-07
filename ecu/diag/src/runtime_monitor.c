@@ -68,6 +68,11 @@ static const char *remote_steer_range_text(void)
 #endif
 }
 
+static const char *enabled_text_from_int(int enabled)
+{
+    return enabled != 0 ? "1" : "0";
+}
+
 static const char *link_state_text(remote_link_state_t state)
 {
     switch (state) {
@@ -249,12 +254,16 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 
     printf("[ECU BUILD] profile=%s build_profile=%s policy=%s "
            "remote_range_deg=%s axis_mask=0x0F "
-           "drive_rpdo=0 can3_rpdo=0 "
+           "drive_rpdo=%s can3_rpdo=0 "
            "mapping_write=%u flash_write=0 brake_control=none\r\n",
            ECU_BUILD_PROFILE_TEXT,
            ECU_BUILD_PROFILE_TEXT,
            commissioning_policy_text(),
            remote_steer_range_text(),
+           enabled_text_from_int(
+               ECU_CANOPEN_COMMISSIONING_POLICY ==
+               ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED &&
+               ECU_COMMISSIONING_STEER_ONLY_MODE == 0),
            (unsigned int)ECU_ENABLE_MAINTENANCE_SDO_WRITES);
 
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
@@ -422,8 +431,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_safety_inhibit_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_same_target_coalesce_count);
 
-    printf("[ECU CAN2 STEER TPDO]");
-    for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID;
+    printf("[ECU CAN2 MOTION TPDO]");
+    for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
          node <= ECU_CANOPEN_STEER_RR_NODE_ID;
          ++node) {
         const canopen_node_feedback_t *feedback =
@@ -555,6 +564,31 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->can3_canopen_snapshot.last_pdo_failed_phase,
            (long)snapshot->can3_canopen_snapshot.last_pdo_error);
 
+    printf("[ECU CAN3 LIFT TPDO]");
+    for (uint8_t node = ECU_CANOPEN_LIFT_FR_NODE_ID;
+         node <= ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID;
+         ++node) {
+        const canopen_node_feedback_t *feedback =
+            &snapshot->can3_canopen_snapshot.node_feedback[node];
+        printf(" n%u[fresh=%s p0=%s/%lu@%lu p1=%s/%lu@%lu pos=%ld vel=%ld "
+               "fault=0x%08lx sw=0x%04x cur=%d mal=%lu]",
+               (unsigned int)node,
+               bool_text(feedback->feedback_fresh),
+               bool_text(feedback->tpdo0_valid),
+               (unsigned long)feedback->tpdo0_rx_count,
+               (unsigned long)feedback->last_tpdo0_ms,
+               bool_text(feedback->tpdo1_valid),
+               (unsigned long)feedback->tpdo1_rx_count,
+               (unsigned long)feedback->last_tpdo1_ms,
+               (long)feedback->actual_position_counts,
+               (long)feedback->actual_velocity_units,
+               (unsigned long)feedback->fault_latched,
+               (unsigned int)feedback->statusword,
+               (int)feedback->actual_current_raw,
+               (unsigned long)feedback->malformed_tpdo_count);
+    }
+    printf("\r\n");
+
     printf("[ECU CAN1] tx=%lu rx=%lu err=%lu last_tx_id=0x%08lx ext=%s dlc=%u "
            "last_rx_id=0x%08lx ext=%s dlc=%u data=[",
            (unsigned long)snapshot->can1_tx_count,
@@ -672,10 +706,11 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         }
         print_centi_value(snapshot->target_steer_centi_deg[wheel]);
     }
-    printf("]deg brake=%s hv=%s comm_hv=%s hyd=%s valve=0x%08lx "
+    printf("]deg brake=%s hv=%s mos8=%s comm_hv=%s hyd=%s valve=0x%08lx "
            "res[pwr=%s mot=%s lift=%s io=%s warn=%s]\r\n",
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
+           bool_text(snapshot->high_voltage_relay_latched),
            bool_text(snapshot->commissioning_power_debug_active),
            bool_text(snapshot->hydraulic_enable),
            (unsigned long)snapshot->hydraulic_valve_mask,

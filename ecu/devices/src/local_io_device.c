@@ -21,6 +21,14 @@ ecu_device_apply_result_t local_io_device_apply(local_io_device_state_t *state,
 
     dio_service_write_masked(dio, config->dio_horn_mask, command->horn_on);
     dio_service_write_masked(dio, config->dio_headlight_mask, command->headlight_on);
+    if (command->high_voltage_disable_request) {
+        state->high_voltage_relay_latched = false;
+    } else if (command->high_voltage_enable) {
+        state->high_voltage_relay_latched = true;
+    }
+    dio_service_write_masked(dio,
+                             config->dio_high_voltage_relay_mask,
+                             state->high_voltage_relay_latched);
     dio_service_write_masked(dio,
                              config->dio_left_indicator_mask,
                              command->indicator_mode == INDICATOR_LEFT ||

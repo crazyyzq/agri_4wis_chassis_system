@@ -67,6 +67,7 @@ void remote_manager_update(remote_manager_t *manager,
     manager->request.power_state = manager->power.state;
     manager->request.authority_state = manager->authority.state;
     manager->request.high_voltage_enable_request = manager->power.high_voltage_enable_request;
+    manager->request.high_voltage_disable_request = manager->power.high_voltage_disable_request;
     manager->request.orderly_shutdown_request = manager->power.orderly_shutdown_request;
     manager->request.auto_control_allowed = manager->authority.auto_control_allowed;
     manager->request.steer_per_mille = input->steer_per_mille;

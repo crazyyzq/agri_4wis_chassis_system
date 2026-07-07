@@ -1213,6 +1213,53 @@ def test_can3_and_rgb_status_are_enabled_for_whole_machine(root: pathlib.Path) -
     ]:
         assert token in led_h or token in led_c, token
 
+
+def test_whole_vehicle_motion_profile_uses_tpdo_feedback_for_zero_speed(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    canopen_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "whole_vehicle_motion",
+        "-DECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION=1",
+        "-DECU_CANOPEN_COMMISSIONING_POLICY=3",
+        "-DECU_COMMISSIONING_STEER_ONLY_MODE=0",
+    ]:
+        assert token in cmake, token
+
+    for token in [
+        "ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE",
+        "ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS",
+        "ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION",
+        "feedback->actual_velocity_units",
+        "ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS",
+        "pre_hv_stationary_window",
+        "!s_runtime.final_command.high_voltage_enable",
+        "!s_runtime.power_snapshot.high_voltage_requested",
+        "input->throttle == REMOTE_POS_LOW",
+        "out->brake_applied = out->zero_speed",
+    ]:
+        assert token in tasks_c, token
+
+    for token in [
+        "bus_tpdo_node_range",
+        "CANOPEN_MASTER_BUS_CAN3",
+        "ECU_CANOPEN_LIFT_FR_NODE_ID",
+        "ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID",
+        "register_bus_tpdo_observers",
+    ]:
+        assert token in canopen_c, token
+
+    assert "[ECU CAN2 MOTION TPDO]" in monitor_c
+    assert "[ECU CAN3 LIFT TPDO]" in monitor_c
+
     assert "status_led_service_t status_led" in tasks_c
     assert "status_led_service_init(&s_runtime.status_led" in tasks_c
     assert "status_led_service_update(&s_runtime.status_led" in tasks_c
@@ -1693,6 +1740,7 @@ def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> N
         "ECU_DIO_HEADLIGHT_MASK",
         "ECU_DIO_LEFT_INDICATOR_MASK",
         "ECU_DIO_RIGHT_INDICATOR_MASK",
+        "ECU_DIO_HIGH_VOLTAGE_RELAY_MASK",
     ]
     hydraulic_names = [
         "ECU_HYD_VALVE_TRACK_EXTEND_MASK",
@@ -1711,6 +1759,29 @@ def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> N
     assert (dio_mask & hydraulic_mask) == 0
 
 
+def test_high_voltage_relay_is_mos8_active_high_and_safety_command_owned(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    local_io_h = read(root, "ecu/devices/include/local_io_device.h")
+    local_io_c = read(root, "ecu/devices/src/local_io_device.c")
+    board_c = read(root, "ecu/ecu_isolation/board.c")
+
+    assert "#define ECU_DIO_HIGH_VOLTAGE_RELAY_MASK  (1UL << 7)" in config_h
+    assert ".dio_high_voltage_relay_mask = ECU_DIO_HIGH_VOLTAGE_RELAY_MASK" in config_c
+    assert "ECU_DIO_HIGH_VOLTAGE_RELAY_MASK" in config_h.split("ECU_DIO_MANAGED_OUTPUT_MASK", 1)[1]
+    assert "MOS8 / EX_OUT8" in local_io_h
+    assert "high_voltage_relay_latched" in local_io_h
+    assert "GPIO high closes the relay" in local_io_h
+    assert "config->dio_high_voltage_relay_mask" in local_io_c
+    assert "command->high_voltage_enable" in local_io_c
+    assert "command->high_voltage_disable_request" in local_io_c
+    assert "state->high_voltage_relay_latched = true" in local_io_c
+    assert "state->high_voltage_relay_latched = false" in local_io_c
+    assert "state->high_voltage_relay_latched" in local_io_c
+    assert "/* EX_OUT8  */" in board_c
+    assert "BOARD_ECU_OUTPUT_ON_LEVEL  1U" in read(root, "ecu/ecu_isolation/board.h")
+
+
 def test_cpu0_runtime_monitor_is_configurable_and_task_owned(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
@@ -1727,6 +1798,8 @@ def test_cpu0_runtime_monitor_is_configurable_and_task_owned(root: pathlib.Path)
 
     assert "runtime_monitor_snapshot_t" in monitor_h
     assert "runtime_monitor_print_cpu0" in monitor_h
+    assert "high_voltage_relay_latched" in monitor_h
+    assert "mos8=%s" in monitor_c
     assert "printf(" in monitor_c
     assert "runtime_monitor_print_cpu0" in tasks_c
     assert "ECU_ENABLE_DEBUG_MONITOR" in tasks_c
@@ -2115,14 +2188,14 @@ def test_cpu0_diagnostic_task_has_priority_over_field_buses(root: pathlib.Path) 
     # entries must therefore stay in enum order; sorting this list by priority
     # silently assigns the wrong priority/name to each created FreeRTOS task.
     expected = [
-        '{ "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 512U }',
-        '{ "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 512U }',
-        '{ "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 768U }',
-        '{ "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 768U }',
-        '{ "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 512U }',
-        '{ "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 512U }',
-        '{ "io", ECU_CPU0_IO_PERIOD_MS, 16U, 512U }',
-        '{ "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 1536U }',
+        '{ "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 768U }',
+        '{ "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 1024U }',
+        '{ "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 1024U }',
+        '{ "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 1024U }',
+        '{ "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 768U }',
+        '{ "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 1024U }',
+        '{ "io", ECU_CPU0_IO_PERIOD_MS, 16U, 768U }',
+        '{ "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 2048U }',
     ]
 
     table_start = tasks_c.index("static const ecu_task_descriptor_t s_cpu0_tasks")

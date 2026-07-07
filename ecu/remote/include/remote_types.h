@@ -131,6 +131,8 @@ typedef struct {
     bool decode_error_limit;
     bool credibility_error;
     remote_position_t ch13_estop;
+    bool ch13_estop_changed;
+    uint32_t ch13_estop_stable_since_ms;
     remote_position_t gear;
     remote_position_t home;
     remote_position_t clearance;
@@ -171,6 +173,7 @@ typedef struct {
     remote_power_state_t power_state;
     remote_authority_state_t authority_state;
     bool high_voltage_enable_request;
+    bool high_voltage_disable_request;
     bool orderly_shutdown_request;
     bool auto_control_allowed;
     int16_t steer_per_mille;

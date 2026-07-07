@@ -150,6 +150,8 @@ def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> 
         "authority",
         "track",
         "ch13_estop",
+        "ch13_estop_changed",
+        "ch13_estop_stable_since_ms",
         "r1_changed",
         "r2_changed",
     ]:
@@ -174,6 +176,33 @@ def test_mode_fsm_requires_fresh_r1_r2_event(root: pathlib.Path) -> None:
     assert "out->r2_changed = mapper->discrete_channels[ECU_SBUS_CH_R2].changed" in mapper_c
 
 
+def test_ch13_estop_triggers_on_any_stable_position_change_and_clears_by_center_hold(root: pathlib.Path) -> None:
+    estop_c = read(root, "ecu/remote/src/remote_estop_fsm.c")
+    estop_h = read(root, "ecu/remote/include/remote_estop_fsm.h")
+    mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
+
+    for token in [
+        "last_ch13_position",
+        "ch13_position_initialized",
+    ]:
+        assert token in estop_h, token
+
+    for token in [
+        "ch13_motion_requests_estop",
+        "input->ch13_estop_changed",
+        "input->ch13_estop != fsm->last_ch13_position",
+        "DIAG_REMOTE_ESTOP_CH13",
+        "ch13_center_held_long_enough",
+        "REMOTE_ESTOP_CENTER_HOLD_MS",
+        "input->ch13_estop_stable_since_ms",
+    ]:
+        assert token in estop_c, token
+
+    assert "input->ch13_estop == REMOTE_POS_HIGH) return ECU_ESTOP_SOURCE_CH13" not in estop_c
+    assert "out->ch13_estop_changed = mapper->discrete_channels[ECU_SBUS_CH_ESTOP].changed" in mapper_c
+    assert "out->ch13_estop_stable_since_ms" in mapper_c
+
+
 def test_remote_event_lifetimes_are_configured(root: pathlib.Path) -> None:
     config = read(root, "ecu/config/include/ecu_config.h")
     for token in [
@@ -182,6 +211,7 @@ def test_remote_event_lifetimes_are_configured(root: pathlib.Path) -> None:
         "REMOTE_EVENT_ESTOP_RESET_TTL_MS",
         "REMOTE_EVENT_LIGHT_REQUEST_TTL_MS",
         "REMOTE_POWER_LONG_PRESS_MS",
+        "REMOTE_ESTOP_CENTER_HOLD_MS",
     ]:
         assert token in config, token
 

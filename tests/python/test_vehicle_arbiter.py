@@ -53,6 +53,7 @@ def test_vehicle_sources_rebuild_complete_command(root: pathlib.Path) -> None:
         "complete_rebuild_each_cycle",
         "auto_control_allowed",
         "high_voltage_enable_request",
+        "high_voltage_disable_request",
     ]
     for token in required:
         assert token in text, token

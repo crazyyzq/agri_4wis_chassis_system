@@ -16,6 +16,15 @@ static bool power_device_recent(uint32_t now_ms, uint32_t last_ms, uint32_t time
            (uint32_t)(now_ms - last_ms) <= timeout_ms;
 }
 
+static bool power_device_high_voltage_feedback_ready(const power_device_snapshot_t *snapshot)
+{
+    return snapshot != 0 &&
+           snapshot->bms_online &&
+           snapshot->bms.valid &&
+           snapshot->bms.positive_contactor_closed &&
+           snapshot->bms.negative_contactor_closed;
+}
+
 static void power_device_init_timestamps(power_device_state_t *state)
 {
     state->last_bms_command_ms = POWER_DEVICE_TIMESTAMP_INVALID;
@@ -93,8 +102,7 @@ static void power_device_refresh_online(power_device_state_t *state,
     bool bms_fault_free = snapshot->bms_error.valid &&
                           snapshot->bms_error.level == 0U;
     bool hv_feedback_ok = !snapshot->high_voltage_requested ||
-                          (snapshot->bms.positive_contactor_closed &&
-                           snapshot->bms.negative_contactor_closed);
+                          power_device_high_voltage_feedback_ready(snapshot);
     snapshot->power_ready = snapshot->bms_online &&
                             snapshot->bms.valid &&
                             bms_fault_free &&
@@ -350,10 +358,15 @@ ecu_device_apply_result_t power_device_apply(power_device_state_t *state,
     }
 
 #if ECU_POWER_CAN_TX_ENABLE
+    bool high_voltage_feedback_ready =
+        power_device_high_voltage_feedback_ready(&state->snapshot);
+    bool accessory_enable =
+        high_voltage_enable && high_voltage_feedback_ready;
+
     bool ok = power_device_send_bms_if_due(state, can1, high_voltage_enable, now_ms);
     ok = power_device_send_dcdc48_if_due(state, can1, high_voltage_enable, now_ms) && ok;
-    ok = power_device_send_dcdc12_if_due(state, can1, high_voltage_enable, now_ms) && ok;
-    ok = power_device_send_dcac_if_due(state, can1, high_voltage_enable, now_ms) && ok;
+    ok = power_device_send_dcdc12_if_due(state, can1, accessory_enable, now_ms) && ok;
+    ok = power_device_send_dcac_if_due(state, can1, accessory_enable, now_ms) && ok;
     state->last_result = ok ? ECU_DEVICE_APPLY_OK : ECU_DEVICE_APPLY_REJECTED;
 #else
     state->last_result = ECU_DEVICE_APPLY_OK;

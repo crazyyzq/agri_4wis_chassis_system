@@ -186,6 +186,8 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
                                                       io->dio,
                                                       config,
                                                       command);
+    executor->high_voltage_relay_latched =
+        s_runtime.local_io.high_voltage_relay_latched;
     executor->warning_light_result =
         warning_light_device_apply(&s_runtime.warning_light,
                                    io->warning_light_modbus,

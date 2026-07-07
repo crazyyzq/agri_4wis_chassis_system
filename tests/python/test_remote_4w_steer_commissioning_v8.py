@@ -221,7 +221,7 @@ def test_v9_commit_b_tpdo_observer_registration_is_checked_and_gates_output(root
         assert token in service_h, token
         assert token in service_c or token.startswith("canopen_master_service_"), token
 
-    observer_fn = service_c.split("static void register_steer_tpdo_observers", 1)[1].split(
+    observer_fn = service_c.split("static void register_bus_tpdo_observers", 1)[1].split(
         "static void refresh_tpdo_freshness", 1
     )[0]
     assert "CO_ReturnError_t" in observer_fn
@@ -341,11 +341,14 @@ def test_v9_commit_c_cmake_profiles_are_safe_by_default_and_selectable(root: pat
     monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
 
     for token in [
-        'set(ECU_COMMISSIONING_PROFILE "safe" CACHE STRING "safe|steer4_remote|steer4_remote_90")',
+        'set(ECU_COMMISSIONING_PROFILE "safe" CACHE STRING "safe|steer4_remote|steer4_remote_90|whole_vehicle_motion")',
         "ECU_COMMISSIONING_PROFILE STREQUAL \"steer4_remote\"",
         "ECU_COMMISSIONING_PROFILE STREQUAL \"steer4_remote_90\"",
+        "ECU_COMMISSIONING_PROFILE STREQUAL \"whole_vehicle_motion\"",
         "-DECU_CANOPEN_COMMISSIONING_POLICY=4",
+        "-DECU_CANOPEN_COMMISSIONING_POLICY=3",
         "-DECU_COMMISSIONING_STEER_ONLY_MODE=1",
+        "-DECU_COMMISSIONING_STEER_ONLY_MODE=0",
         "-DECU_ENABLE_MAINTENANCE_SDO_WRITES=0",
         "-DECU_ENABLE_COMMISSIONING_POWER_DEBUG=0",
         "-DECU_ENABLE_COMMISSIONING_CANOPEN_SCAN=0",
@@ -429,7 +432,8 @@ def test_v10_full_range_90_profile_is_explicit_and_does_not_enable_other_motion(
     assert "#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS" in config_h
     assert "(1225000)" in config_h
     assert "remote_steer_range_text" in monitor_c
-    assert "drive_rpdo=0 can3_rpdo=0" in monitor_c
+    assert "drive_rpdo=%s can3_rpdo=0" in monitor_c
+    assert "ECU_COMMISSIONING_STEER_ONLY_MODE == 0" in monitor_c
 
 
 def test_v10_motion_authorization_is_remote_interlock_not_jlink_for_90_profile(root: pathlib.Path) -> None:
@@ -499,23 +503,25 @@ def test_v10_canopen_rx_capacity_supports_all_four_steering_tpdo_observers(root:
     assert "co->CANrx = expanded" in expand_fn
     assert "co->CANmodule->rxArray = expanded" in expand_fn
     assert "co->CANmodule->rxSize = CANOPEN_MASTER_RX_OBSERVER_CAPACITY" in expand_fn
-    assert "register_steer_tpdo_observers" in canopen_c
+    assert "register_bus_tpdo_observers" in canopen_c
 
 
 def test_v10_steering_tpdo_observer_limits_hardware_filters_without_hal_fallback(root: pathlib.Path) -> None:
     canopen_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
 
-    observer_fn = canopen_c.split("static void register_steer_tpdo_observers", 1)[1].split(
+    observer_fn = canopen_c.split("static void register_bus_tpdo_observers", 1)[1].split(
         "static void refresh_tpdo_freshness", 1
     )[0]
-    assert "ECU_CANOPEN_STEER_TPDO0_RANGE_MASK" in canopen_c
+    assert "ECU_CANOPEN_TPDO0_RANGE_MASK" in canopen_c
     assert "Register TPDO0" in observer_fn
     assert "Register TPDO1" in observer_fn
     assert observer_fn.count("CO_CANrxBufferInit") == 2
     assert "ECU_CANOPEN_TPDO1_BASE" in observer_fn
-    assert "ECU_CANOPEN_TPDO2_BASE + node" in observer_fn
-    assert "for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID" in observer_fn
-    assert "bool steering_node = node >= ECU_CANOPEN_STEER_FR_NODE_ID" in observer_fn
+    assert "(uint16_t)ECU_CANOPEN_TPDO2_BASE" in observer_fn
+    assert "ECU_CANOPEN_TPDO2_BASE + node" not in observer_fn
+    assert "bus_tpdo_node_range(service->snapshot.bus" in observer_fn
+    assert "first_node" in observer_fn
+    assert "last_node" in observer_fn
 
 
 def test_v10_node8_tpdo1_acceptance_workaround_is_profile_scoped_and_position_gated(root: pathlib.Path) -> None:
