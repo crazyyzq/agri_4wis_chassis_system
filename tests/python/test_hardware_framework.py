@@ -1782,6 +1782,28 @@ def test_high_voltage_relay_is_mos8_active_high_and_safety_command_owned(root: p
     assert "BOARD_ECU_OUTPUT_ON_LEVEL  1U" in read(root, "ecu/ecu_isolation/board.h")
 
 
+def test_whole_vehicle_servo_enable_waits_for_bms_high_voltage_feedback(root: pathlib.Path) -> None:
+    vehicle_types_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "bool high_voltage_feedback_ready;" in vehicle_types_h
+    assert "bms_high_voltage_feedback_ready" in tasks_c
+    assert "positive_contactor_closed" in tasks_c
+    assert "negative_contactor_closed" in tasks_c
+    assert "s_runtime.final_command.high_voltage_feedback_ready" in tasks_c
+
+    for token in [
+        "can2_motion_operational_nmt_sent_mask",
+        "request_can2_motion_nodes_operational",
+        "command->high_voltage_feedback_ready",
+        "drive_enable_requested",
+        "CANOPEN_MASTER_DEBUG_COMMAND_NMT_OPERATIONAL",
+    ]:
+        assert token in motion_h or token in motion_c, token
+
+
 def test_cpu0_runtime_monitor_is_configurable_and_task_owned(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")

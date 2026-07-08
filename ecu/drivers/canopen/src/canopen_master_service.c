@@ -26,13 +26,14 @@ uint16_t CO_CANrxMsg_readIdent(CO_CANrxMsg_t *rxMsg);
 #define CANOPEN_MASTER_PDO_TX_COMPLETE_POLL_US (300U)
 #define CANOPEN_MASTER_SYNC_COB_ID (0x080U)
 #define ECU_CANOPEN_TPDO0_RANGE_MASK (0x7F0U)
+#define ECU_CANOPEN_TPDO_EXACT_MASK (0x7FFU)
 /* The minimal DS301 OD intentionally keeps local CANopen objects small, but
  * motion commissioning needs extra library-owned RX observers for CAN2
  * Node1..8 and CAN3 Node9..13 TPDO0/TPDO1.  Expand the CANopenNode RX array in
  * project code after CO_CANinit() and before CO_CANopenInit(); do not add a raw
  * CAN fallback.
  */
-#define CANOPEN_MASTER_RX_OBSERVER_CAPACITY (12U)
+#define CANOPEN_MASTER_RX_OBSERVER_CAPACITY (16U)
 
 typedef struct {
     uint16_t index;
@@ -1262,14 +1263,17 @@ static void finalize_completed_pdo_group_if_ready(canopen_master_service_t *serv
     }
 }
 
+static void harvest_polled_primary_tx_complete(canopen_master_service_t *service);
+
 static bool send_sync_frame(canopen_master_service_t *service,
-                            uint32_t now_ms)
+                            uint32_t now_ms,
+                            bool track_tx_completion)
 {
     if (service == NULL || !service->snapshot.initialized ||
         !service->snapshot.can_normal ||
         service->can_index >= CANOPEN_MASTER_BUS_COUNT ||
         service->pdo_in_flight ||
-        service->sync_in_flight) {
+        (track_tx_completion && service->sync_in_flight)) {
         return false;
     }
 
@@ -1278,13 +1282,22 @@ static bool send_sync_frame(canopen_master_service_t *service,
     frame.id = CANOPEN_MASTER_SYNC_COB_ID;
     frame.dlc = 0U;
 
+    /* The HPM primary TX buffer exposes completion through a sticky event flag.
+     * Reap it immediately before every submission as well as in the periodic
+     * queue pump.  This keeps untracked SYNC frames from leaving the primary
+     * buffer looking busy to the next realtime PDO group.
+     */
+    harvest_polled_primary_tx_complete(service);
+
     int result = hpm_can_send((struct device *)&hpm_canopen_dev[service->can_index],
                               &frame);
     if (result == 0) {
-        service->sync_in_flight = true;
-        service->sync_in_flight_submit_ms = now_ms;
-        service->snapshot.sync_in_flight = true;
-        service->snapshot.sync_in_flight_submit_ms = now_ms;
+        if (track_tx_completion) {
+            service->sync_in_flight = true;
+            service->sync_in_flight_submit_ms = now_ms;
+            service->snapshot.sync_in_flight = true;
+            service->snapshot.sync_in_flight_submit_ms = now_ms;
+        }
         service->snapshot.sync_tx_count++;
         service->snapshot.last_sync_tx_ms = now_ms;
         service->snapshot.last_sync_error = 0;
@@ -1301,7 +1314,15 @@ static bool start_required_pdo_group_sync(canopen_master_service_t *service,
                                           uint32_t now_ms)
 {
     if (pdo_group_ready_for_arm_sync(service)) {
-        if (send_sync_frame(service, now_ms)) {
+        /* Realtime RPDO groups must preserve the order:
+         * arm PDOs -> SYNC -> trigger PDOs -> SYNC.  The actuator PDO frames
+         * are still removed only after controller TX-complete.  SYNC itself is
+         * a zero-DLC timing edge; on the HPM CAN path its TX-complete flag has
+         * been observed to arrive seconds late even though analyzer/TPDO
+         * evidence shows the frame reached the bus.  Do not let that unreliable
+         * local completion flag stall the realtime steering group.
+         */
+        if (send_sync_frame(service, now_ms, false)) {
             service->active_pdo_arm_sync_sent = true;
             return true;
         }
@@ -1313,7 +1334,7 @@ static bool start_required_pdo_group_sync(canopen_master_service_t *service,
     }
 
     if (pdo_group_ready_for_trigger_sync(service)) {
-        if (send_sync_frame(service, now_ms)) {
+        if (send_sync_frame(service, now_ms, false)) {
             service->active_pdo_trigger_sync_sent = true;
             return true;
         }
@@ -1509,6 +1530,8 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
     frame.id = request.cob_id;
     frame.dlc = request.size;
     memcpy(frame.data, request.data, request.size);
+
+    harvest_polled_primary_tx_complete(service);
 
     int result = hpm_can_send((struct device *)&hpm_canopen_dev[service->can_index],
                               &frame);
@@ -2061,29 +2084,35 @@ static void register_bus_tpdo_observers(canopen_master_service_t *service)
             service->snapshot.steer_tpdo_observer_error_mask = required_mask;
             service->snapshot.tpdo_observer_registration_error_count++;
         }
-        slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
-        if (slot == 0xFFFFU) {
-            service->snapshot.steer_tpdo_observer_error_mask |= required_mask;
-            service->snapshot.tpdo_observer_registration_error_count++;
-        } else {
-            /* Register TPDO1 as one 0x28x range observer.  Stateword/current
-             * feedback is still node-deterministic because the callback derives
-             * the node from the received COB-ID before updating the per-node
-             * sequence-locked feedback slot.  Keeping TPDO0/TPDO1 to two RX
-             * filters avoids losing the last node when all eight CAN2 motion
-             * axes are present.
-             */
-            result = CO_CANrxBufferInit(co->CANmodule,
-                                        slot,
-                                        (uint16_t)ECU_CANOPEN_TPDO2_BASE,
-                                        ECU_CANOPEN_TPDO0_RANGE_MASK,
-                                        false,
-                                        service,
-                                        steer_tpdo_rx_callback);
+        /* Field capture showed every 0x28x TPDO1 frame on the analyzer after
+         * NMT Operational, while the ECU callback only received 0x18x TPDO0
+         * frames.  The HPM CAN acceptance filter path is therefore kept
+         * deterministic here: TPDO0 remains one compact range filter, but
+         * TPDO1 is registered as exact per-node filters so stateword/fault
+         * feedback cannot be lost by a second range filter.
+         */
+        for (uint8_t node = first_node; node <= last_node; ++node) {
+            uint8_t node_mask = (uint8_t)(1U << (node - first_node));
+            slot = find_free_canopen_rx_slot(co->CANmodule,
+                                             (uint16_t)(slot + 1U));
+            if (slot == 0xFFFFU) {
+                service->snapshot.steer_tpdo_observer_error_mask |= node_mask;
+                service->snapshot.tpdo_observer_registration_error_count++;
+                continue;
+            }
+
+            result = CO_CANrxBufferInit(
+                co->CANmodule,
+                slot,
+                (uint16_t)(ECU_CANOPEN_TPDO2_BASE + node),
+                ECU_CANOPEN_TPDO_EXACT_MASK,
+                false,
+                service,
+                steer_tpdo_rx_callback);
             if (result == CO_ERROR_NO) {
-                service->snapshot.tpdo1_observer_registered_mask = required_mask;
+                service->snapshot.tpdo1_observer_registered_mask |= node_mask;
             } else {
-                service->snapshot.steer_tpdo_observer_error_mask |= required_mask;
+                service->snapshot.steer_tpdo_observer_error_mask |= node_mask;
                 service->snapshot.tpdo_observer_registration_error_count++;
             }
         }
@@ -2335,7 +2364,31 @@ bool canopen_master_service_send_sync(canopen_master_service_t *service,
         service->sync_in_flight) {
         return false;
     }
-    return send_sync_frame(service, now_ms);
+    return send_sync_frame(service, now_ms, true);
+}
+
+bool canopen_master_service_send_feedback_sync(canopen_master_service_t *service,
+                                               uint32_t now_ms)
+{
+    if (service == NULL || !service->snapshot.initialized ||
+        !service->snapshot.can_normal ||
+        service->can_index >= CANOPEN_MASTER_BUS_COUNT ||
+        service->pdo_in_flight ||
+        service->pdo_queue_count != 0U ||
+        pdo_group_is_active(service)) {
+        return false;
+    }
+
+    /* Feedback-only SYNC is a TPDO sampling trigger, not an actuator PDO group
+     * ordering primitive.  It must not occupy sync_in_flight, otherwise a lost
+     * or delayed controller TX-complete flag can throttle TPDO refresh for
+     * seconds and make healthy drive feedback appear stale.  Operator/service
+     * callers that explicitly need strict SYNC TX-complete observation still use
+     * canopen_master_service_send_sync(); realtime motion groups are ordered by
+     * their own PDO phase state and must not let SYNC TX-complete block the next
+     * actuator phase.
+     */
+    return send_sync_frame(service, now_ms, false);
 }
 
 bool canopen_master_service_get_node_feedback(const canopen_master_service_t *service,

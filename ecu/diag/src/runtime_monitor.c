@@ -380,6 +380,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "pdo_tx_complete_frames=%u pdo_failed_frames=%u pdo_in_flight_frames=%u "
            "pdo_arm_complete_frames=%u pdo_trigger_complete_frames=%u "
            "last_pdo_tx_complete_ms=%lu last_pdo_tx_timeout_ms=%lu "
+           "pdo_current_err=%ld pdo_last_err=%ld "
            "last_tx[group=%lu cob=0x%03x node=%u phase=%u] "
            "last_fail[group=%lu group_id=%lu cob=0x%03x node=%u phase=%u err=%ld "
            "hist_err=%ld reason=%u failed_ms=%lu] drops[qfull=%lu conflict=%lu "
@@ -413,6 +414,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->can2_canopen_snapshot.pdo_trigger_complete_frames,
            (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_complete_ms,
            (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_timeout_ms,
+           (long)snapshot->can2_canopen_snapshot.last_pdo_current_error,
+           (long)snapshot->can2_canopen_snapshot.last_pdo_error,
            (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_tx_group_sequence,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_cob_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_tx_node_id,

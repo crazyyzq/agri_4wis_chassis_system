@@ -24,6 +24,7 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->steer_commission_steering_neutral = false;
     out->high_voltage_enable = false;
     out->high_voltage_disable_request = false;
+    out->high_voltage_feedback_ready = false;
     out->hydraulic_enable = false;
     out->hydraulic_valve_mask = 0U;
     out->indicator_mode = INDICATOR_OFF;

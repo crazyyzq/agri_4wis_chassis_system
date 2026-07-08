@@ -327,16 +327,25 @@
 #define ECU_STEER_REMOTE_COMMISSION_PERIOD_MS               (100U)
 #define ECU_STEER_REMOTE_COMMISSION_TRIGGER_THRESHOLD_COUNTS (5000)
 #define ECU_STEER_REMOTE_COMMISSION_NEUTRAL_MS              (300U)
+#if ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
+/* The current unified PDO profile uses synchronous TPDO feedback and the
+ * whole-vehicle debug image keeps SYNC rate conservative while the chassis is
+ * suspended.  Use a commissioning-only freshness window that covers the
+ * observed TPDO cadence without weakening the safe/default images.
+ */
+#define ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS     (1500U)
+#else
 #define ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS     (250U)
+#endif
 #define ECU_STEER_REMOTE_COMMISSION_POST_COMMAND_TPDO_TIMEOUT_MS (250U)
 #define ECU_STEER_REMOTE_COMMISSION_CENTER_TOLERANCE_COUNTS (10000)
 #define ECU_STEER_REMOTE_COMMISSION_RAMP_COUNTS_PER_SEC     (250000)
 #define ECU_STEER_REMOTE_COMMISSION_SYNC_TIMEOUT_MS         (50U)
-#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+#if ECU_BUILD_PROFILE_STEER4_REMOTE_90 || ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
 /* Field commissioning workaround: the HPM classic CAN receive path currently
  * observes Node8 TPDO0 (0x188) but not Node8 TPDO1 (0x288), although the
  * external analyzer confirms 0x288 is present on the bus.  Keep this limited to
- * the downloadable steering-only profile; normal/safe builds must not accept a
+ * explicit hardware commissioning images; normal/safe builds must not accept a
  * missing TPDO1 status/fault frame as healthy feedback.
  */
 #define ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND       (1U)

@@ -1634,8 +1634,8 @@ static void fail_active_drive_group(motion_device_state_t *state)
 }
 
 static void send_can2_feedback_sync_if_due(motion_device_state_t *state,
-                                           canopen_master_service_t *canopen,
-                                           uint32_t now_ms)
+                                            canopen_master_service_t *canopen,
+                                            uint32_t now_ms)
 {
     if (state == NULL || canopen == NULL ||
         (uint32_t)(now_ms - state->can2_feedback_last_sync_ms) <
@@ -1643,8 +1643,90 @@ static void send_can2_feedback_sync_if_due(motion_device_state_t *state,
         return;
     }
 
-    if (canopen_master_service_send_sync(canopen, now_ms)) {
+    if (canopen_master_service_send_feedback_sync(canopen, now_ms)) {
         state->can2_feedback_last_sync_ms = now_ms;
+    }
+}
+
+static uint8_t can2_motion_node_mask(uint8_t node_id)
+{
+    if (node_id < ECU_CANOPEN_DRIVE_FR_NODE_ID ||
+        node_id > ECU_CANOPEN_STEER_RR_NODE_ID) {
+        return 0U;
+    }
+    return (uint8_t)(1U << (node_id - ECU_CANOPEN_DRIVE_FR_NODE_ID));
+}
+
+static void reset_can2_motion_operational_request(motion_device_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    state->can2_motion_operational_nmt_sent_mask = 0U;
+    state->can2_motion_operational_nmt_last_ms = 0U;
+}
+
+static bool can2_motion_high_voltage_ready(const motion_device_state_t *state)
+{
+    return state != NULL &&
+           state->last_motion_command_valid &&
+           state->last_motion_command.high_voltage_feedback_ready &&
+           !state->last_motion_command.high_voltage_disable_request;
+}
+
+static void request_can2_motion_nodes_operational(motion_device_state_t *state,
+                                                  canopen_master_service_t *canopen,
+                                                  const ecu_hardware_config_t *config,
+                                                  uint32_t now_ms)
+{
+    if (state == NULL || canopen == NULL || config == NULL) {
+        return;
+    }
+
+    if (!can2_motion_high_voltage_ready(state)) {
+        reset_can2_motion_operational_request(state);
+        return;
+    }
+
+    /* NMT is sent through the same CANopen service as PDO traffic.  Do not emit
+     * it while a realtime PDO/SYNC is in-flight, otherwise a controller TX
+     * completion belonging to NMT/SYNC could be mistaken for the queued PDO
+     * group's completion.
+     */
+    if (canopen->pdo_in_flight || canopen->sync_in_flight ||
+        (uint32_t)(now_ms - state->can2_motion_operational_nmt_last_ms) <
+            ECU_CANOPEN_DRIVE_PDO_PERIOD_MS) {
+        return;
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t node_id = config->drive_nodes[wheel].node_id;
+        uint8_t node_mask = can2_motion_node_mask(node_id);
+        if (node_mask != 0U &&
+            (state->can2_motion_operational_nmt_sent_mask & node_mask) == 0U &&
+            canopen_master_service_request_nmt(
+                canopen,
+                node_id,
+                CANOPEN_MASTER_DEBUG_COMMAND_NMT_OPERATIONAL)) {
+            state->can2_motion_operational_nmt_sent_mask |= node_mask;
+            state->can2_motion_operational_nmt_last_ms = now_ms;
+            return;
+        }
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t node_id = config->steer_nodes[wheel].node_id;
+        uint8_t node_mask = can2_motion_node_mask(node_id);
+        if (node_mask != 0U &&
+            (state->can2_motion_operational_nmt_sent_mask & node_mask) == 0U &&
+            canopen_master_service_request_nmt(
+                canopen,
+                node_id,
+                CANOPEN_MASTER_DEBUG_COMMAND_NMT_OPERATIONAL)) {
+            state->can2_motion_operational_nmt_sent_mask |= node_mask;
+            state->can2_motion_operational_nmt_last_ms = now_ms;
+            return;
+        }
     }
 }
 
@@ -2410,8 +2492,11 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                    config,
                                    command,
                                    steer_position_counts,
-                                   drive_allowed_by_safety,
-                                   now_ms);
+                                    drive_allowed_by_safety,
+                                    now_ms);
+    bool drive_enable_requested =
+        command->high_voltage_feedback_ready &&
+        !command->high_voltage_disable_request;
     bool ok = true;
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         int32_t velocity_units = 0;
@@ -2433,9 +2518,9 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
          * previous nonzero velocity instead of waiting for the 500 ms refresh.
          */
         ok = cache_latest_drive_velocity(state,
-                                         wheel,
-                                         velocity_units,
-                                         drive_allowed) && ok;
+                                          wheel,
+                                          velocity_units,
+                                          drive_enable_requested) && ok;
         if (!commissioning_policy_allows_drive_rpdo()) {
             state->drive_last_velocity_valid[wheel] = true;
             state->drive_last_velocity_units[wheel] = 0;
@@ -2491,6 +2576,11 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
     state->steer_next_group_valid = false;
     return ECU_DEVICE_APPLY_OK;
 #endif
+
+    request_can2_motion_nodes_operational(state, canopen, config, now_ms);
+    if (can2_motion_high_voltage_ready(state)) {
+        send_can2_feedback_sync_if_due(state, canopen, now_ms);
+    }
 
     if (!state->steer_normal_pdo_allowed) {
         if (state->steer_next_group_valid) {

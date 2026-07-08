@@ -321,6 +321,13 @@ static void refresh_power_feedback(void)
          s_runtime.power_snapshot.dcac_online);
 }
 
+static bool bms_high_voltage_feedback_ready(void)
+{
+    return s_runtime.power_snapshot.bms.valid &&
+           s_runtime.power_snapshot.bms.positive_contactor_closed &&
+           s_runtime.power_snapshot.bms.negative_contactor_closed;
+}
+
 static void refresh_lift_hydraulic_feedback(void)
 {
     canopen_master_snapshot_t snapshot;
@@ -654,6 +661,13 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
                                                   &s_runtime.safety_snapshot,
                                                   &s_runtime.final_command,
                                                   now_ms);
+    /* MOS8 is latched by high_voltage_enable, but servo and accessory output
+     * must wait for measured BMS contactor feedback.  This prevents the motion
+     * task from enabling drives during the gap between operator request and
+     * actual high-voltage bus availability.
+     */
+    s_runtime.final_command.high_voltage_feedback_ready =
+        bms_high_voltage_feedback_ready();
     (void)vehicle_command_executor_apply(&s_runtime.executor, &executor_io,
                                          &s_runtime.final_command, now_ms);
     vehicle_state_publish(&s_runtime.vehicle_state,

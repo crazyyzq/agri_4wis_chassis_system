@@ -48,6 +48,13 @@ typedef struct {
     bool steer_commission_steering_neutral;
     bool high_voltage_enable;
     bool high_voltage_disable_request;
+    /* True only after the power task has observed validated BMS contactor
+     * feedback that says the high-voltage bus is actually present.  Motion
+     * devices use this as the servo-enable prerequisite; it is deliberately
+     * separate from high_voltage_enable, which is only the operator/safety
+     * request that latches MOS8.
+     */
+    bool high_voltage_feedback_ready;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
     indicator_mode_t indicator_mode;

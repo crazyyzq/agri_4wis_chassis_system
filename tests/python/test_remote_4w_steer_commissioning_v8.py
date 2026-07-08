@@ -284,9 +284,32 @@ def test_v9_commit_b_sync_is_gated_and_has_inflight_completion(root: pathlib.Pat
         "service->pdo_queue_count != 0U",
         "pdo_group_is_active(service)",
         "service->sync_in_flight",
-        "send_sync_frame(service, now_ms)",
+        "send_sync_frame(service, now_ms, true)",
     ]:
         assert token in send_sync_fn, token
+
+    required_group_sync_fn = service_c.split(
+        "static bool start_required_pdo_group_sync", 1
+    )[1].split("static void wait_briefly_for_pdo_tx_complete", 1)[0]
+    for token in [
+        "arm PDOs -> SYNC -> trigger PDOs -> SYNC",
+        "send_sync_frame(service, now_ms, false)",
+        "active_pdo_arm_sync_sent = true",
+        "active_pdo_trigger_sync_sent = true",
+    ]:
+        assert token in required_group_sync_fn, token
+
+    feedback_sync_fn = service_c.split(
+        "bool canopen_master_service_send_feedback_sync", 1
+    )[1].split("bool canopen_master_service_get_node_feedback", 1)[0]
+    for token in [
+        "service->pdo_queue_count != 0U",
+        "pdo_group_is_active(service)",
+        "send_sync_frame(service, now_ms, false)",
+        "Feedback-only SYNC",
+    ]:
+        assert token in feedback_sync_fn, token
+    assert "service->sync_in_flight)" not in feedback_sync_fn
 
     start_next_fn = service_c.split("static bool start_next_pdo_frame", 1)[1].split(
         "static void wait_briefly_for_pdo_tx_complete", 1
@@ -494,7 +517,7 @@ def test_v10_tpdo_observer_has_no_hal_fallback_and_uses_atomic_seqlock(root: pat
 def test_v10_canopen_rx_capacity_supports_all_four_steering_tpdo_observers(root: pathlib.Path) -> None:
     canopen_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
 
-    assert "CANOPEN_MASTER_RX_OBSERVER_CAPACITY (12U)" in canopen_c
+    assert "CANOPEN_MASTER_RX_OBSERVER_CAPACITY (16U)" in canopen_c
     assert "s_canopen_rx_observer_storage" in canopen_c
     assert "expand_canopen_rx_observer_capacity(service)" in canopen_c
     expand_fn = canopen_c.split("static void expand_canopen_rx_observer_capacity", 1)[1].split(
@@ -513,12 +536,12 @@ def test_v10_steering_tpdo_observer_limits_hardware_filters_without_hal_fallback
         "static void refresh_tpdo_freshness", 1
     )[0]
     assert "ECU_CANOPEN_TPDO0_RANGE_MASK" in canopen_c
+    assert "ECU_CANOPEN_TPDO_EXACT_MASK" in canopen_c
     assert "Register TPDO0" in observer_fn
-    assert "Register TPDO1" in observer_fn
+    assert "TPDO1 is registered as exact per-node filters" in observer_fn
     assert observer_fn.count("CO_CANrxBufferInit") == 2
     assert "ECU_CANOPEN_TPDO1_BASE" in observer_fn
-    assert "(uint16_t)ECU_CANOPEN_TPDO2_BASE" in observer_fn
-    assert "ECU_CANOPEN_TPDO2_BASE + node" not in observer_fn
+    assert "ECU_CANOPEN_TPDO2_BASE + node" in observer_fn
     assert "bus_tpdo_node_range(service->snapshot.bus" in observer_fn
     assert "first_node" in observer_fn
     assert "last_node" in observer_fn
@@ -529,7 +552,7 @@ def test_v10_node8_tpdo1_acceptance_workaround_is_profile_scoped_and_position_ga
     canopen_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
 
     assert "ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND" in config_h
-    assert "#if ECU_BUILD_PROFILE_STEER4_REMOTE_90" in config_h
+    assert "#if ECU_BUILD_PROFILE_STEER4_REMOTE_90 || ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION" in config_h
     workaround_fn = canopen_c.split("static bool node8_tpdo1_acceptance_workaround_enabled", 1)[1].split(
         "static void refresh_tpdo_freshness", 1
     )[0]

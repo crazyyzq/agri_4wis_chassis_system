@@ -103,6 +103,8 @@ typedef struct {
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];
     bool drive_last_enable_requested[ECU_WHEEL_COUNT];
+    uint8_t can2_motion_operational_nmt_sent_mask;
+    uint32_t can2_motion_operational_nmt_last_ms;
     uint32_t can2_feedback_last_sync_ms;
     uint32_t drive_realtime_last_flush_ms;
     uint32_t drive_group_sequence_counter;

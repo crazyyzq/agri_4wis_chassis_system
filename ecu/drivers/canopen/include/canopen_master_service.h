@@ -376,6 +376,8 @@ bool canopen_master_service_queue_pdo_batch_with_descriptor(
     const canopen_master_pdo_group_descriptor_t *descriptor);
 bool canopen_master_service_send_sync(canopen_master_service_t *service,
                                       uint32_t now_ms);
+bool canopen_master_service_send_feedback_sync(canopen_master_service_t *service,
+                                               uint32_t now_ms);
 bool canopen_master_service_get_node_feedback(const canopen_master_service_t *service,
                                               uint8_t node_id,
                                               canopen_node_feedback_t *out);
