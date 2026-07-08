@@ -75,11 +75,11 @@
 #endif
 
 #ifndef ECU_DEBUG_MONITOR_PERIOD_MS
-#define ECU_DEBUG_MONITOR_PERIOD_MS      (500U)
+#define ECU_DEBUG_MONITOR_PERIOD_MS      (1000U)
 #endif
 
 #ifndef ECU_DEBUG_MONITOR_VERBOSE
-#define ECU_DEBUG_MONITOR_VERBOSE        (1)
+#define ECU_DEBUG_MONITOR_VERBOSE        (0)
 #endif
 
 /* Commissioning-only power debug.
@@ -280,6 +280,13 @@
  * task owns all realtime CAN2 steering PDO traffic.
  */
 #define ECU_CANOPEN_STEER_PDO_PERIOD_MS  (20U)
+/* A single profile-position steering update is an ordered group:
+ * four arm RPDOs, SYNC, four trigger RPDOs, SYNC.  The CAN2 task may call the
+ * realtime PDO pump multiple times inside one 2 ms scheduler tick so a freshly
+ * queued group is pushed to the bus immediately instead of waiting for
+ * background CANopen/SDO processing.
+ */
+#define ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES (4U)
 #define ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS (1000)
 #define ECU_CANOPEN_STEER_POSITION_NEUTRAL_DEADBAND_COUNTS  (1500)
 /* Steering target smoothing uses discrete error bands.  A small joystick

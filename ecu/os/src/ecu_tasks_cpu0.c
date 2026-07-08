@@ -68,19 +68,22 @@ static ecu_runtime_context_t s_runtime;
 
 /* Keep this table in ecu_cpu0_task_id_t order.  ecu_cpu0_task_descriptor()
  * indexes it directly when main_cpu0.c creates FreeRTOS tasks.  Priorities are
- * intentionally not sorted here: safety runs first; remote and vehicle command
- * generation stay ahead of field buses; diagnostics stay high enough to keep
- * COM9 visible even when a CAN bus is offline or retransmitting.
+ * intentionally not sorted here.  Safety is always highest; CAN2 motion owns
+ * the realtime steering/drive PDO lane and must preempt diagnostics/printf.
+ * Remote and vehicle tasks still run above non-realtime buses so operator
+ * intent is sampled before each field-bus update.  The diagnostic task is kept
+ * deliberately low priority because UART printf is useful for commissioning
+ * but must never steal time from realtime CAN2/CAN3 output.
  */
 static const ecu_task_descriptor_t s_cpu0_tasks[ECU_TASK_CPU0_COUNT] = {
-    { "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 768U },
-    { "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 1024U },
-    { "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 1024U },
-    { "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 1024U },
-    { "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 768U },
-    { "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 1024U },
-    { "io", ECU_CPU0_IO_PERIOD_MS, 16U, 768U },
-    { "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 2048U }
+    { "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 1024U },
+    { "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 30U, 1536U },
+    { "remote", ECU_CPU0_REMOTE_PERIOD_MS, 28U, 1536U },
+    { "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 27U, 1536U },
+    { "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 1024U },
+    { "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 24U, 1536U },
+    { "io", ECU_CPU0_IO_PERIOD_MS, 16U, 1024U },
+    { "diag", ECU_CPU0_DIAG_PERIOD_MS, 8U, 2048U }
 };
 
 void ecu_task_runtime_init(uint32_t now_ms)
@@ -603,10 +606,27 @@ void ecu_task_safety_supervisor_step(uint32_t now_ms)
 void ecu_task_can2_motion_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    canopen_master_service_process(&s_runtime.can2_motion_canopen, now_ms);
+
+    /* CAN2 motion RPDOs are the lowest-level steering/drive realtime path.
+     * Service TX-complete first, flush the latest coherent vehicle snapshot,
+     * then pump the PDO scheduler several times before allowing lower-priority
+     * CANopenNode SDO/NMT/background work.  This keeps an arm+trigger steering
+     * group inside the current 2 ms task tick when the CAN controller is ready.
+     */
+    canopen_master_service_process_realtime_pdo(&s_runtime.can2_motion_canopen,
+                                                now_ms);
     (void)vehicle_command_executor_flush_can2_motion(&s_runtime.executor,
                                                      &s_runtime.can2_motion_canopen,
                                                      now_ms);
+    for (uint8_t pass = 0U;
+         pass < ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES;
+         ++pass) {
+        canopen_master_service_process_realtime_pdo(
+            &s_runtime.can2_motion_canopen,
+            now_ms);
+    }
+    canopen_master_service_process_background(&s_runtime.can2_motion_canopen,
+                                              now_ms);
     commissioning_debug_scan_can2(&s_runtime.commissioning_debug,
                                   &s_runtime.can2_motion_canopen,
                                   now_ms);
@@ -697,7 +717,8 @@ void ecu_task_can1_power_step(uint32_t now_ms)
 void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
-    canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen, now_ms);
+    canopen_master_service_process_realtime_pdo(&s_runtime.can3_lift_hydraulic_canopen,
+                                                now_ms);
     if ((uint32_t)(now_ms - s_runtime.last_can3_feedback_sync_ms) >=
         ECU_CANOPEN_STEER_PDO_PERIOD_MS) {
         if (canopen_master_service_send_sync(&s_runtime.can3_lift_hydraulic_canopen,
@@ -710,6 +731,15 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
         &s_runtime.can3_lift_hydraulic_canopen,
         &s_runtime.dio,
         now_ms);
+    for (uint8_t pass = 0U;
+         pass < ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES;
+         ++pass) {
+        canopen_master_service_process_realtime_pdo(
+            &s_runtime.can3_lift_hydraulic_canopen,
+            now_ms);
+    }
+    canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen,
+                                              now_ms);
     commissioning_debug_scan_can3(&s_runtime.commissioning_debug,
                                   &s_runtime.can3_lift_hydraulic_canopen,
                                   now_ms);

@@ -2283,8 +2283,42 @@ bool canopen_master_service_init(canopen_master_service_t *service,
 void canopen_master_service_process(canopen_master_service_t *service,
                                     uint32_t now_ms)
 {
+    canopen_master_service_process_realtime_pdo(service, now_ms);
+    canopen_master_service_process_background(service, now_ms);
+}
+
+void canopen_master_service_process_realtime_pdo(canopen_master_service_t *service,
+                                                 uint32_t now_ms)
+{
     if (service == NULL || !service->snapshot.initialized ||
         service->can_index >= CANOPEN_MASTER_BUS_COUNT) {
+        return;
+    }
+
+    /* Realtime PDO scheduling intentionally avoids the CANopenNode global lock.
+     * The scheduler only touches this service instance, the service-owned HPM
+     * CAN device, and short critical sections around its own software FIFO.
+     * SDO/NMT/CO_process background work is handled by
+     * canopen_master_service_process_background() and is gated out while a PDO
+     * frame or group is active.  This prevents CAN3 or diagnostic SDO work from
+     * stretching CAN2 steering RPDO groups into visible joystick lag.
+     */
+    process_pdo_tx_queue(service, now_ms);
+    refresh_tpdo_freshness(service, now_ms);
+}
+
+void canopen_master_service_process_background(canopen_master_service_t *service,
+                                               uint32_t now_ms)
+{
+    if (service == NULL || !service->snapshot.initialized ||
+        service->can_index >= CANOPEN_MASTER_BUS_COUNT) {
+        return;
+    }
+
+    if (service->pdo_in_flight ||
+        service->sync_in_flight ||
+        service->pdo_queue_count != 0U ||
+        pdo_group_is_active(service)) {
         return;
     }
 
@@ -2297,8 +2331,6 @@ void canopen_master_service_process(canopen_master_service_t *service,
         return;
     }
 
-    process_pdo_tx_queue(service, now_ms);
-    refresh_tpdo_freshness(service, now_ms);
     if (service->pdo_in_flight || service->sync_in_flight) {
         /* TX-complete flags are controller-level, not PDO-specific.  While a
          * realtime PDO or commissioning SYNC is in-flight, do not start

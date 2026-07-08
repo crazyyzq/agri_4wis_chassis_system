@@ -2619,7 +2619,17 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
                     canopen_master_service_note_pdo_same_target_coalesced(canopen);
                 }
             }
-            return ECU_DEVICE_APPLY_OK;
+            /* Steering position groups are deliberately serialized as
+             * arm/SYNC/trigger/SYNC.  While one steering group is still being
+             * transmitted, continue refreshing the drive-velocity side so a
+             * safety zero-speed request, brake/enable transition, or latest
+             * joystick speed target is not starved behind steering motion.
+             * The CANopen PDO service still owns ordering and will reject a
+             * conflicting drive group until the current steering group is done;
+             * the drive path then keeps only the newest pending velocity
+             * snapshot instead of building stale backlog.
+             */
+            return flush_drive_velocity_realtime(state, canopen, config, now_ms);
         }
         finish_completed_steer_group(state, now_ms);
     }
@@ -2634,6 +2644,7 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
             state->steer_next_group_valid = false;
             return ECU_DEVICE_APPLY_OK;
         }
+        (void)flush_drive_velocity_realtime(state, canopen, config, now_ms);
         return ECU_DEVICE_APPLY_REJECTED;
     }
 
@@ -2662,6 +2673,7 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
                target_counts,
                sizeof(state->steer_next_group_target_counts));
         state->steer_next_group_valid = true;
+        (void)flush_drive_velocity_realtime(state, canopen, config, now_ms);
         return ECU_DEVICE_APPLY_REJECTED;
     }
 

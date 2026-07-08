@@ -9,6 +9,7 @@ static const char *bool_text(bool value)
     return value ? "1" : "0";
 }
 
+#if ECU_DEBUG_MONITOR_VERBOSE
 static const char *steer_inhibit_reason_text(uint8_t reason)
 {
     switch (reason) {
@@ -43,6 +44,7 @@ static const char *steer_commission_state_text(uint8_t state)
     default: return "unknown";
     }
 }
+#endif
 
 static const char *commissioning_policy_text(void)
 {
@@ -172,6 +174,7 @@ static const char *status_led_pattern_text(status_led_pattern_t pattern)
     }
 }
 
+#if ECU_DEBUG_MONITOR_VERBOSE
 static const char *source_text(ecu_command_source_t source)
 {
     switch (source) {
@@ -245,6 +248,7 @@ static void print_milli_value(int32_t value)
            (unsigned long)(magnitude / 1000U),
            (unsigned long)(magnitude % 1000U));
 }
+#endif
 
 void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 {
@@ -286,6 +290,28 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            adjust_state_text(snapshot->adjust_state),
            estop_state_text(snapshot->estop_state),
            diag_code_name(snapshot->diagnostic));
+
+    /* Keep one compact command line outside verbose mode.  During vehicle
+     * commissioning this is the minimum evidence needed to distinguish a
+     * remote/arbiter target-generation problem from a CAN2 PDO transport
+     * problem, while avoiding the heavy SBUS/CANopen printf burst that can
+     * interfere with realtime motion.
+     */
+    printf("[ECU CMD] src=%u mode=%u gear=%u speed_milli=%ld steer_cdeg=[%ld,%ld,%ld,%ld] "
+           "brake=%s hv=%s mos8=%s res[pwr=%u mot=%u]\r\n",
+           (unsigned int)snapshot->source,
+           (unsigned int)snapshot->motion_mode,
+           (unsigned int)snapshot->active_gear,
+           (long)snapshot->target_speed_milli_mps,
+           (long)snapshot->target_steer_centi_deg[0],
+           (long)snapshot->target_steer_centi_deg[1],
+           (long)snapshot->target_steer_centi_deg[2],
+           (long)snapshot->target_steer_centi_deg[3],
+           bool_text(snapshot->brake_release),
+           bool_text(snapshot->high_voltage_enable),
+           bool_text(snapshot->high_voltage_relay_latched),
+           (unsigned int)snapshot->power_result,
+           (unsigned int)snapshot->motion_result);
 
 #if ECU_DEBUG_MONITOR_VERBOSE
     printf("[ECU SBUS RAW]");

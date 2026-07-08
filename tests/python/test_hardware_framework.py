@@ -250,8 +250,10 @@ def test_canopennode_can2_diagnostic_service_is_safe(root: pathlib.Path) -> None
     assert service_c.index("handle_debug_command(service);") < service_c.index("if (service->sdo_download_active)")
     assert "canopen_master_service_init(&s_runtime.can2_motion_canopen" in tasks_c
     assert "canopen_master_service_init(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
-    assert "canopen_master_service_process(&s_runtime.can2_motion_canopen" in tasks_c
-    assert "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process_realtime_pdo(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_process_background(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_process_realtime_pdo(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
     assert "can2_canopen_initialized" in monitor_h
     assert "ECU CANopen CAN2" in monitor_c
 
@@ -1193,7 +1195,8 @@ def test_can3_and_rgb_status_are_enabled_for_whole_machine(root: pathlib.Path) -
     assert re.search(r"#define\s+ECU_ENABLE_CAN3_LIFT_CANOPEN\s+\(1\)", config_h)
     assert "#if ECU_ENABLE_CAN3_LIFT_CANOPEN" not in tasks_c
     assert "canopen_master_service_init(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
-    assert "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process_realtime_pdo(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
 
     for rel in [
         "ecu/drivers/status_led/include/status_led_service.h",
@@ -1593,10 +1596,10 @@ def test_commissioning_canopen_scan_reads_all_servo_nodes(root: pathlib.Path) ->
     )
     assert can2_step and can3_step
     assert can2_step.group(0).index(
-        "canopen_master_service_process(&s_runtime.can2_motion_canopen"
+        "canopen_master_service_process_background(&s_runtime.can2_motion_canopen"
     ) < can2_step.group(0).index("commissioning_debug_scan_can2")
     assert can3_step.group(0).index(
-        "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen"
+        "canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen"
     ) < can3_step.group(0).index("commissioning_debug_scan_can3")
 
     can2_func = helper_c[
@@ -1946,8 +1949,10 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "CANOPEN_MASTER_BUS_CAN3" in tasks_c
     assert "ECU_ENABLE_CAN3_LIFT_CANOPEN" in config_h
     assert "#if ECU_ENABLE_CAN3_LIFT_CANOPEN" not in tasks_c
-    assert "canopen_master_service_process(&s_runtime.can2_motion_canopen" in tasks_c
-    assert "canopen_master_service_process(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process_realtime_pdo(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_process_background(&s_runtime.can2_motion_canopen" in tasks_c
+    assert "canopen_master_service_process_realtime_pdo(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
+    assert "canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen" in tasks_c
     assert "can2_rx_count" in monitor_h
     assert "can2_rx_buffer_status" in monitor_h
     assert "can2_receive_error_count" in monitor_h
@@ -2203,21 +2208,21 @@ def test_cpu0_periodic_tasks_yield_after_overrun(root: pathlib.Path) -> None:
     assert runner.index("step(") < runner.index("vTaskDelayUntil")
 
 
-def test_cpu0_diagnostic_task_has_priority_over_field_buses(root: pathlib.Path) -> None:
+def test_cpu0_realtime_can_tasks_preempt_diagnostics(root: pathlib.Path) -> None:
     tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
 
     # The descriptor table is indexed directly by ecu_cpu0_task_id_t.  The
     # entries must therefore stay in enum order; sorting this list by priority
     # silently assigns the wrong priority/name to each created FreeRTOS task.
     expected = [
-        '{ "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 768U }',
-        '{ "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 23U, 1024U }',
-        '{ "remote", ECU_CPU0_REMOTE_PERIOD_MS, 27U, 1024U }',
-        '{ "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 26U, 1024U }',
-        '{ "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 768U }',
-        '{ "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 22U, 1024U }',
-        '{ "io", ECU_CPU0_IO_PERIOD_MS, 16U, 768U }',
-        '{ "diag", ECU_CPU0_DIAG_PERIOD_MS, 24U, 2048U }',
+        '{ "safety", ECU_CPU0_SAFETY_PERIOD_MS, 31U, 1024U }',
+        '{ "can2_motion", ECU_CPU0_CAN2_MOTION_PERIOD_MS, 30U, 1536U }',
+        '{ "remote", ECU_CPU0_REMOTE_PERIOD_MS, 28U, 1536U }',
+        '{ "vehicle", ECU_CPU0_CONTROL_PERIOD_MS, 27U, 1536U }',
+        '{ "can1_power", ECU_CPU0_POWER_PERIOD_MS, 22U, 1024U }',
+        '{ "can3_lift", ECU_CPU0_LIFT_HYD_PERIOD_MS, 24U, 1536U }',
+        '{ "io", ECU_CPU0_IO_PERIOD_MS, 16U, 1024U }',
+        '{ "diag", ECU_CPU0_DIAG_PERIOD_MS, 8U, 2048U }',
     ]
 
     table_start = tasks_c.index("static const ecu_task_descriptor_t s_cpu0_tasks")
@@ -2230,3 +2235,10 @@ def test_cpu0_diagnostic_task_has_priority_over_field_buses(root: pathlib.Path) 
         assert position >= 0, item
         assert position > last_position, item
         last_position = position
+
+    priorities = {
+        name: int(priority)
+        for name, priority in re.findall(r'\{ "([^"]+)", ECU_CPU0_[^,]+, ([0-9]+)U, [0-9]+U \}', table)
+    }
+    assert priorities["can2_motion"] > priorities["diag"]
+    assert priorities["can3_lift"] > priorities["diag"]

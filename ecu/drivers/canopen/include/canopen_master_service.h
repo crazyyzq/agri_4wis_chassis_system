@@ -311,6 +311,10 @@ bool canopen_master_service_init(canopen_master_service_t *service,
 /* Process CANopen timers and one non-blocking SDO upload state machine step. */
 void canopen_master_service_process(canopen_master_service_t *service,
                                     uint32_t now_ms);
+void canopen_master_service_process_realtime_pdo(canopen_master_service_t *service,
+                                                 uint32_t now_ms);
+void canopen_master_service_process_background(canopen_master_service_t *service,
+                                               uint32_t now_ms);
 
 /* Copy the latest diagnostic state for COM9 runtime printing. */
 void canopen_master_service_get_snapshot(const canopen_master_service_t *service,
