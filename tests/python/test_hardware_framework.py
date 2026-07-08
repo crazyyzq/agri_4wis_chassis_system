@@ -38,6 +38,82 @@ def test_hardware_project_defaults_are_centralized(root: pathlib.Path) -> None:
         assert token in config_h or token in config_c, token
 
 
+def test_modbus_adc_uses_0_to_10v_sensor_scale_and_named_channels(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    analog_c = read(root, "ecu/devices/src/analog_modbus_device.c")
+
+    assert "#define ECU_ADC_EXTERNAL_MV_MAX     (10000U)" in config_h
+    assert "#define ECU_MODBUS_ADC_RAW_MAX      (65535U)" in config_h
+    for token in [
+        "ECU_ANALOG_SENSOR_FRONT_SUSPENSION_ANGLE_CH",
+        "ECU_ANALOG_SENSOR_REAR_SUSPENSION_ANGLE_CH",
+        "ECU_ANALOG_SENSOR_LEG1_TRACK_CYLINDER_CH",
+        "ECU_ANALOG_SENSOR_LEG2_TRACK_CYLINDER_CH",
+        "ECU_ANALOG_SENSOR_LEG3_TRACK_CYLINDER_CH",
+        "ECU_ANALOG_SENSOR_LEG4_TRACK_CYLINDER_CH",
+        "ECU_ANALOG_SENSOR_RESERVED6_CH",
+        "ECU_ANALOG_SENSOR_RESERVED7_CH",
+    ]:
+        assert token in config_h
+    assert "scale_raw_to_millivolt" in analog_c
+    assert "adc_external_mv_max" in analog_c
+    assert "modbus_adc_raw_max" in analog_c
+
+
+def test_steering_remote_follow_uses_latest_target_trajectory_not_raw_jitter(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    for token in [
+        "steer_latest_target_counts",
+        "steer_commanded_target_counts",
+        "steer_commanded_velocity_counts_per_sec",
+        "update_steer_commanded_target",
+        "select_steer_accel_limit_counts_per_sec2",
+    ]:
+        assert token in motion_h or token in motion_c, token
+    for token in [
+        "ECU_CANOPEN_STEER_TARGET_ACCEL_NEAR_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (4000000)",
+    ]:
+        assert token in config_h, token
+    cache_fn = motion_c.split("static bool cache_latest_steer_target", 1)[1].split(
+        "static bool prepare_steer_axis_once", 1
+    )[0]
+    assert "state->steer_latest_target_counts[wheel] = position_counts;" in cache_fn
+    assert cache_fn.index("state->steer_latest_target_counts[wheel] = position_counts;") < cache_fn.index(
+        "state->steer_pending_target[wheel] = true;"
+    )
+
+
+def test_can2_drive_velocity_does_not_queue_conflicting_group_while_steering_active(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "canopen_pdo_lane_busy_for_other_group" in motion_c
+    drive_flush = motion_c.split("static ecu_device_apply_result_t flush_drive_velocity_realtime", 1)[1].split(
+        "static void finish_completed_steer_group", 1
+    )[0]
+    assert "canopen_pdo_lane_busy_for_other_group(canopen," in drive_flush
+    assert "state->drive_next_group_valid = true;" in drive_flush
+    assert "return ECU_DEVICE_APPLY_OK;" in drive_flush
+
+
+def test_unverified_steering_limit_inputs_do_not_block_right_push_by_default(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "#define ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED (0)" in config_h
+    limit_fn = motion_c.split("static bool steer_limit_blocks_target", 1)[1].split(
+        "static int32_t normalize_steer_target_counts", 1
+    )[0]
+    assert "!ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED" in limit_fn
+    assert "return false;" in limit_fn
+
+
 def test_no_informal_uncertainty_marker_in_code_or_tests(root: pathlib.Path) -> None:
     forbidden = "GU" + "ESS"
     lower_forbidden = "gu" + "ess"
@@ -504,6 +580,7 @@ def test_motion_device_separates_servo_setup_from_realtime_targets(root: pathlib
 
     for token in [
         "ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS",
+        "ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS",
         "ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS",
         "ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS",
     ]:
@@ -520,6 +597,78 @@ def test_motion_device_separates_servo_setup_from_realtime_targets(root: pathlib
     assert "motion_device_flush_realtime" in motion_c
     assert "state->steer_last_target_update_ms[wheel]" in motion_c
     assert "state->drive_last_target_update_ms[wheel]" in motion_c
+    assert "nonzero_velocity_refresh_due" in motion_c
+    assert "ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS" in motion_c
+
+
+def test_disable_enable_recovery_is_local_and_does_not_reset_drive_setup(root: pathlib.Path) -> None:
+    """Remote disable/enable may clear ECU realtime latches, not drive zero/reference state."""
+
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+
+    reset_fn = motion_c.split("static void reset_can2_realtime_motion_state", 1)[1].split(
+        "static bool can2_motion_high_voltage_ready", 1
+    )[0]
+
+    assert "canopen_master_service_cancel_realtime_pdo" in reset_fn
+    assert "ECU-local" in reset_fn
+    assert "drive_velocity_mode_ready[wheel] = false" not in reset_fn
+    assert "steer_position_mode_ready[wheel] = false" not in reset_fn
+    assert "steer_axis_config_state[wheel] = MOTION_STEER_AXIS_UNSEEN" not in reset_fn
+    assert "reset_can2_motion_operational_request(state)" not in reset_fn
+    assert "CANOPEN_MASTER_DEBUG_COMMAND_NMT_RESET" not in motion_c
+    assert "canopen_master_service_cancel_realtime_pdo" in service_h
+    assert "canopen_master_service_cancel_realtime_pdo" in service_c
+
+
+def test_can2_realtime_transient_pdo_failure_recovers_without_latching(root: pathlib.Path) -> None:
+    """Running motion must tolerate a bounded non-trigger PDO fault without freezing output."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    assert "ECU_CANOPEN_REALTIME_TRANSIENT_FAILURE_LIMIT" in config_h
+    for token in [
+        "can2_realtime_transient_recovery_count",
+        "can2_realtime_consecutive_failure_count",
+        "can2_realtime_last_recovery_ms",
+    ]:
+        assert token in motion_h, token
+        assert token in read(root, "ecu/vehicle/include/vehicle_types.h"), token
+        assert token in read(root, "ecu/diag/include/runtime_monitor.h"), token
+
+    recover_fn = motion_c.split("static bool recover_or_latch_can2_transient_failure", 1)[1].split(
+        "static bool fail_active_drive_group", 1
+    )[0]
+    assert "canopen_master_service_cancel_realtime_pdo(canopen)" in recover_fn
+    assert "state->steer_pending_target[wheel] = true" in recover_fn
+    assert "state->drive_pending_velocity[wheel] = true" in recover_fn
+    assert "state->steer_group_degraded = latch_required" in recover_fn
+
+    fail_steer_fn = motion_c.split("static bool fail_active_steer_group", 1)[1].split(
+        "#if ECU_CANOPEN_COMMISSIONING_POLICY", 1
+    )[0]
+    assert "trigger_or_partial_failure" in fail_steer_fn
+    assert "CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER" in fail_steer_fn
+    assert "recover_or_latch_can2_transient_failure" in fail_steer_fn
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+    assert "recover=%lu consec_fail=%lu last_recover_ms=%lu" in monitor_c
+
+
+def test_steering_realtime_coalesces_against_last_command_not_feedback_error(root: pathlib.Path) -> None:
+    """A wheel still travelling toward the same target must not retrigger endless zero groups."""
+
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    build_fn = motion_c.split("static bool build_steer_group_targets", 1)[1].split(
+        "static uint32_t next_steer_group_sequence", 1
+    )[0]
+
+    assert "steer_last_commanded_position_valid" in build_fn
+    assert "steer_last_commanded_position_counts" in build_fn
+    assert "steer_last_position_counts" not in build_fn
 
 
 def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
@@ -928,7 +1077,7 @@ def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) 
     command_arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
 
     assert "#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)" in config_h
-    assert "#define ECU_REMOTE_MAX_STEER_DEG          (45.0f)" in config_h
+    assert "#define ECU_REMOTE_MAX_STEER_DEG          (50.0f)" in config_h
     assert "#define ECU_STEER_POSITION_SPEED_UNITS               (4000000)" in config_h
     assert "#define ECU_SERVO_COMMISSIONING_MAX_RPM              (2400.0f)" in config_h
     assert "#define ECU_SERVO_COMMISSIONING_MAX_ACCEL_RPS2       (50.0f)" in config_h
@@ -1961,6 +2110,32 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "ECU CAN2" in monitor_c
     assert "ECU CAN4 TEST" in monitor_c
     assert "can_bus_hw.c" in cmake
+
+
+def test_ecu_can_termination_defaults_enabled_active_high(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    board_h = read(root, "ecu/ecu_isolation/board.h")
+    board_c = read(root, "ecu/ecu_isolation/board.c")
+    pinmux_c = read(root, "ecu/ecu_isolation/pinmux.c")
+
+    for token in [
+        "ECU_CAN1_TERMINATION_ENABLE      (1)",
+        "ECU_CAN2_TERMINATION_ENABLE      (1)",
+        "ECU_CAN3_TERMINATION_ENABLE      (1)",
+        "ECU_CAN4_TERMINATION_ENABLE      (1)",
+    ]:
+        assert token in config_h, token
+
+    assert "BOARD_CAN_TERM_ENABLE_LEVEL  (1U)" in board_h
+    assert "BOARD_CAN_TERM_DISABLE_LEVEL (0U)" in board_h
+    for token in [
+        "board_set_can_termination(1, true)",
+        "board_set_can_termination(2, true)",
+        "board_set_can_termination(3, true)",
+        "board_set_can_termination(4, true)",
+    ]:
+        assert token in board_c, token
+    assert "BOARD_CAN_TERM_ENABLE_LEVEL" in pinmux_c
 
 
 def test_can_and_sbus_isr_snapshots_are_copied_atomically(root: pathlib.Path) -> None:

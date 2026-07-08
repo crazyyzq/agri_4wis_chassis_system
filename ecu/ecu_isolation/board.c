@@ -272,11 +272,13 @@ void board_init_safe_gpio(void)
         board_gpio_input(&s_ecu_inputs[i]);
     }
 
-    /* Disable all CAN termination by default. Enable only on bus end nodes. */
-    board_set_can_termination(1, false);
-    board_set_can_termination(2, false);
-    board_set_can_termination(3, false);
-    board_set_can_termination(4, false);
+    /* Whole-vehicle commissioning keeps the ECU-side 120R termination enabled
+     * on every external CAN port.  The termination GPIOs are active-high.
+     */
+    board_set_can_termination(1, true);
+    board_set_can_termination(2, true);
+    board_set_can_termination(3, true);
+    board_set_can_termination(4, true);
 
     board_rgb_write(BOARD_RGB_RED, 0);
     board_rgb_write(BOARD_RGB_GREEN, 0);

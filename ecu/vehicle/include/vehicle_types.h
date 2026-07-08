@@ -86,6 +86,9 @@ typedef struct {
     uint8_t steer_commission_post_command_axis_mask;
     uint8_t steer_commission_post_command_missing_mask;
     uint32_t steer_commission_post_command_timeout_count;
+    uint32_t can2_realtime_transient_recovery_count;
+    uint32_t can2_realtime_consecutive_failure_count;
+    uint32_t can2_realtime_last_recovery_ms;
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
     uint8_t presteer_mode;

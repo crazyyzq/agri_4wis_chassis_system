@@ -89,25 +89,25 @@ void init_can_term_gpio_pins(void)
 
     gpiom_set_pin_controller(HPM_GPIOM, GPIOM_ASSIGN_GPIOB, 6, gpiom_soc_gpio0);
     gpio_set_pin_output(HPM_GPIO0, GPIO_OE_GPIOB, 6);
-    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 6, 0);
+    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 6, BOARD_CAN_TERM_ENABLE_LEVEL);
 
     HPM_IOC->PAD[IOC_PAD_PB03].FUNC_CTL = IOC_PB03_FUNC_CTL_GPIO_B_03;
 
     gpiom_set_pin_controller(HPM_GPIOM, GPIOM_ASSIGN_GPIOB, 3, gpiom_soc_gpio0);
     gpio_set_pin_output(HPM_GPIO0, GPIO_OE_GPIOB, 3);
-    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 3, 0);
+    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 3, BOARD_CAN_TERM_ENABLE_LEVEL);
 
     HPM_IOC->PAD[IOC_PAD_PB01].FUNC_CTL = IOC_PB01_FUNC_CTL_GPIO_B_01;
 
     gpiom_set_pin_controller(HPM_GPIOM, GPIOM_ASSIGN_GPIOB, 1, gpiom_soc_gpio0);
     gpio_set_pin_output(HPM_GPIO0, GPIO_OE_GPIOB, 1);
-    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 1, 0);
+    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 1, BOARD_CAN_TERM_ENABLE_LEVEL);
 
     HPM_IOC->PAD[IOC_PAD_PB04].FUNC_CTL = IOC_PB04_FUNC_CTL_GPIO_B_04;
 
     gpiom_set_pin_controller(HPM_GPIOM, GPIOM_ASSIGN_GPIOB, 4, gpiom_soc_gpio0);
     gpio_set_pin_output(HPM_GPIO0, GPIO_OE_GPIOB, 4);
-    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 4, 0);
+    gpio_write_pin(HPM_GPIO0, GPIO_DO_GPIOB, 4, BOARD_CAN_TERM_ENABLE_LEVEL);
 }
 
 void init_rs485_pins(void)

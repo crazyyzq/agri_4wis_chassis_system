@@ -166,6 +166,16 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
         "build_crab_targets",
     ]:
         assert token in motion_c, token
+    crab_block = motion_c[
+        motion_c.index("static void build_crab_targets"):
+        motion_c.index("void motion_control_build_candidate")
+    ]
+    assert "ECU_MOTION_CRAB_STEER_DEG" in crab_block
+    assert "four_wheel_kinematics_build_crab" in crab_block
+    assert "speed_mps < 0.0f" not in crab_block
+    assert "-ECU_MOTION_CRAB_STEER_DEG" not in crab_block
+    assert "steer_deg" not in crab_block
+    assert "CH1" not in crab_block
 
     for token in [
         "ECU_WHEEL_LEG1_FRONT_RIGHT",
@@ -193,6 +203,31 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
         "out->target_wheel_speed_mps[ECU_WHEEL_LEG3_REAR_LEFT] = -speed_mps",
     ]:
         assert token in spin_impl, token
+
+
+def test_whole_vehicle_crab_keeps_full_90_degree_steering_range(root: pathlib.Path) -> None:
+    """Crab mode needs four absolute +90 deg targets, so device clamping must allow 1225000 counts."""
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    max_range_block = config_h[
+        config_h.index("#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS"):
+        config_h.index("#define ECU_CANOPEN_STEER_SETUP_SETTLE_MS")
+    ]
+    assert "(1225000)" in max_range_block
+    assert "(612500)" not in max_range_block
+
+
+def test_ackermann_remote_steering_limit_is_50_degrees_not_crab_limit(root: pathlib.Path) -> None:
+    """Ackermann follows the remote stick up to ±50 deg; crab keeps its independent fixed 90 deg posture."""
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    remote_limit_block = config_h[
+        config_h.index("#if ECU_BUILD_PROFILE_STEER4_REMOTE_90"):
+        config_h.index("/* Vehicle geometry used by four-wheel kinematics.")
+    ]
+    assert "#define ECU_REMOTE_MAX_STEER_DEG          (90.0f)" in remote_limit_block
+    assert "#define ECU_REMOTE_MAX_STEER_DEG          (50.0f)" in remote_limit_block
+    assert "#define ECU_MOTION_CRAB_STEER_DEG         (90.0f)" in config_h
 
 
 def test_motion_units_are_mps_and_realtime_smoothing_is_discrete(root: pathlib.Path) -> None:
@@ -361,6 +396,24 @@ def test_spin_and_crab_hold_drive_until_steering_feedback_reaches_target(root: p
     assert "presteer_gate_allows_drive(state" in apply_fn
     assert apply_fn.index("presteer_gate_allows_drive(state") < apply_fn.index("cache_latest_drive_velocity")
     assert "drive_allowed_by_safety &&" in apply_fn
+
+
+def test_p_gear_allows_visible_steering_but_not_drive_motion(root: pathlib.Path) -> None:
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+
+    inhibit_fn = motion_c.split("static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason", 1)[1].split(
+        "static bool motion_device_update_steer_safety_gate", 1
+    )[0]
+    assert "command->active_gear == ECU_GEAR_REQUEST_P" not in inhibit_fn
+    assert "command->active_gear != ECU_GEAR_REQUEST_P" in inhibit_fn
+    assert "P gear inhibits drive velocity only" in inhibit_fn
+
+    speed_fn = arbiter_c.split("static float remote_speed_command_mps", 1)[1].split(
+        "static bool remote_requests_brake_release", 1
+    )[0]
+    assert "remote->active_gear == ECU_GEAR_REQUEST_P" in speed_fn
+    assert "return 0.0f;" in speed_fn
 
 
 def test_safety_manager_clamps_dangerous_outputs(root: pathlib.Path) -> None:

@@ -147,7 +147,7 @@ def test_contract_builders_use_frozen_standard_wire_format(root: pathlib.Path) -
     assert "write_le_i16(&request->data[3], command_current_10ma)" in current
 
     steer_builder = motion.split("static bool build_steer_rpdo_request", 1)[1].split(
-        "static int32_t rate_limit_target_counts", 1
+        "static int32_t i32_abs_saturating", 1
     )[0]
     assert "canopen_pdo_profile_init" in steer_builder
     assert "CANOPEN_AXIS_ROLE_STEER_POSITION" in steer_builder
@@ -331,4 +331,6 @@ def test_commanded_position_is_not_named_actual_or_realtime_feedback(root: pathl
     assert "steer_last_commanded_position_counts" in motion_c
     assert "steer_realtime_position_valid" not in motion_h + motion_c
     assert "steer_realtime_position_counts" not in motion_h + motion_c
-    assert "last submitted\n             * target as measured wheel position" in motion_c
+    assert "steer_commanded_target_counts" in motion_h + motion_c
+    assert "canopen_master_service_get_node_feedback" in motion_c
+    assert "feedback.actual_position_counts" in motion_c

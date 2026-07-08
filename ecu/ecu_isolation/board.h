@@ -128,12 +128,12 @@
 #define BOARD_APP_CAN_BASE  BOARD_CAN1_BASE
 #define BOARD_APP_CAN_IRQn  BOARD_CAN1_IRQn
 
-/* CAN 120R termination control pins. The schematic uses optocoupler + NMOS.
- * MCU output low  -> termination enabled
- * MCU output high -> termination disabled
+/* CAN 120R termination control pins.
+ * Whole-vehicle commissioning requires ECU-side termination enabled by driving
+ * the control GPIO high.
  */
-#define BOARD_CAN_TERM_ENABLE_LEVEL  (0U)
-#define BOARD_CAN_TERM_DISABLE_LEVEL (1U)
+#define BOARD_CAN_TERM_ENABLE_LEVEL  (1U)
+#define BOARD_CAN_TERM_DISABLE_LEVEL (0U)
 
 #define BOARD_CAN1_TERM_GPIO_CTRL  HPM_GPIO0
 #define BOARD_CAN1_TERM_GPIO_INDEX GPIO_DO_GPIOB

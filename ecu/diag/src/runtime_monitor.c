@@ -66,7 +66,7 @@ static const char *remote_steer_range_text(void)
 #if ECU_BUILD_PROFILE_STEER4_REMOTE_90
     return "-90..90";
 #else
-    return "-45..45";
+    return "-50..50";
 #endif
 }
 
@@ -313,6 +313,62 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->power_result,
            (unsigned int)snapshot->motion_result);
 
+    uint8_t drive_fresh_mask = 0U;
+    uint8_t drive_fault_mask = 0U;
+    uint8_t steer_fresh_mask = 0U;
+    uint8_t steer_fault_mask = 0U;
+    for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
+         node <= ECU_CANOPEN_DRIVE_RR_NODE_ID;
+         ++node) {
+        const canopen_node_feedback_t *feedback =
+            &snapshot->can2_canopen_snapshot.node_feedback[node];
+        uint8_t bit = (uint8_t)(1U << (node - ECU_CANOPEN_DRIVE_FR_NODE_ID));
+        if (feedback->feedback_fresh) {
+            drive_fresh_mask |= bit;
+        }
+        if (feedback->fault_latched != 0U) {
+            drive_fault_mask |= bit;
+        }
+    }
+    for (uint8_t node = ECU_CANOPEN_STEER_FR_NODE_ID;
+         node <= ECU_CANOPEN_STEER_RR_NODE_ID;
+         ++node) {
+        const canopen_node_feedback_t *feedback =
+            &snapshot->can2_canopen_snapshot.node_feedback[node];
+        uint8_t bit = (uint8_t)(1U << (node - ECU_CANOPEN_STEER_FR_NODE_ID));
+        if (feedback->feedback_fresh) {
+            steer_fresh_mask |= bit;
+        }
+        if (feedback->fault_latched != 0U) {
+            steer_fault_mask |= bit;
+        }
+    }
+    printf("[ECU CAN2 PDO] q=%lu drop=%lu tx=%lu tx_err=%lu state=%u group=%lu "
+           "exp=%u done=%u fail=%u inflight=%u last_fail[g=%lu cob=0x%03x n=%u e=%ld] "
+           "fresh[d=0x%02x s=0x%02x] fault[d=0x%02x s=0x%02x] "
+           "recover=%lu consec_fail=%lu last_recover_ms=%lu\r\n",
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_dropped_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_count,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_error_count,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_group_state,
+           (unsigned long)snapshot->can2_canopen_snapshot.pdo_group_sequence,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_expected_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_tx_complete_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_failed_frames,
+           (unsigned int)snapshot->can2_canopen_snapshot.pdo_in_flight_frames,
+           (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_failed_group_sequence,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_cob_id,
+           (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_node_id,
+           (long)snapshot->can2_canopen_snapshot.last_pdo_failed_error,
+           (unsigned int)drive_fresh_mask,
+           (unsigned int)steer_fresh_mask,
+           (unsigned int)drive_fault_mask,
+           (unsigned int)steer_fault_mask,
+           (unsigned long)snapshot->can2_realtime_transient_recovery_count,
+           (unsigned long)snapshot->can2_realtime_consecutive_failure_count,
+           (unsigned long)snapshot->can2_realtime_last_recovery_ms);
+
 #if ECU_DEBUG_MONITOR_VERBOSE
     printf("[ECU SBUS RAW]");
     for (uint32_t channel = 0U; channel < ECU_SBUS_CHANNEL_COUNT; ++channel) {
@@ -493,7 +549,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "steer_commission_axis_mask=0x%02x steer_commission_nmt_sent_mask=0x%02x "
            "steer_commission_auth_clears=%lu "
            "post_tpdo_pending=%s post_tpdo_axis=0x%02x post_tpdo_missing=0x%02x "
-           "post_tpdo_timeouts=%lu "
+           "post_tpdo_timeouts=%lu can2_rt_recover=%lu can2_rt_consecutive_fail=%lu "
+           "can2_rt_last_recovery_ms=%lu "
            "presteer_hold=%s presteer_ready=%s presteer_mode=%u(%s) "
            "presteer_missing=0x%02x presteer_timeouts=%lu\r\n",
            bool_text(snapshot->steer_normal_pdo_allowed),
@@ -512,6 +569,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->steer_commission_post_command_axis_mask,
            (unsigned int)snapshot->steer_commission_post_command_missing_mask,
            (unsigned long)snapshot->steer_commission_post_command_timeout_count,
+           (unsigned long)snapshot->can2_realtime_transient_recovery_count,
+           (unsigned long)snapshot->can2_realtime_consecutive_failure_count,
+           (unsigned long)snapshot->can2_realtime_last_recovery_ms,
            bool_text(snapshot->presteer_drive_hold_active),
            bool_text(snapshot->presteer_target_reached),
            (unsigned int)snapshot->presteer_mode,

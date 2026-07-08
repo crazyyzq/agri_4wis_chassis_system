@@ -982,6 +982,38 @@ bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
     return true;
 }
 
+void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *service)
+{
+    if (service == NULL) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    service->pdo_queue_head = 0U;
+    service->pdo_queue_tail = 0U;
+    service->pdo_queue_count = 0U;
+    service->snapshot.pdo_queued_count = 0U;
+
+    service->pdo_in_flight = false;
+    service->pdo_in_flight_submit_ms = 0U;
+    service->sync_in_flight = false;
+    service->sync_in_flight_submit_ms = 0U;
+    service->active_pdo_cancel_requested = false;
+    service->active_pdo_cancel_after_inflight = false;
+    service->active_pdo_trigger_started = false;
+    service->active_pdo_trigger_complete_frames_at_cancel = 0U;
+    service->active_pdo_group_sequence = 0U;
+    service->active_pdo_group_state = CANOPEN_MASTER_PDO_GROUP_STATE_IDLE;
+    service->active_pdo_expected_frames = 0U;
+    service->active_pdo_tx_complete_frames = 0U;
+    service->active_pdo_failed_frames = 0U;
+    service->active_pdo_in_flight_frames = 0U;
+    service->active_pdo_arm_complete_frames = 0U;
+    service->active_pdo_trigger_complete_frames = 0U;
+    sync_pdo_group_snapshot(service);
+    taskEXIT_CRITICAL();
+}
+
 void canopen_master_service_note_pdo_safety_inhibit(canopen_master_service_t *service)
 {
     if (service == NULL) {

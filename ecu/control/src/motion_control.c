@@ -75,11 +75,16 @@ static void build_spin_targets(float speed_mps,
 }
 
 static void build_crab_targets(float speed_mps,
-                               float steer_deg,
                                vehicle_actuator_command_t *out)
 {
     four_wheel_kinematics_output_t kinematics;
-    four_wheel_kinematics_build_crab(speed_mps, steer_deg, &kinematics);
+    /* Crab mode uses one fixed steering posture: all four wheels at +90 deg.
+     * D/R select the lateral travel direction by changing the sign of the four
+     * drive wheel velocity commands, not by flipping the steering angle.
+     */
+    four_wheel_kinematics_build_crab(speed_mps,
+                                     ECU_MOTION_CRAB_STEER_DEG,
+                                     &kinematics);
     apply_kinematics_output(&kinematics, out);
 }
 
@@ -110,7 +115,7 @@ void motion_control_build_candidate(ecu_motion_mode_t mode,
         build_spin_targets(limited_speed_mps, out);
         break;
     case ECU_MOTION_MODE_CRAB:
-        build_crab_targets(limited_speed_mps, steer_deg, out);
+        build_crab_targets(limited_speed_mps, out);
         break;
     case ECU_MOTION_MODE_POSITIVE_ACKERMANN:
     default:

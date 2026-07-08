@@ -73,6 +73,9 @@ typedef struct {
     bool steer_safe_stop_pending;
     uint32_t steer_group_complete_count;
     uint32_t steer_group_failure_count;
+    uint32_t can2_realtime_transient_recovery_count;
+    uint32_t can2_realtime_consecutive_failure_count;
+    uint32_t can2_realtime_last_recovery_ms;
     bool steer_group_clean_cancelled;
     bool steer_group_trigger_partial_failure;
     uint32_t steer_last_clean_cancel_ms;
@@ -139,6 +142,9 @@ typedef struct {
     bool steer_realtime_enabled[ECU_WHEEL_COUNT];
     bool steer_latest_target_valid[ECU_WHEEL_COUNT];
     int32_t steer_latest_target_counts[ECU_WHEEL_COUNT];
+    bool steer_commanded_target_valid[ECU_WHEEL_COUNT];
+    int32_t steer_commanded_target_counts[ECU_WHEEL_COUNT];
+    int32_t steer_commanded_velocity_counts_per_sec[ECU_WHEEL_COUNT];
     bool steer_pending_target[ECU_WHEEL_COUNT];
     bool steer_last_commanded_position_valid[ECU_WHEEL_COUNT];
     int32_t steer_last_commanded_position_counts[ECU_WHEEL_COUNT];

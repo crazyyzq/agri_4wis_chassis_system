@@ -9,6 +9,7 @@ typedef struct {
     ecu_motion_mode_t requested_motion_mode;
     ecu_motion_mode_t active_motion_mode;
     uint32_t domain_guard_until_ms;
+    bool domain_default_pending;
     bool request_rejected;
     diag_code_t diagnostic;
 } remote_mode_fsm_t;

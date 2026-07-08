@@ -21,6 +21,14 @@ static bool mode_preconditions_ok(const remote_preconditions_t *preconditions)
            !preconditions->active_transition;
 }
 
+static ecu_motion_mode_t default_mode_for_domain(ecu_home_domain_t domain)
+{
+    if (domain == ECU_HOME_DOMAIN_SPECIAL) {
+        return ECU_MOTION_MODE_SPIN;
+    }
+    return ECU_MOTION_MODE_POSITIVE_ACKERMANN;
+}
+
 void remote_mode_fsm_init(remote_mode_fsm_t *fsm, uint32_t now_ms)
 {
     if (fsm == 0) {
@@ -31,6 +39,7 @@ void remote_mode_fsm_init(remote_mode_fsm_t *fsm, uint32_t now_ms)
     fsm->requested_motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
     fsm->active_motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
     fsm->domain_guard_until_ms = now_ms;
+    fsm->domain_default_pending = false;
     fsm->request_rejected = false;
     fsm->diagnostic = DIAG_OK;
 }
@@ -48,14 +57,21 @@ void remote_mode_fsm_update(remote_mode_fsm_t *fsm,
     if (new_domain != fsm->requested_domain) {
         fsm->requested_domain = new_domain;
         fsm->domain_guard_until_ms = input->now_ms + guard_ms;
+        fsm->domain_default_pending = true;
         return;
     }
     if (!ecu_time_elapsed(input->now_ms, fsm->domain_guard_until_ms, 0U)) {
         return; /* HOME domain guard requires a new R1/R2 edge after settling. */
     }
-    bool fresh_r1_event = input->r1 == REMOTE_POS_HIGH && input->r1_changed;
-    bool fresh_r2_event = input->r2 == REMOTE_POS_HIGH && input->r2_changed;
-    if (!fresh_r1_event && !fresh_r2_event) {
+    /* R1/R2 are treated as edge events, not as held-level selectors.  Field
+     * tests showed the physical button/wheel stable level can be high or low
+     * depending on the transmitter state; any new stable R1 event selects the
+     * R1 mode, and any new stable R2 event selects the R2 mode.  Release edges
+     * are harmless because they re-select the same latched mode.
+     */
+    bool fresh_r1_event = input->r1_changed;
+    bool fresh_r2_event = input->r2_changed;
+    if (!fresh_r1_event && !fresh_r2_event && !fsm->domain_default_pending) {
         return;
     }
     if (!mode_preconditions_ok(preconditions)) {
@@ -65,14 +81,20 @@ void remote_mode_fsm_update(remote_mode_fsm_t *fsm,
     }
     fsm->active_domain = fsm->requested_domain;
     if (fsm->requested_domain == ECU_HOME_DOMAIN_SPECIAL) {
-        fsm->requested_motion_mode = fresh_r1_event ?
-                                     ECU_MOTION_MODE_SPIN : ECU_MOTION_MODE_CRAB;
+        fsm->requested_motion_mode = fresh_r2_event ?
+                                     ECU_MOTION_MODE_CRAB :
+                                     (fresh_r1_event ?
+                                      ECU_MOTION_MODE_SPIN :
+                                      default_mode_for_domain(fsm->requested_domain));
     } else {
-        fsm->requested_motion_mode = fresh_r1_event ?
-                                     ECU_MOTION_MODE_POSITIVE_ACKERMANN :
-                                     ECU_MOTION_MODE_REVERSE_ACKERMANN;
+        fsm->requested_motion_mode = fresh_r2_event ?
+                                     ECU_MOTION_MODE_REVERSE_ACKERMANN :
+                                     (fresh_r1_event ?
+                                      ECU_MOTION_MODE_POSITIVE_ACKERMANN :
+                                      default_mode_for_domain(fsm->requested_domain));
     }
     fsm->active_motion_mode = fsm->requested_motion_mode;
+    fsm->domain_default_pending = false;
     fsm->diagnostic = DIAG_OK;
 }
 

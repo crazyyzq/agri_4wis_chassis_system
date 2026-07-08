@@ -269,8 +269,15 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->horn_on = remote->horn_on;
         out->headlight_on = remote->headlight_on;
         out->diagnostic = remote->diagnostic;
-        float steer_deg = scale_signed_per_mille(remote->steer_per_mille,
-                                                 ECU_REMOTE_MAX_STEER_DEG);
+        /* CH1 field convention: pushing the right stick left must steer the
+         * vehicle left.  Positive steering in the vehicle/servo layers already
+         * means left, so keep the operator sign correction centralized here
+         * instead of scattering per-mode sign flips through Ackermann, crab and
+         * spin kinematics.
+         */
+        float steer_deg = scale_signed_per_mille(
+            (int16_t)(remote->steer_per_mille * ECU_REMOTE_STEER_INPUT_SIGN),
+            ECU_REMOTE_MAX_STEER_DEG);
         motion_control_build_candidate(remote->active_motion_mode,
                                        remote_speed_command_mps(remote, remote->active_motion_mode),
                                        steer_deg,

@@ -171,6 +171,12 @@ def test_mode_fsm_requires_fresh_r1_r2_event(root: pathlib.Path) -> None:
     assert "input->r2_changed" in mode_c
     assert "fresh_r1_event" in mode_c
     assert "fresh_r2_event" in mode_c
+    assert "input->r1 == REMOTE_POS_HIGH && input->r1_changed" not in mode_c
+    assert "input->r2 == REMOTE_POS_HIGH && input->r2_changed" not in mode_c
+    assert "domain_default_pending" in mode_c
+    assert "default_mode_for_domain" in mode_c
+    assert "ECU_MOTION_MODE_SPIN" in mode_c
+    assert "ECU_MOTION_MODE_POSITIVE_ACKERMANN" in mode_c
     assert "old R1/R2 events" not in mode_c
     assert "out->r1_changed = mapper->discrete_channels[ECU_SBUS_CH_R1].changed" in mapper_c
     assert "out->r2_changed = mapper->discrete_channels[ECU_SBUS_CH_R2].changed" in mapper_c

@@ -462,11 +462,13 @@ static bool steer_limit_blocks_target(canopen_master_service_t *canopen,
                                       float steer_deg,
                                       uint32_t now_ms)
 {
-#if ECU_COMMISSIONING_STEER_ONLY_MODE
-    /* During steering bring-up the limit inputs may be unconfigured, inverted,
-     * or not yet wired.  Do not let a diagnostic read of object 0x2190 inject
-     * quick-stop commands while verifying that position PDOs move the steering
-     * motors.  Production mode keeps the limit protection below.
+#if ECU_COMMISSIONING_STEER_ONLY_MODE || !ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED
+    /* During steering/whole-vehicle commissioning the drive input bits may be
+     * unconfigured, inverted, or not yet wired.  Still allow the diagnostic
+     * readback path elsewhere to observe 0x2190, but do not turn an unverified
+     * IN2/IN3 bit into a quick-stop that blocks one steering direction.  Enable
+     * ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED only after the polarity and
+     * wiring are hardware-verified.
      */
     (void)canopen;
     (void)node;
@@ -510,12 +512,14 @@ static bool cache_latest_steer_target(motion_device_state_t *state,
                                       int32_t position_counts)
 {
     position_counts = normalize_steer_target_counts(position_counts);
-    if (!state->steer_latest_target_valid[wheel] ||
-        i32_changed_beyond_deadband(state->steer_latest_target_counts[wheel],
-                                    position_counts,
-                                    ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS)) {
-        state->steer_latest_target_counts[wheel] = position_counts;
-        state->steer_latest_target_valid[wheel] = true;
+    bool changed = !state->steer_latest_target_valid[wheel] ||
+                   i32_changed_beyond_deadband(
+                       state->steer_latest_target_counts[wheel],
+                       position_counts,
+                       ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS);
+    state->steer_latest_target_counts[wheel] = position_counts;
+    state->steer_latest_target_valid[wheel] = true;
+    if (changed) {
         state->steer_pending_target[wheel] = true;
     }
     return true;
@@ -783,10 +787,12 @@ static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
     if (!command_source_allows_motion_output(command->source)) {
         return MOTION_STEER_INHIBIT_COMMAND_SOURCE_NOT_AUTHORIZED;
     }
-    if (command->active_gear == ECU_GEAR_REQUEST_P) {
-        return MOTION_STEER_INHIBIT_GEAR_PARK;
-    }
-    if (!command->brake_release) {
+    /* P gear inhibits drive velocity only.  Steering must remain visible in P
+     * so the operator can select Ackermann/spin/crab and verify the four wheel
+     * angles before allowing any drive motion.
+     */
+    if (command->active_gear != ECU_GEAR_REQUEST_P &&
+        !command->brake_release) {
         return MOTION_STEER_INHIBIT_REMOTE_DISARMED;
     }
     if (state->steer_group_degraded) {
@@ -991,18 +997,24 @@ static int32_t select_steer_rate_limit_counts_per_sec(int32_t current,
     return ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC;
 }
 
-static int32_t rate_limit_target_counts(int32_t current,
-                                        int32_t requested,
-                                        uint32_t elapsed_ms)
+static int32_t select_steer_accel_limit_counts_per_sec2(int32_t current,
+                                                        int32_t requested)
 {
-    int32_t rate_limit = select_steer_rate_limit_counts_per_sec(current,
-                                                                requested);
-    int32_t max_delta =
-        (int32_t)(((uint32_t)rate_limit * elapsed_ms) / 1000U);
-    if (max_delta < ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS) {
-        max_delta = ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS;
+    int32_t error = i32_abs_saturating(requested - current);
+    if (error <= ECU_CANOPEN_STEER_TARGET_ERROR_NEAR_COUNTS) {
+        return ECU_CANOPEN_STEER_TARGET_ACCEL_NEAR_COUNTS_PER_SEC2;
     }
+    if (error <= ECU_CANOPEN_STEER_TARGET_ERROR_SMALL_COUNTS) {
+        return ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2;
+    }
+    if (error <= ECU_CANOPEN_STEER_TARGET_ERROR_MEDIUM_COUNTS) {
+        return ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2;
+    }
+    return ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2;
+}
 
+static int32_t approach_i32(int32_t current, int32_t requested, int32_t max_delta)
+{
     int32_t delta = requested - current;
     if (delta > max_delta) {
         return current + max_delta;
@@ -1011,6 +1023,62 @@ static int32_t rate_limit_target_counts(int32_t current,
         return current - max_delta;
     }
     return requested;
+}
+
+static int32_t update_steer_commanded_target(motion_device_state_t *state,
+                                             uint32_t wheel,
+                                             int32_t requested,
+                                             uint32_t elapsed_ms)
+{
+    if (!state->steer_commanded_target_valid[wheel]) {
+        if (state->steer_last_position_valid[wheel]) {
+            state->steer_commanded_target_counts[wheel] =
+                state->steer_last_position_counts[wheel];
+        } else if (state->steer_last_commanded_position_valid[wheel]) {
+            state->steer_commanded_target_counts[wheel] =
+                state->steer_last_commanded_position_counts[wheel];
+        } else {
+            state->steer_commanded_target_counts[wheel] = requested;
+        }
+        state->steer_commanded_velocity_counts_per_sec[wheel] = 0;
+        state->steer_commanded_target_valid[wheel] = true;
+    }
+
+    int32_t current = state->steer_commanded_target_counts[wheel];
+    int32_t velocity = state->steer_commanded_velocity_counts_per_sec[wheel];
+    int32_t error = requested - current;
+    if (error == 0) {
+        state->steer_commanded_velocity_counts_per_sec[wheel] = 0;
+        return current;
+    }
+
+    int32_t max_velocity =
+        select_steer_rate_limit_counts_per_sec(current, requested);
+    int32_t max_accel =
+        select_steer_accel_limit_counts_per_sec2(current, requested);
+    int32_t desired_velocity = error > 0 ? max_velocity : -max_velocity;
+    int32_t accel_step =
+        (int32_t)(((uint32_t)max_accel * elapsed_ms) / 1000U);
+    if (accel_step < 1) {
+        accel_step = 1;
+    }
+    velocity = approach_i32(velocity, desired_velocity, accel_step);
+
+    int64_t step64 = ((int64_t)velocity * (int64_t)elapsed_ms) / 1000LL;
+    int32_t step = (int32_t)step64;
+    if (step == 0) {
+        step = error > 0 ? 1 : -1;
+    }
+    if ((step > 0 && step >= error) || (step < 0 && step <= error)) {
+        current = requested;
+        velocity = 0;
+    } else {
+        current += step;
+    }
+
+    state->steer_commanded_target_counts[wheel] = current;
+    state->steer_commanded_velocity_counts_per_sec[wheel] = velocity;
+    return current;
 }
 
 static int32_t select_drive_velocity_rate_limit_units_per_sec(int32_t current,
@@ -1171,21 +1239,15 @@ static bool build_steer_group_targets(motion_device_state_t *state,
         }
 
         int32_t requested = state->steer_latest_target_counts[wheel];
-        int32_t limited = requested;
-        if (state->steer_last_commanded_position_valid[wheel]) {
-            /* This is command-side smoothing only.  Until TPDO actual-position
-             * decoding is wired in, the ECU must not treat the last submitted
-             * target as measured wheel position.
-             */
-            limited = rate_limit_target_counts(state->steer_last_commanded_position_counts[wheel],
-                                               requested,
-                                               elapsed_ms);
-        }
+        int32_t limited = update_steer_commanded_target(state,
+                                                        wheel,
+                                                        requested,
+                                                        elapsed_ms);
         out_targets[wheel] = limited;
 
-        if (!state->steer_last_position_valid[wheel] ||
+        if (!state->steer_last_commanded_position_valid[wheel] ||
             state->steer_pending_target[wheel] ||
-            i32_changed_beyond_deadband(state->steer_last_position_counts[wheel],
+            i32_changed_beyond_deadband(state->steer_last_commanded_position_counts[wheel],
                                         limited,
                                         ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS)) {
             group_changed = true;
@@ -1506,6 +1568,7 @@ static bool all_drive_axes_realtime_ready(motion_device_state_t *state,
 
 static bool build_drive_group_targets(motion_device_state_t *state,
                                       uint32_t elapsed_ms,
+                                      uint32_t now_ms,
                                       int32_t out_velocity_units[ECU_WHEEL_COUNT],
                                       bool out_enable_requested[ECU_WHEEL_COUNT])
 {
@@ -1530,8 +1593,14 @@ static bool build_drive_group_targets(motion_device_state_t *state,
 
         out_velocity_units[wheel] = limited;
         out_enable_requested[wheel] = enable_requested;
+        bool nonzero_velocity_refresh_due =
+            enable_requested &&
+            (limited != 0 || state->drive_last_velocity_units[wheel] != 0) &&
+            (uint32_t)(now_ms - state->drive_last_target_update_ms[wheel]) >=
+                ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS;
         if (!state->drive_last_velocity_valid[wheel] ||
             state->drive_pending_velocity[wheel] ||
+            nonzero_velocity_refresh_due ||
             state->drive_last_enable_requested[wheel] != enable_requested ||
             i32_changed_beyond_deadband(state->drive_last_velocity_units[wheel],
                                         limited,
@@ -1622,15 +1691,86 @@ static void finish_completed_drive_group(motion_device_state_t *state,
 
     state->last_target_update_ms = now_ms;
     state->drive_group_complete_count++;
+    state->can2_realtime_consecutive_failure_count = 0U;
     state->drive_group_active = false;
     state->drive_active_group_sequence = 0U;
 }
 
-static void fail_active_drive_group(motion_device_state_t *state)
+static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state,
+                                                    canopen_master_service_t *canopen,
+                                                    uint32_t now_ms,
+                                                    bool force_latch)
 {
-    state->drive_group_failure_count++;
+    if (state == NULL) {
+        return true;
+    }
+
+    state->can2_realtime_consecutive_failure_count++;
+    bool latch_required =
+        force_latch ||
+        state->can2_realtime_consecutive_failure_count >
+            ECU_CANOPEN_REALTIME_TRANSIENT_FAILURE_LIMIT;
+
+    if (canopen != NULL) {
+        canopen_master_service_cancel_realtime_pdo(canopen);
+    }
+    state->can2_realtime_transient_recovery_count++;
+    state->can2_realtime_last_recovery_ms = now_ms;
+    state->steer_group_active = false;
+    state->steer_active_group_node5_only = false;
+    state->steer_active_group_axis_mask = 0U;
+    state->steer_active_group_sequence = 0U;
+    state->steer_next_group_valid = false;
     state->drive_group_active = false;
     state->drive_active_group_sequence = 0U;
+    state->drive_next_group_valid = false;
+    state->steer_safe_stop_pending = false;
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        if (state->steer_latest_target_valid[wheel]) {
+            state->steer_pending_target[wheel] = true;
+        }
+        if (state->drive_latest_velocity_valid[wheel]) {
+            state->drive_pending_velocity[wheel] = true;
+        }
+    }
+    state->steer_group_degraded = latch_required;
+    return latch_required;
+}
+
+static bool fail_active_drive_group(motion_device_state_t *state,
+                                    canopen_master_service_t *canopen,
+                                    uint32_t now_ms)
+{
+    state->drive_group_failure_count++;
+    return recover_or_latch_can2_transient_failure(state,
+                                                   canopen,
+                                                   now_ms,
+                                                   false);
+}
+
+static bool canopen_pdo_lane_busy_for_other_group(
+    const canopen_master_service_t *canopen,
+    uint32_t allowed_group_sequence)
+{
+    if (canopen == NULL) {
+        return false;
+    }
+    if (canopen->pdo_in_flight &&
+        canopen->pdo_in_flight_request.group_sequence != allowed_group_sequence) {
+        return true;
+    }
+    if (canopen->sync_in_flight) {
+        return true;
+    }
+    if (canopen->active_pdo_group_sequence != 0U &&
+        canopen->active_pdo_group_sequence != allowed_group_sequence &&
+        (canopen->active_pdo_group_state == CANOPEN_MASTER_PDO_GROUP_STATE_QUEUED ||
+         canopen->active_pdo_group_state == CANOPEN_MASTER_PDO_GROUP_STATE_ARM_IN_FLIGHT ||
+         canopen->active_pdo_group_state == CANOPEN_MASTER_PDO_GROUP_STATE_TRIGGER_IN_FLIGHT)) {
+        return true;
+    }
+    return false;
 }
 
 static void send_can2_feedback_sync_if_due(motion_device_state_t *state,
@@ -1666,12 +1806,87 @@ static void reset_can2_motion_operational_request(motion_device_state_t *state)
     state->can2_motion_operational_nmt_last_ms = 0U;
 }
 
+static void reset_can2_realtime_motion_state(motion_device_state_t *state,
+                                             canopen_master_service_t *canopen,
+                                             uint32_t now_ms)
+{
+    if (state == NULL) {
+        return;
+    }
+    (void)now_ms;
+
+    if (canopen != NULL) {
+        canopen_master_service_cancel_realtime_pdo(canopen);
+    }
+
+    /* This recovery is deliberately ECU-local.  Do not send NMT reset-node,
+     * reset-communication, or re-run mode/PDO setup here: the steering drives
+     * keep their calibrated zero/reference, and a remote disable/enable cycle
+     * must not risk losing that reference.  Only cancel stale realtime PDO
+     * queue/group state and overwrite actuator intent with safe zero targets.
+     */
+    state->steer_realtime_last_flush_ms = 0U;
+    state->drive_realtime_last_flush_ms = 0U;
+
+    state->steer_group_active = false;
+    state->steer_active_group_sequence = 0U;
+    state->steer_next_group_valid = false;
+    state->steer_group_degraded = false;
+    state->steer_safe_stop_pending = false;
+    state->steer_group_trigger_partial_failure = false;
+    state->steer_group_clean_cancelled = false;
+
+    state->drive_group_active = false;
+    state->drive_active_group_sequence = 0U;
+    state->drive_next_group_valid = false;
+
+    state->presteer_drive_hold_active = false;
+    state->presteer_target_reached = false;
+    state->presteer_missing_axis_mask = 0U;
+    state->presteer_hold_start_ms = 0U;
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        state->drive_realtime_enabled[wheel] = false;
+        state->drive_pending_velocity[wheel] = true;
+        state->drive_latest_velocity_units[wheel] = 0;
+        state->drive_latest_enable_requested[wheel] = false;
+        state->drive_latest_velocity_valid[wheel] = true;
+        state->drive_last_velocity_valid[wheel] = false;
+        state->drive_last_velocity_units[wheel] = 0;
+        state->drive_last_enable_requested[wheel] = false;
+
+        state->steer_realtime_enabled[wheel] = false;
+        state->steer_pending_target[wheel] = false;
+        state->steer_commanded_target_valid[wheel] = false;
+        state->steer_commanded_target_counts[wheel] = 0;
+        state->steer_commanded_velocity_counts_per_sec[wheel] = 0;
+        state->steer_last_commanded_position_valid[wheel] = false;
+        state->steer_last_commanded_position_counts[wheel] = 0;
+    }
+}
+
 static bool can2_motion_high_voltage_ready(const motion_device_state_t *state)
 {
     return state != NULL &&
            state->last_motion_command_valid &&
            state->last_motion_command.high_voltage_feedback_ready &&
            !state->last_motion_command.high_voltage_disable_request;
+}
+
+static bool can2_realtime_motion_state_needs_recovery(
+    const motion_device_state_t *state)
+{
+    if (state == NULL) {
+        return false;
+    }
+    return state->steer_group_active ||
+           state->steer_next_group_valid ||
+           state->steer_group_degraded ||
+           state->steer_safe_stop_pending ||
+           state->drive_group_active ||
+           state->drive_next_group_valid ||
+           (state->last_motion_command_valid &&
+            state->last_motion_command.high_voltage_enable);
 }
 
 static void request_can2_motion_nodes_operational(motion_device_state_t *state,
@@ -1744,8 +1959,8 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
     if (state->drive_group_active) {
         if (canopen_master_service_pdo_group_failed(canopen,
                                                     state->drive_active_group_sequence)) {
-            fail_active_drive_group(state);
-            return ECU_DEVICE_APPLY_REJECTED;
+            bool latched = fail_active_drive_group(state, canopen, now_ms);
+            return latched ? ECU_DEVICE_APPLY_REJECTED : ECU_DEVICE_APPLY_OK;
         }
         if (canopen_master_service_pdo_group_pending(canopen,
                                                      state->drive_active_group_sequence)) {
@@ -1755,6 +1970,10 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
     }
 
     if (state->drive_next_group_valid) {
+        if (canopen_pdo_lane_busy_for_other_group(canopen,
+                                                  state->drive_active_group_sequence)) {
+            return ECU_DEVICE_APPLY_OK;
+        }
         bool queued = queue_drive_group(canopen,
                                         config,
                                         state,
@@ -1787,9 +2006,22 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
     bool enable_requested[ECU_WHEEL_COUNT] = {false};
     if (!build_drive_group_targets(state,
                                    elapsed_ms,
+                                   now_ms,
                                    velocity_units,
                                    enable_requested)) {
         canopen_master_service_note_pdo_same_target_coalesced(canopen);
+        return ECU_DEVICE_APPLY_OK;
+    }
+
+    if (canopen_pdo_lane_busy_for_other_group(canopen,
+                                              state->drive_active_group_sequence)) {
+        memcpy(state->drive_next_group_velocity_units,
+               velocity_units,
+               sizeof(state->drive_next_group_velocity_units));
+        memcpy(state->drive_next_group_enable_requested,
+               enable_requested,
+               sizeof(state->drive_next_group_enable_requested));
+        state->drive_next_group_valid = true;
         return ECU_DEVICE_APPLY_OK;
     }
 
@@ -1826,6 +2058,8 @@ static void finish_completed_steer_group(motion_device_state_t *state,
         int32_t target = state->steer_active_group_target_counts[wheel];
         state->steer_last_commanded_position_valid[wheel] = true;
         state->steer_last_commanded_position_counts[wheel] = target;
+        state->steer_commanded_target_valid[wheel] = true;
+        state->steer_commanded_target_counts[wheel] = target;
         state->steer_last_target_update_ms[wheel] = now_ms;
         state->steer_pending_target[wheel] =
             target != state->steer_latest_target_counts[wheel];
@@ -1833,6 +2067,7 @@ static void finish_completed_steer_group(motion_device_state_t *state,
 
     state->last_target_update_ms = now_ms;
     state->steer_group_complete_count++;
+    state->can2_realtime_consecutive_failure_count = 0U;
     state->steer_group_active = false;
     state->steer_active_group_node5_only = false;
     state->steer_active_group_axis_mask = 0U;
@@ -1850,28 +2085,30 @@ static void clean_cancel_active_steer_group(motion_device_state_t *state,
     state->steer_active_group_sequence = 0U;
 }
 
-static void fail_active_steer_group(motion_device_state_t *state,
-                                    const canopen_master_service_t *canopen,
+static bool fail_active_steer_group(motion_device_state_t *state,
+                                    canopen_master_service_t *canopen,
                                     uint32_t now_ms)
 {
     canopen_master_snapshot_t snapshot;
+    bool trigger_or_partial_failure;
 
     memset(&snapshot, 0, sizeof(snapshot));
     canopen_master_service_get_snapshot(canopen, &snapshot);
     state->steer_group_failure_count++;
-    if (snapshot.pdo_trigger_complete_frames > 0U ||
+    trigger_or_partial_failure =
+        snapshot.pdo_trigger_complete_frames > 0U ||
         snapshot.last_pdo_failed_phase ==
             (uint8_t)CANOPEN_MASTER_PDO_PHASE_STEER_TRIGGER ||
         snapshot.last_pdo_failed_phase ==
-            (uint8_t)CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER) {
+            (uint8_t)CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER;
+    if (trigger_or_partial_failure) {
         state->steer_group_trigger_partial_failure = true;
         state->steer_last_partial_failure_ms = now_ms;
     }
-    state->steer_group_degraded = true;
-    state->steer_group_active = false;
-    state->steer_active_group_node5_only = false;
-    state->steer_active_group_axis_mask = 0U;
-    state->steer_active_group_sequence = 0U;
+    return recover_or_latch_can2_transient_failure(state,
+                                                   canopen,
+                                                   now_ms,
+                                                   trigger_or_partial_failure);
 }
 
 #if ECU_CANOPEN_COMMISSIONING_POLICY == ECU_CANOPEN_COMMISSIONING_POLICY_STEER4_REMOTE_COMMISSIONING
@@ -2265,10 +2502,13 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
 
     if (state->steer_group_active) {
         if (canopen_master_service_pdo_group_failed(canopen, state->steer_active_group_sequence)) {
-            fail_active_steer_group(state, canopen, now_ms);
-            clear_steer_commissioning_authorization(state);
-            state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
-            return ECU_DEVICE_APPLY_REJECTED;
+            bool latched = fail_active_steer_group(state, canopen, now_ms);
+            if (latched) {
+                clear_steer_commissioning_authorization(state);
+                state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
+                return ECU_DEVICE_APPLY_REJECTED;
+            }
+            return ECU_DEVICE_APPLY_OK;
         }
         if (canopen_master_service_pdo_group_cancelled(canopen,
                                                        state->steer_active_group_sequence)) {
@@ -2287,7 +2527,7 @@ static ecu_device_apply_result_t flush_steer4_remote_commissioning(
                                             completed_axis_mask,
                                             was_centering,
                                             now_ms)) {
-            fail_active_steer_group(state, canopen, now_ms);
+            (void)fail_active_steer_group(state, canopen, now_ms);
             clear_steer_commissioning_authorization(state);
             state->steer_commission_state = STEER_REMOTE_COMMISSION_FAULT;
             return ECU_DEVICE_APPLY_REJECTED;
@@ -2469,6 +2709,15 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
         return state->last_result;
     }
 
+    bool realtime_disable_requested =
+        command->high_voltage_disable_request ||
+        !command->high_voltage_enable ||
+        command->source == COMMAND_SOURCE_SAFETY;
+    if (realtime_disable_requested &&
+        can2_realtime_motion_state_needs_recovery(state)) {
+        reset_can2_realtime_motion_state(state, canopen, now_ms);
+    }
+
     bool changed = command_changed(state, command);
     bool refresh_due = motion_command_refresh_due(state, now_ms);
     bool steer_allowed = motion_device_update_steer_safety_gate(state,
@@ -2592,8 +2841,11 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
 
     if (state->steer_group_active) {
         if (canopen_master_service_pdo_group_failed(canopen, state->steer_active_group_sequence)) {
-            fail_active_steer_group(state, canopen, now_ms);
-            return ECU_DEVICE_APPLY_REJECTED;
+            bool latched = fail_active_steer_group(state, canopen, now_ms);
+            if (latched) {
+                return ECU_DEVICE_APPLY_REJECTED;
+            }
+            return flush_drive_velocity_realtime(state, canopen, config, now_ms);
         }
         if (canopen_master_service_pdo_group_cancelled(canopen,
                                                        state->steer_active_group_sequence)) {
@@ -2619,19 +2871,36 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
                     canopen_master_service_note_pdo_same_target_coalesced(canopen);
                 }
             }
-            /* Steering position groups are deliberately serialized as
-             * arm/SYNC/trigger/SYNC.  While one steering group is still being
-             * transmitted, continue refreshing the drive-velocity side so a
-             * safety zero-speed request, brake/enable transition, or latest
-             * joystick speed target is not starved behind steering motion.
-             * The CANopen PDO service still owns ordering and will reject a
-             * conflicting drive group until the current steering group is done;
-             * the drive path then keeps only the newest pending velocity
-             * snapshot instead of building stale backlog.
+            /* Steering position groups are serialized as arm/SYNC/trigger/SYNC.
+             * While one steering group is active, still run the drive builder
+             * so the latest velocity or zero-speed intent overwrites stale
+             * targets.  flush_drive_velocity_realtime() detects that the CAN2
+             * PDO lane is busy with another group and keeps only the newest
+             * pending drive snapshot instead of attempting a conflicting queue.
              */
             return flush_drive_velocity_realtime(state, canopen, config, now_ms);
         }
         finish_completed_steer_group(state, now_ms);
+
+        /* A steering update is an ordered arm/SYNC/trigger/SYNC group.  When
+         * the remote joystick is moving continuously the next steering target
+         * can already be pending as soon as the previous group completes.  If
+         * we always start that next steering group first, the drive velocity
+         * group may never get an empty CAN2 PDO lane and the wheels appear to
+         * start/stop in bursts.  Give the drive path one bounded opportunity
+         * after each completed steering group; it either queues one coherent
+         * velocity/zero-speed group or just updates its latest pending
+         * snapshot.  A newly queued drive group owns the lane until complete,
+         * so the next steering group waits instead of interleaving frames.
+         */
+        ecu_device_apply_result_t drive_result =
+            flush_drive_velocity_realtime(state, canopen, config, now_ms);
+        if (drive_result == ECU_DEVICE_APPLY_REJECTED) {
+            return drive_result;
+        }
+        if (canopen_pdo_lane_busy_for_other_group(canopen, 0U)) {
+            return ECU_DEVICE_APPLY_OK;
+        }
     }
 
     if (state->steer_next_group_valid) {

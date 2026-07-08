@@ -134,6 +134,12 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.steer_commission_post_command_missing_mask;
     executor->steer_commission_post_command_timeout_count =
         s_runtime.motion.steer_commission_post_command_timeout_count;
+    executor->can2_realtime_transient_recovery_count =
+        s_runtime.motion.can2_realtime_transient_recovery_count;
+    executor->can2_realtime_consecutive_failure_count =
+        s_runtime.motion.can2_realtime_consecutive_failure_count;
+    executor->can2_realtime_last_recovery_ms =
+        s_runtime.motion.can2_realtime_last_recovery_ms;
     executor->presteer_drive_hold_active =
         s_runtime.motion.presteer_drive_hold_active;
     executor->presteer_target_reached =

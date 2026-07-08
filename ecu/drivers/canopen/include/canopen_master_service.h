@@ -396,6 +396,7 @@ bool canopen_master_service_pdo_group_cancelled(const canopen_master_service_t *
                                                 uint32_t group_sequence);
 bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
                                              uint32_t group_sequence);
+void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *service);
 void canopen_master_service_note_pdo_safety_inhibit(canopen_master_service_t *service);
 void canopen_master_service_note_pdo_same_target_coalesced(canopen_master_service_t *service);
 bool canopen_master_service_has_node_evidence(const canopen_master_service_t *service,

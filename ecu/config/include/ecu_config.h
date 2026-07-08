@@ -75,7 +75,7 @@
 #endif
 
 #ifndef ECU_DEBUG_MONITOR_PERIOD_MS
-#define ECU_DEBUG_MONITOR_PERIOD_MS      (1000U)
+#define ECU_DEBUG_MONITOR_PERIOD_MS      (500U)
 #endif
 
 #ifndef ECU_DEBUG_MONITOR_VERBOSE
@@ -116,8 +116,8 @@
 #define ECU_CAN2_MOTION_BITRATE          (1000000UL)
 #define ECU_CAN3_LIFT_HYDRAULIC_BITRATE  (1000000UL)
 #define ECU_CAN4_AUXILIARY_BITRATE       (500000UL)
-#define ECU_CAN1_TERMINATION_ENABLE      (0)
-#define ECU_CAN2_TERMINATION_ENABLE      (0)
+#define ECU_CAN1_TERMINATION_ENABLE      (1)
+#define ECU_CAN2_TERMINATION_ENABLE      (1)
 #define ECU_CAN3_TERMINATION_ENABLE      (1)
 #define ECU_CAN4_TERMINATION_ENABLE      (1)
 
@@ -260,12 +260,27 @@
  * fastest target-update cadence.  Safety stop/brake commands bypass this limit.
  */
 #define ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS (50U)
+#define ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED (0)
 #define ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS (1000)
 #define ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE      (3.0f)
 #define ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS \
     ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
                 ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_CANOPEN_DRIVE_PDO_PERIOD_MS           (20U)
+/* Keep velocity-mode RPDO alive even when the requested speed is unchanged.
+ * Several BC/BC2 commissioning tests showed that a steady nonzero velocity
+ * command must be refreshed; otherwise the drive side may stop while ECU-side
+ * command state still looks valid.  This is a PDO refresh only, not an SDO
+ * setup retry.
+ */
+#define ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS     (100U)
+/* A single non-trigger PDO TX fault must not permanently freeze the vehicle.
+ * The CAN2 realtime owner cancels the local group, discards stale queued
+ * frames, and retries from the newest vehicle command.  Trigger-phase steering
+ * failures remain safety-critical and latch immediately because one or more
+ * steering axes may already have accepted a target edge.
+ */
+#define ECU_CANOPEN_REALTIME_TRANSIENT_FAILURE_LIMIT (3U)
 /* Drive velocity is ramped in a few discrete commissioning-friendly bands.
  * Reversal is intentionally the slowest path so a D/R sign change first eases
  * through zero instead of commanding an abrupt torque step.
@@ -277,7 +292,10 @@
 #define ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS (1000)
 /* Steering joystick following is transmitted by RPDO at a fixed, moderate
  * cadence.  The vehicle/control layer owns target generation; the CAN2 motion
- * task owns all realtime CAN2 steering PDO traffic.
+ * task owns all realtime CAN2 steering PDO traffic.  The 50 ms value matches
+ * the stable CAN-analyzer remote simulation and avoids excessive SYNC/TPDO
+ * bursts while the raw remote target is still refreshed by the 5 ms vehicle
+ * control path.
  */
 #define ECU_CANOPEN_STEER_PDO_PERIOD_MS  (20U)
 /* A single profile-position steering update is an ordered group:
@@ -289,18 +307,24 @@
 #define ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES (4U)
 #define ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS (1000)
 #define ECU_CANOPEN_STEER_POSITION_NEUTRAL_DEADBAND_COUNTS  (1500)
-/* Steering target smoothing uses discrete error bands.  A small joystick
- * correction should creep smoothly; only a large steering mismatch is allowed
- * to use the faster ramp.  Units are drive counts per second at 20 ms PDO
- * cadence.
+/* Steering target smoothing is a trajectory layer:
+ * - steer_latest_target_counts is the raw target from the latest remote sample.
+ * - steer_commanded_target_counts is the accel/velocity-limited target sent by
+ *   PDO.
+ * Small errors use low velocity/acceleration so hand jitter is not amplified;
+ * large errors use the profile values proven with the CAN analyzer.
  */
 #define ECU_CANOPEN_STEER_TARGET_ERROR_NEAR_COUNTS                 (25000)
 #define ECU_CANOPEN_STEER_TARGET_ERROR_SMALL_COUNTS                (150000)
 #define ECU_CANOPEN_STEER_TARGET_ERROR_MEDIUM_COUNTS               (450000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC    (180000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC    (120000)
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC   (350000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC  (650000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (950000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC  (1400000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (4000000)
+#define ECU_CANOPEN_STEER_TARGET_ACCEL_NEAR_COUNTS_PER_SEC2        (100000)
+#define ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2       (300000)
+#define ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2      (500000)
+#define ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2       (500000)
 /* Spin and crab are not safe to drive while the wheels are still slewing
  * toward their large steering angles.  The CAN2 motion adapter therefore keeps
  * drive RPDOs disabled until TPDO position feedback from all four steering
@@ -311,11 +335,12 @@
 #define ECU_CANOPEN_PRESTEER_TIMEOUT_MS                            (12000U)
 #define ECU_CANOPEN_PRESTEER_REQUIRED_AXIS_MASK \
     ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL
-#if ECU_BUILD_PROFILE_STEER4_REMOTE_90
+/* Device-level steering absolute-position clamp.  The normal Ackermann remote
+ * limit is lower, but spin/crab require large fixed postures.  Crab mode must
+ * be able to command four absolute +90 deg targets:
+ * 2500-line encoder * 4x * 490:1 / 4 = 1,225,000 counts.
+ */
 #define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (1225000)
-#else
-#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (612500)
-#endif
 #define ECU_CANOPEN_STEER_SETUP_SETTLE_MS                   (100U)
 /* V8 remote steering commissioning starts with a deliberately slow, small and
  * explicitly-authorized control envelope.  These values are independent from
@@ -549,7 +574,15 @@ typedef enum {
 
 #define ECU_ADC_CHANNEL_COUNT       (8U)
 #define ECU_ADC_RAW_MAX             (4095U)
-#define ECU_ADC_EXTERNAL_MV_MAX     (5000U)
+#define ECU_ADC_EXTERNAL_MV_MAX     (10000U)
+#define ECU_ANALOG_SENSOR_FRONT_SUSPENSION_ANGLE_CH (0U)
+#define ECU_ANALOG_SENSOR_REAR_SUSPENSION_ANGLE_CH  (1U)
+#define ECU_ANALOG_SENSOR_LEG1_TRACK_CYLINDER_CH    (2U)
+#define ECU_ANALOG_SENSOR_LEG2_TRACK_CYLINDER_CH    (3U)
+#define ECU_ANALOG_SENSOR_LEG3_TRACK_CYLINDER_CH    (4U)
+#define ECU_ANALOG_SENSOR_LEG4_TRACK_CYLINDER_CH    (5U)
+#define ECU_ANALOG_SENSOR_RESERVED6_CH              (6U)
+#define ECU_ANALOG_SENSOR_RESERVED7_CH              (7U)
 #define ECU_MODBUS_ADC_SLAVE_ID     (0x01U)
 #define ECU_MODBUS_ADC_BAUDRATE     (9600UL)
 #define ECU_MODBUS_ADC_START_REGISTER (0U)
@@ -566,10 +599,11 @@ typedef enum {
 #define ECU_WARNING_LIGHT_VALUE_YELLOW_SLOW_FLASH (0x0022U)
 #define ECU_WARNING_LIGHT_VALUE_RED_STEADY_BUZZER (0x0014U)
 #define ECU_REMOTE_MAX_SPEED_MPS          ECU_DRIVE_COMMISSIONING_MAX_SPEED_MPS
+#define ECU_REMOTE_STEER_INPUT_SIGN       (-1)
 #if ECU_BUILD_PROFILE_STEER4_REMOTE_90
 #define ECU_REMOTE_MAX_STEER_DEG          (90.0f)
 #else
-#define ECU_REMOTE_MAX_STEER_DEG          (45.0f)
+#define ECU_REMOTE_MAX_STEER_DEG          (50.0f)
 #endif
 /* Vehicle geometry used by four-wheel kinematics.
  *
@@ -587,6 +621,7 @@ typedef enum {
 #define ECU_VEHICLE_TRACK_WIDTH_MAX_MM    (2880.0f)
 #define ECU_VEHICLE_MIN_TURN_RADIUS_MM    (1500.0f)
 #define ECU_MOTION_SPIN_STEER_DEG         (45.0f)
+#define ECU_MOTION_CRAB_STEER_DEG         (90.0f)
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (400.0f)
 #define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
