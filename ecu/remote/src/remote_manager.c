@@ -64,6 +64,8 @@ void remote_manager_update(remote_manager_t *manager,
     manager->request.active_motion_mode = manager->mode.active_motion_mode;
     manager->request.adjust_state = manager->adjust.state;
     manager->request.adjust_owner = manager->adjust.adjust_owner;
+    manager->request.hydraulic_suspension_target =
+        manager->adjust.hydraulic_suspension_target;
     manager->request.power_state = manager->power.state;
     manager->request.authority_state = manager->authority.state;
     manager->request.high_voltage_enable_request = manager->power.high_voltage_enable_request;

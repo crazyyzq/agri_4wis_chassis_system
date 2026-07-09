@@ -160,7 +160,11 @@ def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> 
     adjust = read(root, "ecu/remote/src/remote_adjust_fsm.c")
     assert "input->clearance" in adjust
     assert "input->track" in adjust
-    assert "DIAG_REJECT_ADJUST_OWNER_CONFLICT" in adjust
+    assert "suspension_request_active" in adjust
+    assert "input->r1_changed" in adjust
+    assert "input->r2_changed" in adjust
+    assert "REMOTE_HYDRAULIC_SUSPENSION_FRONT" in types
+    assert "REMOTE_HYDRAULIC_SUSPENSION_REAR" in types
 
 
 def test_mode_fsm_requires_fresh_r1_r2_event(root: pathlib.Path) -> None:

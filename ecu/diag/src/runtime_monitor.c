@@ -151,9 +151,11 @@ static const char *adjust_state_text(remote_adjust_state_t state)
 {
     switch (state) {
     case ADJUST_STATE_IDLE: return "idle";
+    case ADJUST_STATE_READY: return "ready";
     case ADJUST_STATE_CLEARANCE_ACTIVE: return "clearance";
     case ADJUST_STATE_TRACK_PREPARE: return "track_prepare";
     case ADJUST_STATE_TRACK_ACTIVE: return "track";
+    case ADJUST_STATE_HYDRAULIC_ACTIVE: return "hydraulic";
     case ADJUST_STATE_TRACK_EXITING: return "track_exiting";
     case ADJUST_STATE_ABORTED: return "aborted";
     default: return "unknown";
@@ -298,7 +300,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
      * interfere with realtime motion.
      */
     printf("[ECU CMD] src=%u mode=%u gear=%u speed_milli=%ld steer_cdeg=[%ld,%ld,%ld,%ld] "
-           "brake=%s hv=%s mos8=%s res[pwr=%u mot=%u]\r\n",
+           "brake=%s hv=%s hv_fb=%s hv_latch=%s res[pwr=%u mot=%u]\r\n",
            (unsigned int)snapshot->source,
            (unsigned int)snapshot->motion_mode,
            (unsigned int)snapshot->active_gear,
@@ -309,6 +311,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (long)snapshot->target_steer_centi_deg[3],
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
+           bool_text(snapshot->high_voltage_feedback_ready),
            bool_text(snapshot->high_voltage_relay_latched),
            (unsigned int)snapshot->power_result,
            (unsigned int)snapshot->motion_result);
@@ -579,6 +582,30 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->presteer_missing_axis_mask,
            (unsigned long)snapshot->presteer_timeout_count);
 
+    printf("[ECU STEER PLAN] active=%s done=%s stale_reject=%s id=%lu "
+           "fresh=0x%02x moving=0x%02x max_dist=%ld "
+           "actual=[%ld,%ld,%ld,%ld] out=[%ld,%ld,%ld,%ld] "
+           "err=[%ld,%ld,%ld,%ld]\r\n",
+           bool_text(snapshot->steer_transition_active),
+           bool_text(snapshot->steer_transition_completed),
+           bool_text(snapshot->steer_transition_rejected_stale_feedback),
+           (unsigned long)snapshot->steer_transition_id,
+           (unsigned int)snapshot->steer_transition_feedback_fresh_mask,
+           (unsigned int)snapshot->steer_transition_moving_axis_mask,
+           (long)snapshot->steer_transition_max_distance_counts,
+           (long)snapshot->steer_transition_actual_counts[0],
+           (long)snapshot->steer_transition_actual_counts[1],
+           (long)snapshot->steer_transition_actual_counts[2],
+           (long)snapshot->steer_transition_actual_counts[3],
+           (long)snapshot->steer_transition_output_counts[0],
+           (long)snapshot->steer_transition_output_counts[1],
+           (long)snapshot->steer_transition_output_counts[2],
+           (long)snapshot->steer_transition_output_counts[3],
+           (long)snapshot->steer_transition_error_counts[0],
+           (long)snapshot->steer_transition_error_counts[1],
+           (long)snapshot->steer_transition_error_counts[2],
+           (long)snapshot->steer_transition_error_counts[3]);
+
     printf("[ECU STEER CAL] ram_override=%s valid=%s seq=%lu",
            bool_text(snapshot->steer_calibration_ram_override_enabled),
            bool_text(snapshot->steer_calibration_ram_override_valid),
@@ -795,7 +822,10 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         }
         print_centi_value(snapshot->target_steer_centi_deg[wheel]);
     }
-    printf("]deg brake=%s hv=%s mos8=%s comm_hv=%s hyd=%s valve=0x%08lx "
+    printf("]deg brake=%s hv=%s hv_latch=%s comm_hv=%s hyd=%s "
+           "valve_cmd=0x%08lx valve_req=0x%08lx valve_out=0x%08lx "
+           "valve_block=0x%08lx valve_block_cnt=%lu "
+           "pump[state=%u fb=%s vel=%ld timeout=%lu] "
            "res[pwr=%s mot=%s lift=%s io=%s warn=%s]\r\n",
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
@@ -803,6 +833,14 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            bool_text(snapshot->commissioning_power_debug_active),
            bool_text(snapshot->hydraulic_enable),
            (unsigned long)snapshot->hydraulic_valve_mask,
+           (unsigned long)snapshot->hydraulic_requested_valve_mask,
+           (unsigned long)snapshot->hydraulic_applied_valve_mask,
+           (unsigned long)snapshot->hydraulic_interlocked_valve_mask,
+           (unsigned long)snapshot->hydraulic_valve_interlock_reject_count,
+           (unsigned int)snapshot->hydraulic_pump_state,
+           bool_text(snapshot->hydraulic_pump_feedback_valid),
+           (long)snapshot->hydraulic_pump_actual_velocity_units,
+           (unsigned long)snapshot->hydraulic_pump_start_timeout_count,
            device_result_text(snapshot->power_result),
            device_result_text(snapshot->motion_result),
            device_result_text(snapshot->lift_hydraulic_result),

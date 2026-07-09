@@ -11,7 +11,7 @@ during normal boot or runtime.
 |---|---:|---|---:|---:|
 | RPDO0 | `0x200 + N` | `6040:00` 16-bit + `6060:00` 8-bit + `60FF:00` 32-bit | 7 | `0x01` |
 | RPDO1 | `0x300 + N` | `6040:00` 16-bit + `6060:00` 8-bit + `607A:00` 32-bit | 7 | `0x01` |
-| RPDO2 | `0x400 + N` | `60C1:01` 32-bit interpolation point | 4 | `0x04` |
+| RPDO2 | `0x400 + N` | `60C1:01` 32-bit interpolation point | 4 | `0x01` |
 | RPDO3 | `0x500 + N` | `6040:00` 16-bit + `6060:00` 8-bit + `2340:00` 16-bit | 5 | `0x01` |
 | TPDO0 | `0x180 + N` | `6064:00` 32-bit + `606C:00` 32-bit | 8 | `0x01` |
 | TPDO1 | `0x280 + N` | `2183:00` 32-bit + `6041:00` 16-bit + `221C:00` 16-bit | 8 | `0x04` |

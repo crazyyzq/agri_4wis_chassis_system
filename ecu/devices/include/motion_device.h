@@ -7,6 +7,7 @@
 #include "canopen_master_service.h"
 #include "ecu_config.h"
 #include "ecu_types.h"
+#include "steering_transition_planner.h"
 #include "vehicle_types.h"
 
 typedef enum {
@@ -145,6 +146,7 @@ typedef struct {
     bool steer_commanded_target_valid[ECU_WHEEL_COUNT];
     int32_t steer_commanded_target_counts[ECU_WHEEL_COUNT];
     int32_t steer_commanded_velocity_counts_per_sec[ECU_WHEEL_COUNT];
+    steering_transition_planner_t steer_transition_planner;
     bool steer_pending_target[ECU_WHEEL_COUNT];
     bool steer_last_commanded_position_valid[ECU_WHEEL_COUNT];
     int32_t steer_last_commanded_position_counts[ECU_WHEEL_COUNT];

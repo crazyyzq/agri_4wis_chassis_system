@@ -102,7 +102,7 @@ def build_node_configuration(node_id: int) -> list[PdoOperation]:
         PdoOperation("download", 0x1601, 0x00, 1, 3, "enable RPDO1 map entries"),
         PdoOperation("download", 0x1401, 0x01, 4, rpdo1, "enable RPDO1 COB-ID"),
         PdoOperation("download", 0x1402, 0x01, 4, 0x80000000 | rpdo2, "disable RPDO2 COB-ID"),
-        PdoOperation("download", 0x1402, 0x02, 1, 4, "RPDO2 synchronous every 4th SYNC"),
+        PdoOperation("download", 0x1402, 0x02, 1, PDO_TRANSMISSION_SYNC1, "RPDO2 interpolation synchronous every SYNC"),
         PdoOperation("download", 0x1602, 0x00, 1, 0, "clear RPDO2 map"),
         PdoOperation("download", 0x1602, 0x01, 4, PDO_MAP_INTERPOLATED_POSITION_32, "RPDO2 interpolated position point 60C1:01"),
         PdoOperation("download", 0x1602, 0x00, 1, 1, "enable RPDO2 map entries"),

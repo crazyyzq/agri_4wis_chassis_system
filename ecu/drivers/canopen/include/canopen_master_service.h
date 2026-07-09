@@ -84,6 +84,8 @@ typedef enum {
     CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM,
     CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER,
     CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY,
+    CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT,
+    CANOPEN_MASTER_PDO_PHASE_HYDRAULIC_PUMP_VELOCITY,
     CANOPEN_MASTER_PDO_PHASE_SAFE_STOP
 } canopen_master_pdo_phase_t;
 
@@ -397,6 +399,13 @@ bool canopen_master_service_pdo_group_cancelled(const canopen_master_service_t *
 bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
                                              uint32_t group_sequence);
 void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *service);
+
+/* Reinitialize one ECU-local CAN controller after its nonblocking primary TX
+ * lane remains busy following a realtime PDO failure.  Existing bitrate,
+ * filters and callbacks are preserved.  This never sends NMT reset and does
+ * not reset or reconfigure any remote CANopen node.
+ */
+bool canopen_master_service_recover_transport(canopen_master_service_t *service);
 void canopen_master_service_note_pdo_safety_inhibit(canopen_master_service_t *service);
 void canopen_master_service_note_pdo_same_target_coalesced(canopen_master_service_t *service);
 bool canopen_master_service_has_node_evidence(const canopen_master_service_t *service,

@@ -36,7 +36,7 @@ All node IDs use the same PDO layout. `N` means node ID.
 |---|---:|---:|---:|---|
 | RPDO0 velocity command | `0x200 + N` | 1 | 7 | `6040:00` u16 + `6060:00` i8 + `60FF:00` i32 |
 | RPDO1 position command | `0x300 + N` | 1 | 7 | `6040:00` u16 + `6060:00` i8 + `607A:00` i32 |
-| RPDO2 interpolation point | `0x400 + N` | 4 | 4 | `60C1:01` i32 |
+| RPDO2 interpolation point | `0x400 + N` | 1 | 4 | `60C1:01` i32 |
 | RPDO3 torque/current command | `0x500 + N` | 1 | 5 | `6040:00` u16 + `6060:00` i8 + `2340:00` i16 |
 | TPDO0 feedback | `0x180 + N` | 1 | 8 | `6064:00` i32 + `606C:00` i32 |
 | TPDO1 status/current | `0x280 + N` | 4 | 8 | `2183:00` u32 + `6041:00` u16 + `221C:00` i16 |
@@ -205,8 +205,10 @@ DLC = 4
 byte0..3 = 60C1:01 interpolation position point, i32 little-endian
 ```
 
-RPDO2 remains available for future interpolation work, but it is not the default
-manual steering command path.
+RPDO2 is the active ground-clearance interpolation command path for CAN3 lift
+nodes. The ECU sends one four-axis `60C1:01` point group and then one SYNC every
+20 ms, so RPDO2 must be type 1. Type 4 would execute only every fourth SYNC and
+is not suitable for synchronized lift motion.
 
 ## 8. SYNC usage
 
@@ -215,7 +217,7 @@ The configured profile uses synchronous transmission types:
 ```text
 RPDO0 type 1
 RPDO1 type 1
-RPDO2 type 4
+RPDO2 type 1
 RPDO3 type 1
 TPDO0 type 1
 TPDO1 type 4

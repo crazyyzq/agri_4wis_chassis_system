@@ -340,8 +340,16 @@ static bool canopen_master_sdo_write_allowed(uint16_t index)
 #if ECU_ENABLE_MAINTENANCE_SDO_WRITES
     return true;
 #else
-    (void)index;
-    return false;
+    /* Production builds still deny maintenance/NVM/PDO remapping writes, but
+     * runtime CiA-402 setup objects are required to put hydraulic lift axes in
+     * interpolated-position mode and to enable/disable drives deterministically.
+     */
+    return index == ECU_CANOPEN_OBJ_CONTROLWORD ||
+           index == ECU_CANOPEN_OBJ_MODES_OF_OPERATION ||
+           index == ECU_CANOPEN_OBJ_INTERPOLATION_TIME_PERIOD ||
+           index == ECU_CANOPEN_OBJ_INTERPOLATION_MODE ||
+           index == ECU_CANOPEN_OBJ_INTERPOLATION_BUFFER_CLEAR ||
+           index == ECU_CANOPEN_OBJ_PROFILE_VELOCITY;
 #endif
 }
 
@@ -358,6 +366,10 @@ static bool canopen_master_sdo_write_requires_order(uint16_t index)
      * mapping active, which is unacceptable for the realtime steering RPDO.
      */
     return index == ECU_CANOPEN_OBJ_CONTROLWORD ||
+           index == ECU_CANOPEN_OBJ_MODES_OF_OPERATION ||
+           index == ECU_CANOPEN_OBJ_INTERPOLATION_TIME_PERIOD ||
+           index == ECU_CANOPEN_OBJ_INTERPOLATION_MODE ||
+           index == ECU_CANOPEN_OBJ_INTERPOLATION_BUFFER_CLEAR ||
            index == ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM ||
            index == ECU_CANOPEN_OBJ_RPDO1_MAPPING ||
            index == ECU_CANOPEN_OBJ_RPDO2_COMM_PARAM ||
@@ -475,7 +487,9 @@ static bool pdo_phase_is_arm(canopen_master_pdo_phase_t phase)
 {
     return phase == CANOPEN_MASTER_PDO_PHASE_STEER_ARM ||
            phase == CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM ||
-           phase == CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY;
+           phase == CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY ||
+           phase == CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT ||
+           phase == CANOPEN_MASTER_PDO_PHASE_HYDRAULIC_PUMP_VELOCITY;
 }
 
 static bool pdo_phase_is_trigger(canopen_master_pdo_phase_t phase)
@@ -1012,6 +1026,52 @@ void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *servic
     service->active_pdo_trigger_complete_frames = 0U;
     sync_pdo_group_snapshot(service);
     taskEXIT_CRITICAL();
+}
+
+bool canopen_master_service_recover_transport(canopen_master_service_t *service)
+{
+    if (service == NULL || service->can_index >= CANOPEN_MASTER_BUS_COUNT) {
+        return false;
+    }
+
+    CAN_Type *can = s_can_info[service->can_index].can_base;
+    hpm_can_data_t *data = &hpm_canopen_data[service->can_index];
+    hpm_stat_t status;
+
+    /* The CAN task owns this service, but its RX/TX ISR may otherwise run
+     * while the controller registers are being rebuilt.  Preserve the SDK
+     * adapter's current filter list/configuration; can_init() restores those
+     * hardware filters after can_deinit() clears the stuck primary TX lane.
+     */
+    intc_m_disable_irq(s_can_info[service->can_index].irq_num);
+    can_deinit(can);
+    status = can_init(can,
+                      &data->config,
+                      board_init_can_clock(can));
+    data->has_sent_out = false;
+
+    taskENTER_CRITICAL();
+    s_canopen_pdo_tx_complete_count[service->can_index] = 0U;
+    service->observed_pdo_tx_complete_count = 0U;
+    service->pdo_in_flight = false;
+    service->pdo_in_flight_submit_ms = 0U;
+    service->sync_in_flight = false;
+    service->sync_in_flight_submit_ms = 0U;
+    service->snapshot.sync_in_flight = false;
+    taskEXIT_CRITICAL();
+
+    intc_m_enable_irq_with_priority(s_can_info[service->can_index].irq_num,
+                                    s_can_info[service->can_index].priority);
+
+    if (status != status_success) {
+        service->snapshot.can_normal = false;
+        note_error(service, -EIO);
+        return false;
+    }
+
+    service->snapshot.can_normal = true;
+    service->snapshot.last_pdo_current_error = 0;
+    return true;
 }
 
 void canopen_master_service_note_pdo_safety_inhibit(canopen_master_service_t *service)

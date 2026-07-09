@@ -6,6 +6,7 @@
 #include "canopen_pdo_profile.h"
 #include "hpm_common.h"
 #include "servo_drive_canopen.h"
+#include "steering_transition_planner.h"
 
 #define ECU_STEER_GROUP_PDO_FRAME_COUNT (ECU_WHEEL_COUNT * 2U)
 #define ECU_NODE5_STEER_PDO_FRAME_COUNT (2U)
@@ -455,6 +456,46 @@ static bool presteer_gate_allows_drive(
     return false;
 }
 
+static uint8_t collect_steering_feedback_for_planner(
+    motion_device_state_t *state,
+    const canopen_master_service_t *canopen,
+    const ecu_hardware_config_t *config,
+    int32_t actual_position_counts[ECU_WHEEL_COUNT])
+{
+    uint8_t feedback_fresh_mask = 0U;
+
+    if (state == NULL || canopen == NULL || config == NULL ||
+        actual_position_counts == NULL) {
+        return 0U;
+    }
+
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        uint8_t node_id = config->steer_nodes[wheel].node_id;
+        canopen_node_feedback_t feedback;
+        bool fresh =
+            canopen_master_service_get_node_feedback(canopen,
+                                                     node_id,
+                                                     &feedback) &&
+            feedback.feedback_fresh &&
+            feedback.fault_latched == 0U;
+        if (fresh) {
+            state->steer_last_position_valid[wheel] = true;
+            state->steer_last_position_counts[wheel] =
+                feedback.actual_position_counts;
+            actual_position_counts[wheel] = feedback.actual_position_counts;
+            feedback_fresh_mask |= (uint8_t)(1U << wheel);
+        } else if (state->steer_last_position_valid[wheel]) {
+            actual_position_counts[wheel] = state->steer_last_position_counts[wheel];
+        } else if (state->steer_last_commanded_position_valid[wheel]) {
+            actual_position_counts[wheel] =
+                state->steer_last_commanded_position_counts[wheel];
+        } else {
+            actual_position_counts[wheel] = 0;
+        }
+    }
+    return feedback_fresh_mask;
+}
+
 static bool steer_limit_blocks_target(canopen_master_service_t *canopen,
                                       const ecu_canopen_node_config_t *node,
                                       motion_device_state_t *state,
@@ -787,9 +828,14 @@ static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
     if (!command_source_allows_motion_output(command->source)) {
         return MOTION_STEER_INHIBIT_COMMAND_SOURCE_NOT_AUTHORIZED;
     }
+    if (!command->high_voltage_enable ||
+        !command->high_voltage_feedback_ready) {
+        return MOTION_STEER_INHIBIT_REMOTE_DISARMED;
+    }
     /* P gear inhibits drive velocity only.  Steering must remain visible in P
-     * so the operator can select Ackermann/spin/crab and verify the four wheel
-     * angles before allowing any drive motion.
+     * after high voltage is confirmed, so the operator can select
+     * Ackermann/spin/crab and verify the four wheel angles before allowing
+     * drive motion.
      */
     if (command->active_gear != ECU_GEAR_REQUEST_P &&
         !command->brake_release) {
@@ -870,6 +916,12 @@ static bool command_changed(const motion_device_state_t *state,
         state->last_motion_command.active_gear != command->active_gear ||
         state->last_motion_command.target_speed_mps != command->target_speed_mps ||
         state->last_motion_command.brake_release != command->brake_release ||
+        state->last_motion_command.high_voltage_enable !=
+            command->high_voltage_enable ||
+        state->last_motion_command.high_voltage_disable_request !=
+            command->high_voltage_disable_request ||
+        state->last_motion_command.high_voltage_feedback_ready !=
+            command->high_voltage_feedback_ready ||
         state->last_motion_command.steer_commission_interlock_ok !=
             command->steer_commission_interlock_ok ||
         state->last_motion_command.steer_commission_steering_neutral !=
@@ -1170,9 +1222,11 @@ static bool steer_axis_realtime_ready(motion_device_state_t *state,
     state->steer_position_mode_ready[wheel] = true;
 #else
     canopen_node_feedback_t feedback;
-    if (canopen_master_service_get_node_feedback(canopen, node_id, &feedback) &&
+    bool feedback_valid =
+        canopen_master_service_get_node_feedback(canopen, node_id, &feedback) &&
         feedback.feedback_fresh &&
-        feedback.fault_latched == 0U) {
+        feedback.fault_latched == 0U;
+    if (feedback_valid) {
         /* PDO mapping is configured out-of-band with the analyzer and saved to
          * the drive flash.  The ECU marks realtime-ready only after it sees
          * fresh TPDO0/TPDO1 feedback from this exact node, which proves the
@@ -1188,6 +1242,10 @@ static bool steer_axis_realtime_ready(motion_device_state_t *state,
         state->steer_last_position_counts[wheel] =
             feedback.actual_position_counts;
     }
+    if (!feedback_valid) {
+        state->steer_realtime_enabled[wheel] = false;
+        return false;
+    }
     if (state->steer_axis_config_state[wheel] != MOTION_STEER_AXIS_READY) {
         return false;
     }
@@ -1195,9 +1253,6 @@ static bool steer_axis_realtime_ready(motion_device_state_t *state,
         return false;
     }
 #endif
-    if (!state->steer_realtime_enabled[wheel]) {
-        state->steer_pending_target[wheel] = true;
-    }
     return state->steer_axis_config_state[wheel] == MOTION_STEER_AXIS_READY;
 }
 
@@ -1232,6 +1287,10 @@ static bool build_steer_group_targets(motion_device_state_t *state,
                                       int32_t out_targets[ECU_WHEEL_COUNT])
 {
     bool group_changed = false;
+    bool fixed_posture_path =
+        state->last_motion_command_valid &&
+        steering_transition_planner_mode_is_fixed_posture(
+            state->last_motion_command.motion_mode);
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         if (!state->steer_latest_target_valid[wheel]) {
@@ -1239,10 +1298,17 @@ static bool build_steer_group_targets(motion_device_state_t *state,
         }
 
         int32_t requested = state->steer_latest_target_counts[wheel];
-        int32_t limited = update_steer_commanded_target(state,
-                                                        wheel,
-                                                        requested,
-                                                        elapsed_ms);
+        int32_t limited = requested;
+        if (fixed_posture_path) {
+            state->steer_commanded_target_counts[wheel] = requested;
+            state->steer_commanded_target_valid[wheel] = true;
+            state->steer_commanded_velocity_counts_per_sec[wheel] = 0;
+        } else {
+            limited = update_steer_commanded_target(state,
+                                                    wheel,
+                                                    requested,
+                                                    elapsed_ms);
+        }
         out_targets[wheel] = limited;
 
         if (!state->steer_last_commanded_position_valid[wheel] ||
@@ -1713,6 +1779,9 @@ static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state
 
     if (canopen != NULL) {
         canopen_master_service_cancel_realtime_pdo(canopen);
+        if (!canopen_master_service_recover_transport(canopen)) {
+            latch_required = true;
+        }
     }
     state->can2_realtime_transient_recovery_count++;
     state->can2_realtime_last_recovery_ms = now_ms;
@@ -1869,6 +1938,7 @@ static bool can2_motion_high_voltage_ready(const motion_device_state_t *state)
 {
     return state != NULL &&
            state->last_motion_command_valid &&
+           state->last_motion_command.high_voltage_enable &&
            state->last_motion_command.high_voltage_feedback_ready &&
            !state->last_motion_command.high_voltage_disable_request;
 }
@@ -2688,6 +2758,7 @@ void motion_device_init(motion_device_state_t *state)
         state->steer_safety_inhibited = true;
         state->steer_commission_state = STEER_REMOTE_COMMISSION_DISABLED;
         state->selected_axis_mask = 0U;
+        steering_transition_planner_init(&state->steer_transition_planner);
         for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
             state->steer_axis_config_state[wheel] = MOTION_STEER_AXIS_UNSEEN;
         }
@@ -2720,6 +2791,20 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
 
     bool changed = command_changed(state, command);
     bool refresh_due = motion_command_refresh_due(state, now_ms);
+
+    /* These safety gates must track the newest coherent vehicle command even
+     * when a later device/setup operation in this apply pass is rejected.
+     * Keeping an older successful high-voltage permission would let the CAN2
+     * task continue creating motion PDO groups after the arbiter has removed
+     * high voltage.
+     */
+    state->last_motion_command.high_voltage_enable =
+        command->high_voltage_enable;
+    state->last_motion_command.high_voltage_disable_request =
+        command->high_voltage_disable_request;
+    state->last_motion_command.high_voltage_feedback_ready =
+        command->high_voltage_feedback_ready;
+
     bool steer_allowed = motion_device_update_steer_safety_gate(state,
                                                                 canopen,
                                                                 config,
@@ -2731,6 +2816,50 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
         steer_position_counts[wheel] =
             scaled_float_to_i32(command->target_steer_deg[wheel],
                                 config->steer_deg_to_counts);
+    }
+
+    int32_t steer_actual_position_counts[ECU_WHEEL_COUNT] = {0};
+    uint8_t steer_feedback_fresh_mask =
+        collect_steering_feedback_for_planner(state,
+                                              canopen,
+                                              config,
+                                              steer_actual_position_counts);
+    if (steering_transition_planner_mode_is_fixed_posture(command->motion_mode)) {
+        int32_t planned_steer_counts[ECU_WHEEL_COUNT] = {0};
+        if (steering_transition_planner_update(&state->steer_transition_planner,
+                                               command->motion_mode,
+                                               now_ms,
+                                               steer_feedback_fresh_mask,
+                                               steer_actual_position_counts,
+                                               steer_position_counts,
+                                               planned_steer_counts)) {
+            memcpy(steer_position_counts,
+                   planned_steer_counts,
+                   sizeof(steer_position_counts));
+        } else {
+            /* A fixed-posture transition without fresh TPDO feedback can
+             * create a large unexpected jump.  Hold the best known safe target
+             * and let the existing presteer/safety path block drive motion.
+             */
+            state->steer_inhibit_reason = MOTION_STEER_INHIBIT_AXIS_NOT_READY;
+            state->steer_safety_inhibited = true;
+            state->steer_safe_stop_pending = true;
+            steer_allowed = false;
+            for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+                if ((steer_feedback_fresh_mask & (uint8_t)(1U << wheel)) != 0U ||
+                    state->steer_last_position_valid[wheel]) {
+                    steer_position_counts[wheel] =
+                        steer_actual_position_counts[wheel];
+                } else if (state->steer_last_commanded_position_valid[wheel]) {
+                    steer_position_counts[wheel] =
+                        state->steer_last_commanded_position_counts[wheel];
+                } else {
+                    steer_position_counts[wheel] = 0;
+                }
+            }
+        }
+    } else {
+        steering_transition_planner_reset(&state->steer_transition_planner);
     }
 
     bool drive_allowed_by_safety = drive_output_allowed(command) && steer_allowed;
@@ -2827,9 +2956,16 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
 #endif
 
     request_can2_motion_nodes_operational(state, canopen, config, now_ms);
-    if (can2_motion_high_voltage_ready(state)) {
-        send_can2_feedback_sync_if_due(state, canopen, now_ms);
+    if (!can2_motion_high_voltage_ready(state)) {
+        /* Do not create zero-velocity or steering groups against unpowered
+         * drives.  The orderly shutdown path sends explicit zero while high
+         * voltage feedback is still valid; after feedback is gone, repeatedly
+         * queueing then cancelling zero groups only floods CAN2 and can wedge
+         * the HPM nonblocking primary TX lane.
+         */
+        return ECU_DEVICE_APPLY_OK;
     }
+    send_can2_feedback_sync_if_due(state, canopen, now_ms);
 
     if (!state->steer_normal_pdo_allowed) {
         if (state->steer_next_group_valid) {

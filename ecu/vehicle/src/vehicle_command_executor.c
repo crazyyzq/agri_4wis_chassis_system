@@ -150,6 +150,52 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.presteer_missing_axis_mask;
     executor->presteer_timeout_count =
         s_runtime.motion.presteer_timeout_count;
+    executor->steer_transition_active =
+        s_runtime.motion.steer_transition_planner.active;
+    executor->steer_transition_completed =
+        s_runtime.motion.steer_transition_planner.completed;
+    executor->steer_transition_rejected_stale_feedback =
+        s_runtime.motion.steer_transition_planner.rejected_stale_feedback;
+    executor->steer_transition_id =
+        s_runtime.motion.steer_transition_planner.transition_id;
+    executor->steer_transition_feedback_fresh_mask =
+        s_runtime.motion.steer_transition_planner.feedback_fresh_mask;
+    executor->steer_transition_moving_axis_mask =
+        s_runtime.motion.steer_transition_planner.moving_axis_mask;
+    executor->steer_transition_max_distance_counts =
+        s_runtime.motion.steer_transition_planner.max_distance_counts;
+    memcpy(executor->steer_transition_actual_counts,
+           s_runtime.motion.steer_transition_planner.actual_position_counts,
+           sizeof(executor->steer_transition_actual_counts));
+    memcpy(executor->steer_transition_output_counts,
+           s_runtime.motion.steer_transition_planner.output_target_counts,
+           sizeof(executor->steer_transition_output_counts));
+    memcpy(executor->steer_transition_error_counts,
+           s_runtime.motion.steer_transition_planner.error_counts,
+           sizeof(executor->steer_transition_error_counts));
+}
+
+static void update_executor_lift_hydraulic_diagnostics(vehicle_executor_state_t *executor)
+{
+    if (executor == 0) {
+        return;
+    }
+    executor->hydraulic_requested_valve_mask =
+        s_runtime.lift_hydraulic.last_requested_valve_mask;
+    executor->hydraulic_applied_valve_mask =
+        s_runtime.lift_hydraulic.last_valve_mask;
+    executor->hydraulic_interlocked_valve_mask =
+        s_runtime.lift_hydraulic.last_interlocked_valve_mask;
+    executor->hydraulic_valve_interlock_reject_count =
+        s_runtime.lift_hydraulic.valve_interlock_reject_count;
+    executor->hydraulic_pump_state =
+        (uint8_t)s_runtime.lift_hydraulic.pump_state;
+    executor->hydraulic_pump_feedback_valid =
+        s_runtime.lift_hydraulic.pump_feedback_valid;
+    executor->hydraulic_pump_actual_velocity_units =
+        s_runtime.lift_hydraulic.pump_actual_velocity_units;
+    executor->hydraulic_pump_start_timeout_count =
+        s_runtime.lift_hydraulic.pump_start_timeout_count;
 }
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor)
@@ -167,6 +213,7 @@ void vehicle_command_executor_init(vehicle_executor_state_t *executor)
     memset(&s_runtime, 0, sizeof(s_runtime));
     vehicle_executor_runtime_init_once();
     update_executor_motion_diagnostics(executor);
+    update_executor_lift_hydraulic_diagnostics(executor);
 }
 
 bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
@@ -285,6 +332,7 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
                                     config,
                                     &command,
                                     now_ms);
+    update_executor_lift_hydraulic_diagnostics(executor);
     return executor->lift_hydraulic_result == ECU_DEVICE_APPLY_OK;
 }
 

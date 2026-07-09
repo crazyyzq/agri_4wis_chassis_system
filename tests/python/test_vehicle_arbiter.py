@@ -117,15 +117,30 @@ def test_remote_arming_gear_requests_release_brake_before_active_drive(root: pat
         assert token in text, token
 
 
-def test_track_adjust_prepare_requests_brake_release_before_active_adjust(root: pathlib.Path) -> None:
+def test_home_center_hydraulic_adjust_keeps_drive_parked_and_uses_valve_intent(root: pathlib.Path) -> None:
     text = read(root, "ecu/vehicle/src/command_arbiter.c")
     adjust = read(root, "ecu/remote/src/remote_adjust_fsm.c")
+    gear = read(root, "ecu/remote/src/remote_gear_fsm.c")
 
-    assert "ADJUST_STATE_TRACK_PREPARE" in adjust
-    assert "preconditions->brake_release_confirmed" in adjust
     for token in [
-        "ADJUST_STATE_TRACK_PREPARE",
-        "ADJUST_STATE_TRACK_ACTIVE",
+        "ADJUST_STATE_READY",
+        "ADJUST_STATE_HYDRAULIC_ACTIVE",
+        "suspension_request_active",
+        "hydraulic_suspension_target",
+    ]:
+        assert token in adjust, token
+    for token in [
+        "preconditions->adjustment_active",
+        "fsm->active_gear = ECU_GEAR_REQUEST_P",
+        "HOME-center adjustment uses the physical three-position gear switch",
+    ]:
+        assert token in gear, token
+    for token in [
+        "track_width_valve_mask_from_remote",
+        "suspension_valve_mask_from_remote",
+        "remote->requested_gear == ECU_GEAR_REQUEST_D",
+        "remote->requested_gear == ECU_GEAR_REQUEST_R",
+        "out->hydraulic_enable = hydraulic_valve_mask != 0U",
         "remote->adjust_state",
     ]:
         assert token in text, token
@@ -215,6 +230,48 @@ def test_whole_vehicle_crab_keeps_full_90_degree_steering_range(root: pathlib.Pa
     ]
     assert "(1225000)" in max_range_block
     assert "(612500)" not in max_range_block
+
+
+def test_fixed_posture_steering_transition_planner_is_isolated(root: pathlib.Path) -> None:
+    """Spin/crab posture changes need a focused planner, not more trajectory code in motion_device.c."""
+    planner_h = read(root, "ecu/control/include/steering_transition_planner.h")
+    planner_c = read(root, "ecu/control/src/steering_transition_planner.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "steering_transition_planner_t",
+        "steering_transition_planner_init",
+        "steering_transition_planner_mode_is_fixed_posture",
+        "steering_transition_planner_update",
+        "feedback_fresh_mask",
+        "actual_position_counts",
+        "requested_target_counts",
+        "output_target_counts",
+        "rejected_stale_feedback",
+    ]:
+        assert token in planner_h, token
+
+    assert "smoothstep" in planner_c
+    assert "transition_id" in planner_c
+    assert "same_target" in planner_c
+    assert "planner->completed && same_target" in planner_c
+    assert "ECU_STEER_FIXED_TRANSITION_MAX_SPEED_COUNTS_PER_SEC" in planner_c
+    assert "steering_transition_planner_update" in motion_c
+    assert '#include "steering_transition_planner.h"' in motion_c
+    assert "../../control/src/steering_transition_planner.c" in cmake
+
+
+def test_fixed_posture_planner_uses_feedback_and_ackermann_bypasses_it(root: pathlib.Path) -> None:
+    """Fixed posture transitions use TPDO actual position; Ackermann stays realtime-follow."""
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    planner_c = read(root, "ecu/control/src/steering_transition_planner.c")
+
+    assert "collect_steering_feedback_for_planner" in motion_c
+    assert "steering_transition_planner_mode_is_fixed_posture(command->motion_mode)" in motion_c
+    assert "MOTION_STEER_INHIBIT_AXIS_NOT_READY" in motion_c
+    assert "ECU_MOTION_MODE_POSITIVE_ACKERMANN" not in planner_c
+    assert "ECU_MOTION_MODE_REVERSE_ACKERMANN" not in planner_c
 
 
 def test_ackermann_remote_steering_limit_is_50_degrees_not_crab_limit(root: pathlib.Path) -> None:

@@ -22,12 +22,17 @@ All Node1..13 use the same active PDO layout. Only node ID, bus, COB-ID and runt
 |---|---:|---|---:|---:|
 | RPDO0 velocity | `0x200 + node` | `6040:00` + `6060:00` + `60FF:00` | 7 | 1 |
 | RPDO1 position | `0x300 + node` | `6040:00` + `6060:00` + `607A:00` | 7 | 1 |
-| RPDO2 interpolation | `0x400 + node` | `60C1:01` | 4 | 4 |
+| RPDO2 interpolation | `0x400 + node` | `60C1:01` | 4 | 1 |
 | RPDO3 torque/current | `0x500 + node` | `6040:00` + `6060:00` + `2340:00` | 5 | 1 |
 | TPDO0 motion feedback | `0x180 + node` | `6064:00` + `606C:00` | 8 | 1 |
 | TPDO1 health feedback | `0x280 + node` | `2183:00` + `6041:00` + `221C:00` | 8 | 4 |
 
 `6060:00` is deliberately mapped into RPDO0/RPDO1/RPDO3.  It costs one byte in velocity/position commands, but every realtime command carries its required mode and is safer during field commissioning if a drive was reset, manually changed, or incompletely initialized.
+
+RPDO2 uses synchronous type 1 because the CAN3 lift controller sends one
+four-axis interpolation point group and then one SYNC every 20 ms.  Type 4 would
+delay execution until every fourth SYNC and is not suitable for synchronized
+ground-clearance motion.
 
 `2340:00` is signed int16 in 10 mA units.  Example: `+50` means `+0.5 A`; `-50` means `-0.5 A`.
 

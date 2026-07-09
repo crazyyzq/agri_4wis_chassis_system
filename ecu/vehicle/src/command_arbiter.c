@@ -205,28 +205,74 @@ static float auto_speed_command_mps(const auto_control_request_t *auto_request)
                                            auto_request->target_speed_mps);
 }
 
+static bool remote_in_adjust_domain(const remote_control_request_t *remote)
+{
+    return remote != 0 &&
+           remote->adjust_state != ADJUST_STATE_IDLE &&
+           remote->adjust_state != ADJUST_STATE_ABORTED &&
+           remote->adjust_state != ADJUST_STATE_TRACK_EXITING;
+}
+
+static uint32_t track_width_valve_mask_from_remote(const remote_control_request_t *remote)
+{
+    if (remote->track_per_mille >= ECU_REMOTE_TRACK_EXTEND_PER_MILLE_MIN) {
+        return ECU_HYD_VALVE_TRACK_EXTEND_MASK;
+    }
+    if (remote->track_per_mille <= ECU_REMOTE_TRACK_RETRACT_PER_MILLE_MAX) {
+        return ECU_HYD_VALVE_TRACK_RETRACT_MASK;
+    }
+    return 0U;
+}
+
+static uint32_t suspension_valve_mask_from_remote(const remote_control_request_t *remote)
+{
+    if (remote->requested_gear == ECU_GEAR_REQUEST_D) {
+        return remote->hydraulic_suspension_target == REMOTE_HYDRAULIC_SUSPENSION_FRONT ?
+               ECU_HYD_VALVE_FRONT_SUSPENSION_RETRACT_MASK :
+               ECU_HYD_VALVE_REAR_SUSPENSION_RETRACT_MASK;
+    }
+    if (remote->requested_gear == ECU_GEAR_REQUEST_R) {
+        return remote->hydraulic_suspension_target == REMOTE_HYDRAULIC_SUSPENSION_FRONT ?
+               ECU_HYD_VALVE_FRONT_SUSPENSION_EXTEND_MASK :
+               ECU_HYD_VALVE_REAR_SUSPENSION_EXTEND_MASK;
+    }
+    return 0U;
+}
+
 static void apply_remote_adjust_command(const remote_control_request_t *remote,
                                         vehicle_actuator_command_t *out)
 {
     float height_rate = 0.0f;
     float track_rate = 0.0f;
 
-    if (remote->adjust_state == ADJUST_STATE_CLEARANCE_ACTIVE) {
-        height_rate = scale_signed_per_mille(remote->clearance_per_mille,
-                                             ECU_REMOTE_MAX_HEIGHT_RATE_MM_S);
-        if (height_rate > 0.0f) {
-            out->target_height_mm = ECU_REMOTE_MAX_HEIGHT_TARGET_MM;
-        } else if (height_rate < 0.0f) {
-            out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
-        }
-    } else if (remote->adjust_state == ADJUST_STATE_TRACK_ACTIVE) {
+    if (!remote_in_adjust_domain(remote)) {
+        return;
+    }
+
+    if (remote->clearance_per_mille >= ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN) {
+        /* Ground-clearance adjustment is an electric four-leg CAN3 servo
+         * function, not a hydraulic-valve function.  The right stick is used as
+         * a three-state command: >1850 ppm extends at fixed speed, <1150 ppm
+         * retracts at fixed speed, and the middle band holds position.
+         */
+        height_rate = ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
+        out->target_height_mm = ECU_REMOTE_MAX_HEIGHT_TARGET_MM;
+    } else if (remote->clearance_per_mille <= ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX) {
+        height_rate = -ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
+        out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
+    }
+
+    uint32_t hydraulic_valve_mask = track_width_valve_mask_from_remote(remote);
+    if (hydraulic_valve_mask != 0U) {
         track_rate = scale_signed_per_mille(remote->track_per_mille,
                                             ECU_REMOTE_MAX_TRACK_RATE_MM_S);
     }
+    hydraulic_valve_mask |= suspension_valve_mask_from_remote(remote);
 
     out->height_rate_mm_s = height_rate;
     out->track_rate_mm_s = track_rate;
-    out->hydraulic_enable = height_rate != 0.0f || track_rate != 0.0f;
+    out->hydraulic_valve_mask |= hydraulic_valve_mask;
+    out->hydraulic_enable = hydraulic_valve_mask != 0U;
 }
 
 void command_arbiter_update(const remote_control_request_t *remote,

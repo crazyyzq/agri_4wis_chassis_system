@@ -6,6 +6,7 @@
 typedef struct {
     remote_adjust_state_t state;
     remote_adjust_owner_t adjust_owner;
+    remote_hydraulic_suspension_target_t hydraulic_suspension_target;
     bool request_rejected;
     diag_code_t diagnostic;
 } remote_adjust_fsm_t;
