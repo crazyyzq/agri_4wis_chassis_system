@@ -24,10 +24,13 @@ void local_io_device_init(local_io_device_state_t *state);
  *
  * Units: all fields are logical outputs after safety clamping.
  * Dependencies: DIO masks and active polarity from hardware config.
- * High-voltage relay output is MOS8 / EX_OUT8.  The physical output is latched:
- * a high-voltage-enable command closes the relay and keeps it closed; an
- * explicit high-voltage-disable request or safety clamp opens it.  The GPIO is
- * active high, so GPIO high closes the relay and GPIO low opens it.
+ * Relay-box wiring v1.5 assigns MOS6 / EX_OUT6 to the battery-key
+ * high-voltage request output.  The physical output is latched: a
+ * high-voltage-enable command turns MOS6 on and keeps it on; an explicit
+ * high-voltage-disable request or safety clamp turns it off.  The relay-box
+ * control input is low-level active, but the ECU GPIO command is active high:
+ * GPIO high turns the MOS output on and pulls the relay-box control terminal
+ * low.  MOS8 / EX_OUT8 is reserved and must not be used for this function.
  * Servo brake outputs are intentionally excluded; they are controlled through
  * the BC/BC2 drive terminal outputs over CANopen.
  * Failure behavior: invalid arguments return an error; this function does not

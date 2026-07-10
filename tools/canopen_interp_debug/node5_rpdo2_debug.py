@@ -1,13 +1,14 @@
-"""Node5 RPDO2 interpolation commissioning helper.
+"""Single-axis RPDO2 interpolation commissioning helper.
 
-This script is intentionally scoped to a single steering drive: Node5 on the
-ECU_CAN2 motion bus through the CAN analyzer CAN1 channel.  It is a bench
-commissioning tool, not production firmware.
+The historical default remains steering Node5 on analyzer CAN1.  ``--node-id``
+and ``--bus`` allow the same verified transaction engine to commission one lift
+axis on analyzer CAN2 while ECU CAN3 is physically disconnected.  It is a
+bench commissioning tool, not production firmware.
 
 Safety defaults:
   * no NMT reset frames are ever sent;
   * no Flash/NVM save is ever sent;
-  * only Node5 is addressed;
+  * only the explicitly selected node is addressed;
   * the default command is read-only precheck.
 """
 
@@ -53,7 +54,7 @@ READ_OBJECTS: tuple[tuple[int, int, int, str], ...] = (
     (0x6064, 0x00, 4, "actual_position"),
     (0x606C, 0x00, 4, "actual_velocity"),
     (0x2300, 0x00, 2, "control_source"),
-    (0x60C0, 0x00, 1, "interpolation_submode"),
+    (0x60C0, 0x00, 2, "interpolation_submode"),
     (0x60C2, 0x01, 1, "interpolation_period_value"),
     (0x60C2, 0x02, 1, "interpolation_period_index"),
     (0x2011, 0x00, 2, "buffer_free_slots"),
@@ -203,7 +204,8 @@ class Node5Debug:
         return values
 
     def nmt_operational(self) -> None:
-        self.send(CanFrame(NMT_COB_ID, bytes([0x01, NODE_ID])), "NMT operational Node5")
+        self.send(CanFrame(NMT_COB_ID, bytes([0x01, NODE_ID])),
+                  f"NMT operational Node{NODE_ID}")
 
     def sync(self) -> None:
         self.send(CanFrame(SYNC_COB_ID, b""), "SYNC")
@@ -295,7 +297,13 @@ class Node5Debug:
         self.sdo_download(0x60C0, 0x00, 2, submode, "interpolation submode", signed=(submode < 0))
         if submode == 0:
             self.sdo_download(0x60C2, 0x01, 1, period_ms, "interpolation period value")
-            self.sdo_download(0x60C2, 0x02, 1, -3, "interpolation period index ms", signed=True)
+            period_index = self.sdo_upload(
+                0x60C2, 0x02, 1, "interpolation period index"
+            )
+            if period_index.signed_value != -3:
+                raise RuntimeError(
+                    f"interpolation period index is {period_index.signed_value}, expected -3 (ms)"
+                )
         mode = self.sdo_upload(0x6061, 0x00, 1, "mode display")
         if mode.signed_value != 7:
             raise RuntimeError(f"mode display is {mode.signed_value}, expected 7")
@@ -365,7 +373,9 @@ class Node5Debug:
     def run_rpdo2_short(self, amplitude: int, period_ms: int, preload: int, samples: int,
                         rpdo2_type: int | None, trigger_before_points: bool,
                         no_live_feedback: bool, tail_zero_count: int,
-        interpolation_start_controlword: int, rpdo2_mapping_variant: str) -> None:
+                        interpolation_start_controlword: int,
+                        rpdo2_mapping_variant: str,
+                        relative_current: bool) -> None:
         rpdo2_mapping_original: dict[str, int] | None = None
         use_2010 = rpdo2_mapping_variant == "pvt2010_linear_abs"
         submode = -1 if rpdo2_mapping_variant == "position_time" else 0
@@ -385,8 +395,18 @@ class Node5Debug:
             # during streaming.
             self.sdo_download(0x6040, 0x00, 2, 0x000F, "interpolation trigger low")
             points = self.make_triangle_points(amplitude, samples)
+            if relative_current:
+                start_position = self.sdo_upload(
+                    0x6064, 0x00, 4, "relative trajectory start position"
+                ).signed_value
+                points = [start_position + point for point in points]
+                self.event(
+                    "relative_trajectory",
+                    start_position=start_position,
+                    excursion_counts=amplitude,
+                )
             if tail_zero_count > 0:
-                points.extend([0] * tail_zero_count)
+                points.extend([points[-1]] * tail_zero_count)
             if preload > len(points):
                 preload = len(points)
             if use_2010:
@@ -502,7 +522,9 @@ class Node5Debug:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Node5 RPDO2 interpolation debug helper.")
+    parser = argparse.ArgumentParser(description="Single-axis RPDO2 interpolation debug helper.")
+    parser.add_argument("--node-id", type=int, default=5, choices=range(1, 14))
+    parser.add_argument("--bus", choices=["can1", "can2"], default="can1")
     parser.add_argument("--mode", choices=["precheck", "rpdo1-baseline", "rpdo2-short"], default="precheck")
     parser.add_argument("--log-dir", default="")
     parser.add_argument("--timeout-ms", type=int, default=900)
@@ -514,6 +536,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trigger-before-points", action="store_true")
     parser.add_argument("--no-live-feedback", action="store_true")
     parser.add_argument("--tail-zero-count", type=int, default=0)
+    parser.add_argument(
+        "--relative-current",
+        action="store_true",
+        help="offset the trajectory from the measured 0x6064 start position",
+    )
     parser.add_argument("--interp-start-controlword", type=lambda value: int(value, 0), default=0x003F)
     parser.add_argument(
         "--rpdo2-mapping-variant",
@@ -525,9 +552,26 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    global NODE_ID, BUS, SDO_RX_ID, SDO_TX_ID, RPDO1_ID, RPDO2_ID
+    global TPDO0_ID, TPDO1_ID, EMCY_ID
+
     args = parse_args()
+    NODE_ID = args.node_id
+    BUS = args.bus
+    SDO_RX_ID = 0x600 + NODE_ID
+    SDO_TX_ID = 0x580 + NODE_ID
+    RPDO1_ID = 0x300 + NODE_ID
+    RPDO2_ID = 0x400 + NODE_ID
+    TPDO0_ID = 0x180 + NODE_ID
+    TPDO1_ID = 0x280 + NODE_ID
+    EMCY_ID = 0x080 + NODE_ID
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    log_dir = Path(args.log_dir) if args.log_dir else REPO_ROOT / "out" / f"node5_rpdo2_debug_{args.mode}_{timestamp}"
+    log_dir = (
+        Path(args.log_dir)
+        if args.log_dir
+        else REPO_ROOT / "out" /
+             f"node{NODE_ID}_rpdo2_debug_{args.mode}_{timestamp}"
+    )
     try:
         with Node5Debug(args.timeout_ms, log_dir) as debug:
             if args.mode == "precheck":
@@ -550,6 +594,7 @@ def main() -> int:
                     args.tail_zero_count,
                     args.interp_start_controlword,
                     args.rpdo2_mapping_variant,
+                    args.relative_current,
                 )
         print(f"Output written to {log_dir}")
         return 0

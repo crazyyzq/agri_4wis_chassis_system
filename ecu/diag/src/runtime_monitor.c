@@ -151,9 +151,11 @@ static const char *adjust_state_text(remote_adjust_state_t state)
 {
     switch (state) {
     case ADJUST_STATE_IDLE: return "idle";
+    case ADJUST_STATE_READY: return "ready";
     case ADJUST_STATE_CLEARANCE_ACTIVE: return "clearance";
     case ADJUST_STATE_TRACK_PREPARE: return "track_prepare";
     case ADJUST_STATE_TRACK_ACTIVE: return "track";
+    case ADJUST_STATE_HYDRAULIC_ACTIVE: return "hydraulic";
     case ADJUST_STATE_TRACK_EXITING: return "track_exiting";
     case ADJUST_STATE_ABORTED: return "aborted";
     default: return "unknown";
@@ -258,7 +260,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 
     printf("[ECU BUILD] profile=%s build_profile=%s policy=%s "
            "remote_range_deg=%s axis_mask=0x0F "
-           "drive_rpdo=%s can3_rpdo=0 "
+           "drive_rpdo=%s can3_rpdo=%s "
            "mapping_write=%u flash_write=0 brake_control=none\r\n",
            ECU_BUILD_PROFILE_TEXT,
            ECU_BUILD_PROFILE_TEXT,
@@ -268,12 +270,17 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
                ECU_CANOPEN_COMMISSIONING_POLICY ==
                ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED &&
                ECU_COMMISSIONING_STEER_ONLY_MODE == 0),
+           enabled_text_from_int(
+               ECU_ENABLE_CAN3_LIFT_CANOPEN &&
+               ECU_CANOPEN_COMMISSIONING_POLICY ==
+                   ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED &&
+               ECU_COMMISSIONING_STEER_ONLY_MODE == 0),
            (unsigned int)ECU_ENABLE_MAINTENANCE_SDO_WRITES);
 
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
            "frames=%lu dec_err=%lu link=%s "
            "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s "
-           "estop=%s diag=%s\r\n",
+           "estop=%s diag=%s remote[steer=%d thr=%d clr=%d trk=%d ch14=%u]\r\n",
            (unsigned long)snapshot->now_ms,
            (unsigned long)snapshot->executor_sequence,
            status_led_pattern_text(snapshot->status_led_pattern),
@@ -289,7 +296,12 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            authority_state_text(snapshot->authority_state),
            adjust_state_text(snapshot->adjust_state),
            estop_state_text(snapshot->estop_state),
-           diag_code_name(snapshot->diagnostic));
+           diag_code_name(snapshot->diagnostic),
+           (int)snapshot->remote_steer_per_mille,
+           (int)snapshot->remote_throttle_per_mille,
+           (int)snapshot->remote_clearance_per_mille,
+           (int)snapshot->remote_track_per_mille,
+           (unsigned int)snapshot->sbus_ppm_channels[ECU_SBUS_CH_TRACK]);
 
     /* Keep one compact command line outside verbose mode.  During vehicle
      * commissioning this is the minimum evidence needed to distinguish a
@@ -298,7 +310,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
      * interfere with realtime motion.
      */
     printf("[ECU CMD] src=%u mode=%u gear=%u speed_milli=%ld steer_cdeg=[%ld,%ld,%ld,%ld] "
-           "brake=%s hv=%s mos8=%s res[pwr=%u mot=%u]\r\n",
+           "brake=%s hv=%s hv_fb=%s hv_latch=%s res[pwr=%u mot=%u]\r\n",
            (unsigned int)snapshot->source,
            (unsigned int)snapshot->motion_mode,
            (unsigned int)snapshot->active_gear,
@@ -309,6 +321,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (long)snapshot->target_steer_centi_deg[3],
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
+           bool_text(snapshot->high_voltage_feedback_ready),
            bool_text(snapshot->high_voltage_relay_latched),
            (unsigned int)snapshot->power_result,
            (unsigned int)snapshot->motion_result);
@@ -346,6 +359,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
     printf("[ECU CAN2 PDO] q=%lu drop=%lu tx=%lu tx_err=%lu state=%u group=%lu "
            "exp=%u done=%u fail=%u inflight=%u last_fail[g=%lu cob=0x%03x n=%u e=%ld] "
            "fresh[d=0x%02x s=0x%02x] fault[d=0x%02x s=0x%02x] "
+           "presteer[hold=%s ready=%s track_ready=%s miss=0x%02x] "
            "recover=%lu consec_fail=%lu last_recover_ms=%lu\r\n",
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_dropped_count,
@@ -365,9 +379,58 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)steer_fresh_mask,
            (unsigned int)drive_fault_mask,
            (unsigned int)steer_fault_mask,
+           bool_text(snapshot->presteer_drive_hold_active),
+           bool_text(snapshot->presteer_target_reached),
+           bool_text(snapshot->track_assist_steer_approximately_ready),
+           (unsigned int)snapshot->presteer_missing_axis_mask,
            (unsigned long)snapshot->can2_realtime_transient_recovery_count,
            (unsigned long)snapshot->can2_realtime_consecutive_failure_count,
            (unsigned long)snapshot->can2_realtime_last_recovery_ms);
+
+    /* Keep hydraulic commissioning observable without enabling the full verbose
+     * monitor.  The full verbose block is intentionally heavy and can disturb
+     * CAN2 realtime steering; this compact line exposes only the pump/valve
+     * gates that decide whether hydraulic motion is allowed.
+     */
+    const canopen_node_feedback_t *pump_feedback =
+        &snapshot->can3_canopen_snapshot.node_feedback[ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID];
+    printf("[ECU HYD] hyd=%s valve_cmd=0x%08lx valve_req=0x%08lx valve_out=0x%08lx "
+           "valve_block=0x%08lx pump[state=%u fb=%s vel=%ld timeout=%lu] "
+           "pump_tpdo[fresh=%s t0=%lu/%lu t1=%lu/%lu sw=0x%04x flt=0x%08lx] "
+           "lift[state=%u req=%d active=%d fresh=0x%02x fail=%lu] "
+           "can3[tx=%lu err=%lu q=%lu drop=%lu st=%u grp=%lu done=%u fail=%u] "
+           "res[lift=%u io=%u]\r\n",
+           bool_text(snapshot->hydraulic_enable),
+           (unsigned long)snapshot->hydraulic_valve_mask,
+           (unsigned long)snapshot->hydraulic_requested_valve_mask,
+           (unsigned long)snapshot->hydraulic_applied_valve_mask,
+           (unsigned long)snapshot->hydraulic_interlocked_valve_mask,
+           (unsigned int)snapshot->hydraulic_pump_state,
+           bool_text(snapshot->hydraulic_pump_feedback_valid),
+           (long)snapshot->hydraulic_pump_actual_velocity_units,
+           (unsigned long)snapshot->hydraulic_pump_start_timeout_count,
+           bool_text(pump_feedback->feedback_fresh),
+           (unsigned long)pump_feedback->tpdo0_rx_count,
+           (unsigned long)pump_feedback->last_tpdo0_ms,
+           (unsigned long)pump_feedback->tpdo1_rx_count,
+           (unsigned long)pump_feedback->last_tpdo1_ms,
+           (unsigned int)pump_feedback->statusword,
+           (unsigned long)pump_feedback->fault_latched,
+           (unsigned int)snapshot->lift_interpolation_state,
+           (int)snapshot->lift_requested_direction,
+           (int)snapshot->lift_active_direction,
+           (unsigned int)snapshot->lift_feedback_fresh_mask,
+           (unsigned long)snapshot->lift_interpolation_failure_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_error_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_queued_count,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_dropped_count,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_group_state,
+           (unsigned long)snapshot->can3_canopen_snapshot.pdo_group_sequence,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_tx_complete_frames,
+           (unsigned int)snapshot->can3_canopen_snapshot.pdo_failed_frames,
+           (unsigned int)snapshot->lift_hydraulic_result,
+           (unsigned int)snapshot->local_io_result);
 
 #if ECU_DEBUG_MONITOR_VERBOSE
     printf("[ECU SBUS RAW]");
@@ -578,6 +641,30 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            motion_mode_text((ecu_motion_mode_t)snapshot->presteer_mode),
            (unsigned int)snapshot->presteer_missing_axis_mask,
            (unsigned long)snapshot->presteer_timeout_count);
+
+    printf("[ECU STEER PLAN] active=%s done=%s stale_reject=%s id=%lu "
+           "fresh=0x%02x moving=0x%02x max_dist=%ld "
+           "actual=[%ld,%ld,%ld,%ld] out=[%ld,%ld,%ld,%ld] "
+           "err=[%ld,%ld,%ld,%ld]\r\n",
+           bool_text(snapshot->steer_transition_active),
+           bool_text(snapshot->steer_transition_completed),
+           bool_text(snapshot->steer_transition_rejected_stale_feedback),
+           (unsigned long)snapshot->steer_transition_id,
+           (unsigned int)snapshot->steer_transition_feedback_fresh_mask,
+           (unsigned int)snapshot->steer_transition_moving_axis_mask,
+           (long)snapshot->steer_transition_max_distance_counts,
+           (long)snapshot->steer_transition_actual_counts[0],
+           (long)snapshot->steer_transition_actual_counts[1],
+           (long)snapshot->steer_transition_actual_counts[2],
+           (long)snapshot->steer_transition_actual_counts[3],
+           (long)snapshot->steer_transition_output_counts[0],
+           (long)snapshot->steer_transition_output_counts[1],
+           (long)snapshot->steer_transition_output_counts[2],
+           (long)snapshot->steer_transition_output_counts[3],
+           (long)snapshot->steer_transition_error_counts[0],
+           (long)snapshot->steer_transition_error_counts[1],
+           (long)snapshot->steer_transition_error_counts[2],
+           (long)snapshot->steer_transition_error_counts[3]);
 
     printf("[ECU STEER CAL] ram_override=%s valid=%s seq=%lu",
            bool_text(snapshot->steer_calibration_ram_override_enabled),
@@ -795,7 +882,11 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         }
         print_centi_value(snapshot->target_steer_centi_deg[wheel]);
     }
-    printf("]deg brake=%s hv=%s mos8=%s comm_hv=%s hyd=%s valve=0x%08lx "
+    printf("]deg brake=%s hv=%s hv_latch=%s comm_hv=%s hyd=%s "
+           "valve_cmd=0x%08lx valve_req=0x%08lx valve_out=0x%08lx "
+           "valve_block=0x%08lx valve_block_cnt=%lu "
+           "pump[state=%u fb=%s vel=%ld timeout=%lu] "
+           "lift_interp[state=%u req=%d active=%d fresh=0x%02x preload=%u fail=%lu] "
            "res[pwr=%s mot=%s lift=%s io=%s warn=%s]\r\n",
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
@@ -803,6 +894,20 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            bool_text(snapshot->commissioning_power_debug_active),
            bool_text(snapshot->hydraulic_enable),
            (unsigned long)snapshot->hydraulic_valve_mask,
+           (unsigned long)snapshot->hydraulic_requested_valve_mask,
+           (unsigned long)snapshot->hydraulic_applied_valve_mask,
+           (unsigned long)snapshot->hydraulic_interlocked_valve_mask,
+           (unsigned long)snapshot->hydraulic_valve_interlock_reject_count,
+           (unsigned int)snapshot->hydraulic_pump_state,
+           bool_text(snapshot->hydraulic_pump_feedback_valid),
+           (long)snapshot->hydraulic_pump_actual_velocity_units,
+           (unsigned long)snapshot->hydraulic_pump_start_timeout_count,
+           (unsigned int)snapshot->lift_interpolation_state,
+           (int)snapshot->lift_requested_direction,
+           (int)snapshot->lift_active_direction,
+           (unsigned int)snapshot->lift_feedback_fresh_mask,
+           (unsigned int)snapshot->lift_preload_points_completed,
+           (unsigned long)snapshot->lift_interpolation_failure_count,
            device_result_text(snapshot->power_result),
            device_result_text(snapshot->motion_result),
            device_result_text(snapshot->lift_hydraulic_result),

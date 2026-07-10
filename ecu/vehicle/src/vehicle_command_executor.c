@@ -18,6 +18,8 @@ typedef struct {
     warning_light_device_state_t warning_light;
     vehicle_motion_command_mailbox_t motion_mailbox;
     vehicle_can3_command_mailbox_t can3_mailbox;
+    uint32_t track_gate_requested_valve_mask;
+    uint32_t track_gate_request_timestamp_ms;
 } vehicle_executor_runtime_t;
 
 static vehicle_executor_runtime_t s_runtime;
@@ -144,12 +146,175 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.presteer_drive_hold_active;
     executor->presteer_target_reached =
         s_runtime.motion.presteer_target_reached;
+    executor->track_assist_steer_approximately_ready =
+        s_runtime.motion.track_assist_steer_approximately_ready;
     executor->presteer_mode =
         (uint8_t)s_runtime.motion.presteer_mode;
     executor->presteer_missing_axis_mask =
         s_runtime.motion.presteer_missing_axis_mask;
     executor->presteer_timeout_count =
         s_runtime.motion.presteer_timeout_count;
+    executor->steer_transition_active =
+        s_runtime.motion.steer_transition_planner.active;
+    executor->steer_transition_completed =
+        s_runtime.motion.steer_transition_planner.completed;
+    executor->steer_transition_rejected_stale_feedback =
+        s_runtime.motion.steer_transition_planner.rejected_stale_feedback;
+    executor->steer_transition_id =
+        s_runtime.motion.steer_transition_planner.transition_id;
+    executor->steer_transition_feedback_fresh_mask =
+        s_runtime.motion.steer_transition_planner.feedback_fresh_mask;
+    executor->steer_transition_moving_axis_mask =
+        s_runtime.motion.steer_transition_planner.moving_axis_mask;
+    executor->steer_transition_max_distance_counts =
+        s_runtime.motion.steer_transition_planner.max_distance_counts;
+    memcpy(executor->steer_transition_actual_counts,
+           s_runtime.motion.steer_transition_planner.actual_position_counts,
+           sizeof(executor->steer_transition_actual_counts));
+    memcpy(executor->steer_transition_output_counts,
+           s_runtime.motion.steer_transition_planner.output_target_counts,
+           sizeof(executor->steer_transition_output_counts));
+    memcpy(executor->steer_transition_error_counts,
+           s_runtime.motion.steer_transition_planner.error_counts,
+           sizeof(executor->steer_transition_error_counts));
+}
+
+static void update_executor_lift_hydraulic_diagnostics(vehicle_executor_state_t *executor)
+{
+    if (executor == 0) {
+        return;
+    }
+    executor->hydraulic_requested_valve_mask =
+        s_runtime.lift_hydraulic.last_requested_valve_mask;
+    executor->hydraulic_applied_valve_mask =
+        s_runtime.lift_hydraulic.last_valve_mask;
+    executor->hydraulic_interlocked_valve_mask =
+        s_runtime.lift_hydraulic.last_interlocked_valve_mask;
+    executor->hydraulic_valve_interlock_reject_count =
+        s_runtime.lift_hydraulic.valve_interlock_reject_count;
+    executor->hydraulic_pump_state =
+        (uint8_t)s_runtime.lift_hydraulic.pump_state;
+    executor->hydraulic_pump_feedback_valid =
+        s_runtime.lift_hydraulic.pump_feedback_valid;
+    executor->hydraulic_pump_actual_velocity_units =
+        s_runtime.lift_hydraulic.pump_actual_velocity_units;
+    executor->hydraulic_pump_start_timeout_count =
+        s_runtime.lift_hydraulic.pump_start_timeout_count;
+    executor->lift_interpolation_state =
+        (uint8_t)s_runtime.lift_hydraulic.lift_interpolation_state;
+    executor->lift_requested_direction =
+        s_runtime.lift_hydraulic.lift_requested_direction;
+    executor->lift_active_direction =
+        s_runtime.lift_hydraulic.lift_active_direction;
+    executor->lift_feedback_fresh_mask =
+        (uint8_t)s_runtime.lift_hydraulic.lift_feedback_fresh_mask;
+    executor->lift_preload_points_completed =
+        s_runtime.lift_hydraulic.lift_preload_points_completed;
+    executor->lift_interpolation_failure_count =
+        s_runtime.lift_hydraulic.lift_interpolation_failure_count;
+}
+
+static uint32_t track_valve_mask(void)
+{
+    return ECU_HYD_VALVE_TRACK_EXTEND_MASK | ECU_HYD_VALVE_TRACK_RETRACT_MASK;
+}
+
+/* CAN3 may request the track-width valve only after CAN2 steering has reached
+ * the commanded sideways posture.  The remote/arbiter layer expresses intent;
+ * this executor gate uses the CAN2 device feedback-derived presteer state.
+ */
+static bool timestamp_reached(uint32_t now_ms, uint32_t reference_ms)
+{
+    return (int32_t)(now_ms - reference_ms) >= 0;
+}
+
+static void update_track_valve_gate_session(const vehicle_actuator_command_t *command,
+                                            uint32_t command_timestamp_ms)
+{
+    uint32_t requested_track_mask =
+        command != 0 ? (command->hydraulic_valve_mask & track_valve_mask()) : 0U;
+
+    if (requested_track_mask == 0U) {
+        s_runtime.track_gate_requested_valve_mask = 0U;
+        s_runtime.track_gate_request_timestamp_ms = 0U;
+        return;
+    }
+
+    if (requested_track_mask != s_runtime.track_gate_requested_valve_mask) {
+        s_runtime.track_gate_requested_valve_mask = requested_track_mask;
+        s_runtime.track_gate_request_timestamp_ms = command_timestamp_ms;
+    }
+}
+
+static void gate_track_valves_until_presteer_ready(vehicle_actuator_command_t *command,
+                                                  uint32_t command_timestamp_ms)
+{
+    if (command == 0 || !command->track_assist_requested) {
+        update_track_valve_gate_session(command, command_timestamp_ms);
+        return;
+    }
+
+    update_track_valve_gate_session(command, command_timestamp_ms);
+
+    bool ready_was_evaluated_after_this_request =
+        s_runtime.track_gate_request_timestamp_ms == 0U ||
+        timestamp_reached(s_runtime.motion.track_assist_steer_ready_eval_ms,
+                          s_runtime.track_gate_request_timestamp_ms);
+
+    if (!s_runtime.motion.track_assist_steer_approximately_ready ||
+        !ready_was_evaluated_after_this_request) {
+        command->hydraulic_valve_mask &= ~track_valve_mask();
+        command->track_rate_mm_s = 0.0f;
+    }
+}
+
+/* CAN2 drive current assist is allowed only after the CAN3 hydraulic adapter
+ * has actually opened a track-width valve.  This prevents a wheel from pushing
+ * against a closed hydraulic circuit while the pump is still starting.
+ */
+static void gate_track_assist_current_until_valve_open(vehicle_actuator_command_t *command)
+{
+    if (command == 0 || !command->track_assist_requested) {
+        if (command != 0) {
+            command->track_assist_active = false;
+        }
+        return;
+    }
+
+    bool valve_open =
+        (s_runtime.lift_hydraulic.last_valve_mask & track_valve_mask()) != 0U;
+    command->track_assist_active = valve_open;
+    if (!valve_open) {
+        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+            command->track_assist_current_10ma[wheel] = 0;
+        }
+    }
+}
+
+static bool apply_can3_safe_default(vehicle_executor_state_t *executor,
+                                    canopen_master_service_t *can3_lift_hydraulic_canopen,
+                                    dio_service_t *dio,
+                                    const ecu_hardware_config_t *config,
+                                    uint32_t now_ms)
+{
+    vehicle_actuator_command_t safe_command;
+
+    if (executor == 0 || can3_lift_hydraulic_canopen == 0 ||
+        dio == 0 || config == 0) {
+        return false;
+    }
+
+    vehicle_actuator_command_safe_default(&safe_command);
+    safe_command.source = COMMAND_SOURCE_SAFETY;
+    executor->lift_hydraulic_result =
+        lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
+                                    can3_lift_hydraulic_canopen,
+                                    dio,
+                                    config,
+                                    &safe_command,
+                                    now_ms);
+    update_executor_lift_hydraulic_diagnostics(executor);
+    return executor->lift_hydraulic_result == ECU_DEVICE_APPLY_OK;
 }
 
 void vehicle_command_executor_init(vehicle_executor_state_t *executor)
@@ -167,6 +332,7 @@ void vehicle_command_executor_init(vehicle_executor_state_t *executor)
     memset(&s_runtime, 0, sizeof(s_runtime));
     vehicle_executor_runtime_init_once();
     update_executor_motion_diagnostics(executor);
+    update_executor_lift_hydraulic_diagnostics(executor);
 }
 
 bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
@@ -232,6 +398,7 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
         return true;
     }
     (void)command_timestamp_ms;
+    gate_track_assist_current_until_valve_open(&command);
 
     executor->motion_result = motion_device_apply(&s_runtime.motion,
                                                   can2_motion_canopen,
@@ -272,11 +439,22 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
                                     &command,
                                     &command_sequence,
                                     &command_timestamp_ms)) {
-        executor->lift_hydraulic_result = ECU_DEVICE_APPLY_OK;
-        return true;
+        return apply_can3_safe_default(executor,
+                                       can3_lift_hydraulic_canopen,
+                                       dio,
+                                       config,
+                                       now_ms);
+    }
+    if ((uint32_t)(now_ms - command_timestamp_ms) >
+        ECU_CAN3_COMMAND_STALE_TIMEOUT_MS) {
+        return apply_can3_safe_default(executor,
+                                       can3_lift_hydraulic_canopen,
+                                       dio,
+                                       config,
+                                       now_ms);
     }
     (void)command_sequence;
-    (void)command_timestamp_ms;
+    gate_track_valves_until_presteer_ready(&command, command_timestamp_ms);
 
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
@@ -285,6 +463,7 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
                                     config,
                                     &command,
                                     now_ms);
+    update_executor_lift_hydraulic_diagnostics(executor);
     return executor->lift_hydraulic_result == ECU_DEVICE_APPLY_OK;
 }
 

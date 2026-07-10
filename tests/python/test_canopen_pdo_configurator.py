@@ -59,11 +59,11 @@ def test_v2_profile_adds_rpdo2_and_synchronous_types(root: pathlib.Path) -> None
     assert by_object[(0x1601, 0x03)].value == 0x607A0020
     assert by_object[(0x1601, 0x00)].value == 3
     assert by_object[(0x1402, 0x01)].value == 0x0000040D
-    assert by_object[(0x1402, 0x02)].value == 4
+    assert by_object[(0x1402, 0x02)].value == 1
     assert by_object[(0x1602, 0x00)].value == 1
     assert by_object[(0x1602, 0x01)].value == 0x60C10120
     assert by_object[(0x1800, 0x02)].value == 1
-    assert by_object[(0x1801, 0x02)].value == 4
+    assert by_object[(0x1801, 0x02)].value == 10
 
 
 def test_v2_rpdo3_current_and_unmanaged_tpdos_are_zero_mapped(root: pathlib.Path) -> None:

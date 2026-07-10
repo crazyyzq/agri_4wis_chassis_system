@@ -78,7 +78,7 @@ def test_steering_remote_follow_uses_latest_target_trajectory_not_raw_jitter(roo
         "ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2",
-        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (4000000)",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (5000000)",
     ]:
         assert token in config_h, token
     cache_fn = motion_c.split("static bool cache_latest_steer_target", 1)[1].split(
@@ -94,6 +94,35 @@ def test_can2_drive_velocity_does_not_queue_conflicting_group_while_steering_act
     motion_c = read(root, "ecu/devices/src/motion_device.c")
 
     assert "canopen_pdo_lane_busy_for_other_group" in motion_c
+
+
+def test_can2_motion_pdo_requires_high_voltage_feedback(root: pathlib.Path) -> None:
+    """Unpowered drives must not receive an endless queue/cancel stream."""
+
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    ready_fn = motion_c.split("static bool can2_motion_high_voltage_ready", 1)[1].split(
+        "static bool can2_realtime_motion_state_needs_recovery", 1
+    )[0]
+    assert "state->last_motion_command.high_voltage_enable" in ready_fn
+    assert "state->last_motion_command.high_voltage_feedback_ready" in ready_fn
+    assert "!state->last_motion_command.high_voltage_disable_request" in ready_fn
+    flush_fn = motion_c.split("ecu_device_apply_result_t motion_device_flush_realtime", 1)[1]
+    assert "if (!can2_motion_high_voltage_ready(state))" in flush_fn
+    high_voltage_gate = flush_fn.split(
+        "if (!can2_motion_high_voltage_ready(state))", 1
+    )[1].split("send_can2_feedback_sync_if_due", 1)[0]
+    assert "return ECU_DEVICE_APPLY_OK" in high_voltage_gate
+    apply_fn = motion_c.split("ecu_device_apply_result_t motion_device_apply", 1)[1].split(
+        "ecu_device_apply_result_t motion_device_flush_realtime", 1
+    )[0]
+    assert (
+        "state->last_motion_command.high_voltage_enable =\n"
+        "        command->high_voltage_enable"
+    ) in apply_fn
+    assert (
+        "state->last_motion_command.high_voltage_feedback_ready =\n"
+        "        command->high_voltage_feedback_ready"
+    ) in apply_fn
     drive_flush = motion_c.split("static ecu_device_apply_result_t flush_drive_velocity_realtime", 1)[1].split(
         "static void finish_completed_steer_group", 1
     )[0]
@@ -526,7 +555,8 @@ def test_canopen_controlword_sequence_is_not_coalesced(root: pathlib.Path) -> No
     assert "preserve_order" in service_h
     assert "request.preserve_order = canopen_master_sdo_write_requires_order" in service_c
     assert "queued->preserve_order || request.preserve_order" in service_c
-    assert "queued->value != request.value" in service_c
+    assert "never coalesce them" in service_c
+    assert "queued->value != request.value" not in service_c
     assert "queued->node_id == node_id" in service_c
     assert "queued->index == index" in service_c
 
@@ -621,6 +651,16 @@ def test_disable_enable_recovery_is_local_and_does_not_reset_drive_setup(root: p
     assert "CANOPEN_MASTER_DEBUG_COMMAND_NMT_RESET" not in motion_c
     assert "canopen_master_service_cancel_realtime_pdo" in service_h
     assert "canopen_master_service_cancel_realtime_pdo" in service_c
+    assert "canopen_master_service_recover_transport" in service_h
+
+    recover_transport_fn = service_c.split(
+        "bool canopen_master_service_recover_transport", 1
+    )[1].split("void canopen_master_service_note_pdo_safety_inhibit", 1)[0]
+    assert "intc_m_disable_irq" in recover_transport_fn
+    assert "can_deinit(can)" in recover_transport_fn
+    assert "can_init(can," in recover_transport_fn
+    assert "data->config" in recover_transport_fn
+    assert "intc_m_enable_irq_with_priority" in recover_transport_fn
 
 
 def test_can2_realtime_transient_pdo_failure_recovers_without_latching(root: pathlib.Path) -> None:
@@ -644,6 +684,7 @@ def test_can2_realtime_transient_pdo_failure_recovers_without_latching(root: pat
         "static bool fail_active_drive_group", 1
     )[0]
     assert "canopen_master_service_cancel_realtime_pdo(canopen)" in recover_fn
+    assert "canopen_master_service_recover_transport(canopen)" in recover_fn
     assert "state->steer_pending_target[wheel] = true" in recover_fn
     assert "state->drive_pending_velocity[wheel] = true" in recover_fn
     assert "state->steer_group_degraded = latch_required" in recover_fn
@@ -669,6 +710,21 @@ def test_steering_realtime_coalesces_against_last_command_not_feedback_error(roo
     assert "steer_last_commanded_position_valid" in build_fn
     assert "steer_last_commanded_position_counts" in build_fn
     assert "steer_last_position_counts" not in build_fn
+
+    ready_fn = motion_c.split("static bool steer_axis_realtime_ready", 1)[1].split(
+        "static bool all_steer_axes_realtime_ready", 1
+    )[0]
+    assert "bool feedback_valid" in ready_fn
+    assert "if (!feedback_valid)" in ready_fn
+    assert "state->steer_realtime_enabled[wheel] = false" in ready_fn
+    assert "state->steer_pending_target[wheel] = true" not in ready_fn
+    assert "state->steer_realtime_enabled[wheel] = true" not in ready_fn
+
+    gate_fn = motion_c.split("static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason", 1)[1].split(
+        "static bool motion_device_update_steer_safety_gate", 1
+    )[0]
+    assert "!command->high_voltage_enable" in gate_fn
+    assert "!command->high_voltage_feedback_ready" in gate_fn
 
 
 def test_steering_realtime_uses_pdo_batch_scheduler(root: pathlib.Path) -> None:
@@ -1078,12 +1134,12 @@ def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) 
 
     assert "#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)" in config_h
     assert "#define ECU_REMOTE_MAX_STEER_DEG          (50.0f)" in config_h
-    assert "#define ECU_STEER_POSITION_SPEED_UNITS               (4000000)" in config_h
-    assert "#define ECU_SERVO_COMMISSIONING_MAX_RPM              (2400.0f)" in config_h
+    assert "#define ECU_STEER_POSITION_SPEED_UNITS               (5000000)" in config_h
+    assert "#define ECU_SERVO_MOTION_MAX_RPM                     (3000.0f)" in config_h
     assert "#define ECU_SERVO_COMMISSIONING_MAX_ACCEL_RPS2       (50.0f)" in config_h
     assert "#define ECU_SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 (500000)" in config_h
-    assert "#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_COMMISSIONING_MAX_RPM" in config_h
-    assert "ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM" in config_h
+    assert "#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_MOTION_MAX_RPM" in config_h
+    assert "ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM" in config_h
     assert "#define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)" in config_h
     assert "#define ECU_STEER_GEAR_REDUCTION                     (490.0f)" in config_h
     assert "apply_commissioning_steer_only_direct_targets" in command_arbiter_c
@@ -1230,7 +1286,7 @@ def test_servo_brake_release_is_drive_internal_owner(root: pathlib.Path) -> None
         assert "ECU_SERVO_BRAKE_RELEASE_OUTPUT_ACTIVE_LEVEL" not in text
         assert "ECU_SERVO_BRAKE_RELEASE_CANOPEN_ACTIVE_BIT" not in text
         assert "servo_drive_canopen_set_output_state" not in text
-    assert "CAN3 servo outputs are disabled in the V7 static-contract commit" in lift_c
+    assert "not used to synthesize lift-servo brake release" in lift_c
 
 
 def test_servo_brakes_are_not_driven_by_pcb_dio(root: pathlib.Path) -> None:
@@ -1538,6 +1594,9 @@ def test_runtime_monitor_reports_remote_fsm_states(root: pathlib.Path) -> None:
     assert "out->arm_state = s_runtime.remote_request.arm_state;" in tasks_c
     assert "out->gear_state = s_runtime.remote_request.gear_state;" in tasks_c
     assert "out->power_state = s_runtime.remote_request.power_state;" in tasks_c
+    assert "bool high_voltage_feedback_ready;" in monitor_h
+    assert "out->high_voltage_feedback_ready =" in tasks_c
+    assert "hv_fb=%s" in monitor_c
     assert "out->authority_state = s_runtime.remote_request.authority_state;" in tasks_c
     assert "out->adjust_state = s_runtime.remote_request.adjust_state;" in tasks_c
 
@@ -1645,8 +1704,8 @@ def test_canopen_command_cache_updates_only_after_successful_queueing(root: path
     )
 
 
-def test_lift_can3_legacy_sdo_output_is_disabled_for_static_pdo_contract(root: pathlib.Path) -> None:
-    """V7 removes normal CAN3 servo SDO motion until standard PDO output is implemented."""
+def test_lift_can3_uses_standard_pdo_not_legacy_servo_sdo_helpers(root: pathlib.Path) -> None:
+    """CAN3 lift/hydraulic motion must use the CAN3-owned PDO service path."""
 
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
@@ -1660,7 +1719,9 @@ def test_lift_can3_legacy_sdo_output_is_disabled_for_static_pdo_contract(root: p
     ]:
         assert forbidden not in lift_c, forbidden
 
-    assert "CAN3 servo outputs are disabled in the V7 static-contract commit" in lift_c
+    assert "canopen_pdo_build_interpolated_position_rpdo2" in lift_c
+    assert "canopen_pdo_build_velocity_rpdo0" in lift_c
+    assert "CAN3-owned CANopen service" in lift_c
 
 
 def test_commissioning_power_debug_can_request_hv_without_motion(root: pathlib.Path) -> None:
@@ -1853,7 +1914,7 @@ def test_no_raw_canopen_project_defaults_outside_config(root: pathlib.Path) -> N
         assert match is None, f"{rel}: CANopen raw value {match.group(0)} belongs in config"
 
 
-def test_dio_active_low_is_limited_to_managed_outputs(root: pathlib.Path) -> None:
+def test_dio_polarity_conversion_is_limited_to_managed_outputs(root: pathlib.Path) -> None:
     dio_h = read(root, "ecu/drivers/dio/include/dio_service.h")
     dio_c = read(root, "ecu/drivers/dio/src/dio_service.c")
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
@@ -1868,6 +1929,7 @@ def test_lift_hydraulic_canopen_command_cache_includes_track_and_pump_intent(roo
 
     for token in [
         "state->last_lift_command.track_rate_mm_s != command->track_rate_mm_s",
+        "state->last_lift_command.height_rate_mm_s != command->height_rate_mm_s",
         "state->last_lift_command.hydraulic_enable != command->hydraulic_enable",
         "state->last_lift_command.hydraulic_valve_mask != command->hydraulic_valve_mask",
     ]:
@@ -1876,62 +1938,372 @@ def test_lift_hydraulic_canopen_command_cache_includes_track_and_pump_intent(roo
     assert "servo_drive_canopen_run_velocity_mode" not in lift_c
 
 
+def test_hydraulic_pump_velocity_is_reverse_only_protected(root: pathlib.Path) -> None:
+    """Node13 pump direction is safety-critical: positive motor velocity must never be emitted."""
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "#define ECU_HYDRAULIC_PUMP_DIRECTION_SIGN (-1)" in config_h
+    assert "#define ECU_HYDRAULIC_PUMP_ALLOW_POSITIVE_VELOCITY (0)" in config_h
+    assert "hydraulic_pump_safe_velocity_units" in lift_h
+    assert "hydraulic_pump_safe_velocity_units" in lift_c
+    assert "ECU_HYDRAULIC_PUMP_DIRECTION_SIGN" in lift_c
+    assert "ECU_HYDRAULIC_PUMP_ALLOW_POSITIVE_VELOCITY" in lift_c
+    assert "ECU_HYDRAULIC_PUMP_MAX_REVERSE_VELOCITY_UNITS" in lift_c
+    assert "ECU_HYDRAULIC_PUMP_MIN_WORK_VELOCITY_UNITS" in lift_c
+    assert "requested_velocity_units <= 0" in lift_c
+    assert "commanded > 0" in lift_c
+    assert "return 0;" in lift_c
+    assert "last_pump_controlword" in lift_h
+    assert "last_pump_velocity_command_valid" in lift_h
+    assert "state->last_pump_controlword == controlword" in lift_c
+    assert "state->last_pump_controlword = controlword" in lift_c
+    assert "state->last_pump_velocity_command_valid = true" in lift_c
+    assert "#define ECU_HYDRAULIC_PUMP_WORK_RPM                  (1500.0f)" in config_h
+    assert "#define ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)" in config_h
+    assert "#define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM        (800.0f)" in config_h
+
+
+def test_hydraulic_valves_wait_for_fresh_node13_reverse_speed_feedback(
+    root: pathlib.Path,
+) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "HYDRAULIC_PUMP_STATE_STOPPED",
+        "HYDRAULIC_PUMP_STATE_STARTING",
+        "HYDRAULIC_PUMP_STATE_VALVE_READY",
+        "HYDRAULIC_PUMP_STATE_START_TIMEOUT",
+        "pump_actual_velocity_units",
+        "pump_feedback_valid",
+        "pump_start_timeout_count",
+    ]:
+        assert token in lift_h, token
+
+    vehicle_types_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    for token in [
+        "hydraulic_pump_state",
+        "hydraulic_pump_feedback_valid",
+        "hydraulic_pump_actual_velocity_units",
+        "hydraulic_pump_start_timeout_count",
+    ]:
+        assert token in vehicle_types_h, token
+        assert token in executor_c, token
+        assert token in monitor_h, token
+        assert token in tasks_c, token
+
+    for token in [
+        "read_hydraulic_pump_feedback",
+        "canopen_master_service_get_node_feedback",
+        "feedback.tpdo0_valid",
+        "feedback.last_tpdo0_ms",
+        "feedback.tpdo1_valid",
+        "feedback.statusword",
+        "feedback.fault_latched",
+        "state->pump_actual_velocity_units <",
+        "-ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS",
+        "ECU_HYDRAULIC_PUMP_SPEED_READY_SAMPLES",
+        "ECU_HYDRAULIC_PUMP_START_TIMEOUT_MS",
+        "ECU_HYDRAULIC_VALVE_CHANGE_DEADTIME_MS",
+        "close_hydraulic_valves(state, dio, config)",
+    ]:
+        assert token in lift_c, token
+
+    assert "ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS" in config_h
+
+
+def test_can3_lift_interpolation_uses_feedback_and_sync_rpdo2(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    pdo_h = read(root, "ecu/drivers/canopen/include/canopen_pdo_profile.h")
+    pdo_c = read(root, "ecu/drivers/canopen/src/canopen_pdo_profile.c")
+    service_h = read(root, "ecu/drivers/canopen/include/canopen_master_service.h")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+
+    for token in [
+        "ECU_CANOPEN_LIFT_INTERPOLATION_PERIOD_MS",
+        "ECU_LIFT_SHORTEST_POSITION_COUNTS",
+        "ECU_LIFT_LONGEST_POSITION_COUNTS",
+        "ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN",
+        "ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX",
+    ]:
+        assert token in config_h
+
+    assert "CANOPEN_PDO_MODE_INTERPOLATED_POSITION (7)" in pdo_h
+    assert "rpdo2_cob_id" in pdo_h
+    assert "canopen_pdo_build_interpolated_position_rpdo2" in pdo_h
+    assert "profile->required_mode != CANOPEN_PDO_MODE_INTERPOLATED_POSITION" in pdo_c
+    assert "CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT" in service_h
+    assert "CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT" in service_c
+
+    for token in [
+        "refresh_lift_feedback",
+        "canopen_master_service_get_node_feedback",
+        "ECU_CANOPEN_OBJ_INTERPOLATION_TIME_PERIOD",
+        "ECU_CANOPEN_OBJ_INTERPOLATION_MODE",
+        "canopen_pdo_build_interpolated_position_rpdo2",
+        "canopen_master_service_queue_pdo_batch_with_descriptor",
+        ".sync_after_arm = true",
+        "command->high_voltage_feedback_ready",
+    ]:
+        assert token in lift_c
+
+    interpolation_mode_write = lift_c.split(
+        "ECU_CANOPEN_OBJ_INTERPOLATION_MODE", 1
+    )[1].split(") && node_ok;", 1)[0]
+    assert "2U," in interpolation_mode_write
+
+    assert "height_rate = ECU_REMOTE_MAX_HEIGHT_RATE_MM_S" in arbiter_c
+    assert "height_rate = -ECU_REMOTE_MAX_HEIGHT_RATE_MM_S" in arbiter_c
+    assert "out->hydraulic_enable = true;" in arbiter_c
+
+
+def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
+    root: pathlib.Path,
+) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "LIFT_INTERPOLATION_STATE_CONFIGURING",
+        "LIFT_INTERPOLATION_STATE_PRELOADING",
+        "LIFT_INTERPOLATION_STATE_TRIGGERING",
+        "LIFT_INTERPOLATION_STATE_RUNNING",
+        "LIFT_INTERPOLATION_STATE_STOPPING",
+        "LIFT_INTERPOLATION_STATE_FAULT",
+    ]:
+        assert token in lift_h
+
+    setup = lift_c.split("static bool begin_lift_interpolation_setup", 1)[1]
+    shutdown_at = setup.index("SERVO_DRIVE_CONTROL_SHUTDOWN")
+    clear_at = setup.index("ECU_CANOPEN_OBJ_INTERPOLATION_BUFFER_CLEAR")
+    switch_on_at = setup.index("SERVO_DRIVE_CONTROL_SWITCH_ON")
+    enable_at = setup.index("SERVO_DRIVE_CONTROL_ENABLE_OPERATION")
+    assert shutdown_at < clear_at < switch_on_at < enable_at
+    assert "ECU_CANOPEN_OBJ_INTERPOLATION_MODE" in setup
+    assert "0U, 2U, -1" in setup
+    assert "ECU_CANOPEN_LIFT_PRELOAD_POINTS" in lift_c
+    assert "CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_TRIGGER" in lift_c
+    assert "SERVO_DRIVE_CONTROL_ENABLE_OPERATION" in lift_c
+    assert "state->lift_requested_direction !=" in lift_c
+    assert "ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS" in lift_c
+    assert "canopen_master_service_sdo_download_idle" in lift_c
+
+    assert "#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (20U)" in config_h
+    assert "#define ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC  (100000)" in config_h
+    assert "#define ECU_LIFT_SYNC_RECOVERY_TOLERANCE_COUNTS      (10000)" in config_h
+
+
+def test_can3_lift_group_sync_does_not_compete_with_periodic_feedback_sync(
+    root: pathlib.Path,
+) -> None:
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    service_h = read(
+        root, "ecu/drivers/canopen/include/canopen_master_service.h"
+    )
+    step = re.search(
+        r"void ecu_task_can3_lift_hydraulic_step[\s\S]*?\n}\n\n"
+        r"void ecu_task_io_service_step",
+        tasks_c,
+    )
+    assert step
+    body = step.group(0)
+    flush_at = body.index("vehicle_command_executor_flush_can3_lift_hydraulic")
+    idle_at = body.index("canopen_master_service_realtime_pdo_idle")
+    sync_at = body.index("canopen_master_service_send_feedback_sync", idle_at)
+    assert flush_at < idle_at < sync_at
+    assert "snapshot.last_sync_tx_ms" in body
+    assert "canopen_master_service_realtime_pdo_idle" in service_h
+    assert "canopen_master_service_send_feedback_sync" in service_h
+    assert "canopen_master_service_sdo_download_idle" in service_h
+
+
 def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
 
-    def bit_value(name: str) -> int:
+    def mask_value(name: str) -> int:
+        zero_match = re.search(rf"#define\s+{name}\s+\(0UL\)", config_h)
+        if zero_match:
+            return 0
         match = re.search(rf"#define\s+{name}\s+\(1UL\s*<<\s*(\d+)\)", config_h)
-        assert match, f"missing single-bit macro {name}"
-        return 1 << int(match.group(1))
+        if match:
+            return 1 << int(match.group(1))
+        alias = re.search(rf"#define\s+{name}\s+(ECU_HYD_VALVE\d_MASK)", config_h)
+        assert alias, f"missing mask macro {name}"
+        return mask_value(alias.group(1))
 
     assert "#define ECU_DIO_BRAKE_RELEASE_MASK       (0UL)" in config_h
 
     dio_names = [
         "ECU_DIO_HYDRAULIC_ENABLE_MASK",
-        "ECU_DIO_HORN_MASK",
         "ECU_DIO_HEADLIGHT_MASK",
+        "ECU_DIO_HORN_MASK",
+        "ECU_DIO_HIGH_VOLTAGE_RELAY_MASK",
+        "ECU_DIO_RESERVED3_MASK",
         "ECU_DIO_LEFT_INDICATOR_MASK",
         "ECU_DIO_RIGHT_INDICATOR_MASK",
-        "ECU_DIO_HIGH_VOLTAGE_RELAY_MASK",
     ]
     hydraulic_names = [
+        "ECU_HYD_VALVE1_MASK",
+        "ECU_HYD_VALVE2_MASK",
+        "ECU_HYD_VALVE3_MASK",
+        "ECU_HYD_VALVE4_MASK",
+        "ECU_HYD_VALVE5_MASK",
+        "ECU_HYD_VALVE6_MASK",
         "ECU_HYD_VALVE_TRACK_EXTEND_MASK",
         "ECU_HYD_VALVE_TRACK_RETRACT_MASK",
-        "ECU_HYD_VALVE_LIFT_UP_MASK",
-        "ECU_HYD_VALVE_LIFT_DOWN_MASK",
     ]
 
     dio_mask = 0
     for name in dio_names:
-        dio_mask |= bit_value(name)
+        dio_mask |= mask_value(name)
     hydraulic_mask = 0
     for name in hydraulic_names:
-        hydraulic_mask |= bit_value(name)
+        hydraulic_mask |= mask_value(name)
 
     assert (dio_mask & hydraulic_mask) == 0
 
 
-def test_high_voltage_relay_is_mos8_active_high_and_safety_command_owned(root: pathlib.Path) -> None:
+def test_relay_box_1_5_gpio_high_drives_low_active_relay_inputs(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     config_c = read(root, "ecu/config/src/ecu_config.c")
     local_io_h = read(root, "ecu/devices/include/local_io_device.h")
     local_io_c = read(root, "ecu/devices/src/local_io_device.c")
-    board_c = read(root, "ecu/ecu_isolation/board.c")
 
-    assert "#define ECU_DIO_HIGH_VOLTAGE_RELAY_MASK  (1UL << 7)" in config_h
+    expected = {
+        "ECU_HYD_VALVE1_MASK": 0,
+        "ECU_DIO_HEADLIGHT_MASK": 1,
+        "ECU_HYD_VALVE2_MASK": 2,
+        "ECU_DIO_HORN_MASK": 3,
+        "ECU_HYD_VALVE3_MASK": 4,
+        "ECU_DIO_HIGH_VOLTAGE_RELAY_MASK": 5,
+        "ECU_HYD_VALVE4_MASK": 6,
+        "ECU_DIO_RESERVED3_MASK": 7,
+        "ECU_HYD_VALVE5_MASK": 8,
+        "ECU_DIO_LEFT_INDICATOR_MASK": 9,
+        "ECU_HYD_VALVE6_MASK": 10,
+        "ECU_DIO_RIGHT_INDICATOR_MASK": 11,
+    }
+    for name, bit in expected.items():
+        assert f"#define {name}" in config_h
+        assert re.search(rf"#define\s+{name}\s+\(1UL\s*<<\s*{bit}\)", config_h), name
+
+    assert "#define ECU_DIO_HIGH_VOLTAGE_RELAY_MASK  (1UL << 5)" in config_h
+    assert "#define ECU_DIO_HYDRAULIC_ENABLE_MASK    (0UL)" in config_h
     assert ".dio_high_voltage_relay_mask = ECU_DIO_HIGH_VOLTAGE_RELAY_MASK" in config_c
-    assert "ECU_DIO_HIGH_VOLTAGE_RELAY_MASK" in config_h.split("ECU_DIO_MANAGED_OUTPUT_MASK", 1)[1]
-    assert "MOS8 / EX_OUT8" in local_io_h
+    assert "GPIO high turns the MOS output on" in config_h
+    assert "relay control" in config_h and "terminal low" in config_h
+    assert ".dio_active_high = true" in config_c
+    assert "MOS6 / EX_OUT6 to the battery-key" in local_io_h
+    assert "MOS8 / EX_OUT8 is reserved" in local_io_h
     assert "high_voltage_relay_latched" in local_io_h
-    assert "GPIO high closes the relay" in local_io_h
     assert "config->dio_high_voltage_relay_mask" in local_io_c
     assert "command->high_voltage_enable" in local_io_c
     assert "command->high_voltage_disable_request" in local_io_c
     assert "state->high_voltage_relay_latched = true" in local_io_c
     assert "state->high_voltage_relay_latched = false" in local_io_c
     assert "state->high_voltage_relay_latched" in local_io_c
-    assert "/* EX_OUT8  */" in board_c
-    assert "BOARD_ECU_OUTPUT_ON_LEVEL  1U" in read(root, "ecu/ecu_isolation/board.h")
+
+
+def test_hydraulic_valve_pairs_are_fail_closed_interlocked(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+    vehicle_types_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+
+    for token in [
+        "ECU_HYD_VALVE_PAIR12_MASK",
+        "ECU_HYD_VALVE_PAIR34_MASK",
+        "ECU_HYD_VALVE_PAIR56_MASK",
+        ".hydraulic_valve_interlock_pair12_mask = ECU_HYD_VALVE_PAIR12_MASK",
+        ".hydraulic_valve_interlock_pair34_mask = ECU_HYD_VALVE_PAIR34_MASK",
+        ".hydraulic_valve_interlock_pair56_mask = ECU_HYD_VALVE_PAIR56_MASK",
+    ]:
+        assert token in config_h or token in config_c, token
+
+    for token in [
+        "valve_interlock_reject_count",
+        "last_requested_valve_mask",
+        "last_interlocked_valve_mask",
+    ]:
+        assert token in lift_h, token
+
+    for token in [
+        "hydraulic_requested_valve_mask",
+        "hydraulic_applied_valve_mask",
+        "hydraulic_interlocked_valve_mask",
+        "hydraulic_valve_interlock_reject_count",
+        "update_executor_lift_hydraulic_diagnostics",
+    ]:
+        assert token in vehicle_types_h or token in executor_c, token
+
+    for token in [
+        "queue_lift_interpolation_group",
+        "sanitize_hydraulic_valve_mask",
+        "clear_conflicting_valve_pair",
+        "valve_mask &= ~pair_mask",
+        "state->valve_interlock_reject_count++",
+        "state->last_interlocked_valve_mask = interlocked_valve_mask",
+    ]:
+        assert token in lift_c, token
+
+
+def test_home_center_hydraulic_valve_mapping_uses_confirmed_functions(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "#define ECU_HYD_VALVE_TRACK_EXTEND_MASK  ECU_HYD_VALVE4_MASK",
+        "#define ECU_HYD_VALVE_TRACK_RETRACT_MASK ECU_HYD_VALVE3_MASK",
+        "#define ECU_HYD_VALVE_FRONT_SUSPENSION_RETRACT_MASK ECU_HYD_VALVE1_MASK",
+        "#define ECU_HYD_VALVE_FRONT_SUSPENSION_EXTEND_MASK  ECU_HYD_VALVE2_MASK",
+        "#define ECU_HYD_VALVE_REAR_SUSPENSION_RETRACT_MASK  ECU_HYD_VALVE5_MASK",
+        "#define ECU_HYD_VALVE_REAR_SUSPENSION_EXTEND_MASK   ECU_HYD_VALVE6_MASK",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "track_width_valve_mask_from_remote",
+        "suspension_valve_mask_from_remote",
+        "REMOTE_HYDRAULIC_SUSPENSION_FRONT",
+        "remote->adjust_owner != REMOTE_ADJUST_OWNER_HYDRAULIC",
+        "remote->requested_gear == ECU_GEAR_REQUEST_P",
+        "P is a hard hold command",
+        "ECU_HYD_VALVE_FRONT_SUSPENSION_RETRACT_MASK",
+        "ECU_HYD_VALVE_REAR_SUSPENSION_RETRACT_MASK",
+        "out->hydraulic_enable = true",
+    ]:
+        assert token in arbiter_c, token
+
+    assert "const bool pump_request =" in lift_c
+    assert "command->hydraulic_enable &&" in lift_c
+    assert "apply_hydraulic_pump_and_valves(state" in lift_c
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    for token in [
+        "apply_can3_safe_default",
+        "vehicle_actuator_command_safe_default(&safe_command)",
+        "ECU_CAN3_COMMAND_STALE_TIMEOUT_MS",
+        "now_ms - command_timestamp_ms",
+    ]:
+        assert token in executor_c or token in config_h, token
+    assert "ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)" in config_h
+    assert "ECU_HYDRAULIC_PUMP_WORK_RPM                  (1500.0f)" in config_h
+    assert "ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM        (800.0f)" in config_h
+    assert (
+        "state->pump_actual_velocity_units <\n"
+        "            -ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS"
+    ) in lift_c
 
 
 def test_whole_vehicle_servo_enable_waits_for_bms_high_voltage_feedback(root: pathlib.Path) -> None:
@@ -1973,7 +2345,15 @@ def test_cpu0_runtime_monitor_is_configurable_and_task_owned(root: pathlib.Path)
     assert "runtime_monitor_snapshot_t" in monitor_h
     assert "runtime_monitor_print_cpu0" in monitor_h
     assert "high_voltage_relay_latched" in monitor_h
-    assert "mos8=%s" in monitor_c
+    assert "hv_latch=%s" in monitor_c
+    for token in [
+        "hydraulic_requested_valve_mask",
+        "hydraulic_applied_valve_mask",
+        "hydraulic_interlocked_valve_mask",
+        "hydraulic_valve_interlock_reject_count",
+        "valve_block_cnt=%lu",
+    ]:
+        assert token in monitor_h or token in monitor_c or token in tasks_c, token
     assert "printf(" in monitor_c
     assert "runtime_monitor_print_cpu0" in tasks_c
     assert "ECU_ENABLE_DEBUG_MONITOR" in tasks_c
@@ -2097,6 +2477,7 @@ def test_can2_can3_motion_and_lift_buses_are_tx_capable(root: pathlib.Path) -> N
     assert "CANOPEN_MASTER_BUS_CAN2" in tasks_c
     assert "CANOPEN_MASTER_BUS_CAN3" in tasks_c
     assert "ECU_ENABLE_CAN3_LIFT_CANOPEN" in config_h
+    assert "can3_rpdo=%s" in monitor_c
     assert "#if ECU_ENABLE_CAN3_LIFT_CANOPEN" not in tasks_c
     assert "canopen_master_service_process_realtime_pdo(&s_runtime.can2_motion_canopen" in tasks_c
     assert "canopen_master_service_process_background(&s_runtime.can2_motion_canopen" in tasks_c

@@ -102,7 +102,7 @@ def build_node_configuration(node_id: int) -> list[PdoOperation]:
         PdoOperation("download", 0x1601, 0x00, 1, 3, "enable RPDO1 map entries"),
         PdoOperation("download", 0x1401, 0x01, 4, rpdo1, "enable RPDO1 COB-ID"),
         PdoOperation("download", 0x1402, 0x01, 4, 0x80000000 | rpdo2, "disable RPDO2 COB-ID"),
-        PdoOperation("download", 0x1402, 0x02, 1, 4, "RPDO2 synchronous every 4th SYNC"),
+        PdoOperation("download", 0x1402, 0x02, 1, PDO_TRANSMISSION_SYNC1, "RPDO2 interpolation synchronous every SYNC"),
         PdoOperation("download", 0x1602, 0x00, 1, 0, "clear RPDO2 map"),
         PdoOperation("download", 0x1602, 0x01, 4, PDO_MAP_INTERPOLATED_POSITION_32, "RPDO2 interpolated position point 60C1:01"),
         PdoOperation("download", 0x1602, 0x00, 1, 1, "enable RPDO2 map entries"),
@@ -127,7 +127,7 @@ def build_node_configuration(node_id: int) -> list[PdoOperation]:
         PdoOperation("download", 0x1A01, 0x01, 4, PDO_MAP_LATCHED_FAULT_32, "TPDO1 latching fault status"),
         PdoOperation("download", 0x1A01, 0x02, 4, PDO_MAP_STATUSWORD_16, "TPDO1 statusword"),
         PdoOperation("download", 0x1A01, 0x03, 4, PDO_MAP_ACTUAL_CURRENT_16, "TPDO1 actual motor current"),
-        PdoOperation("download", 0x1801, 0x02, 1, 4, "TPDO1 synchronous every 4th SYNC"),
+        PdoOperation("download", 0x1801, 0x02, 1, 10, "TPDO1 synchronous every 10th SYNC"),
         PdoOperation("download", 0x1A01, 0x00, 1, 3, "enable TPDO1 map entries"),
         PdoOperation("download", 0x1801, 0x01, 4, tpdo1, "enable TPDO1 COB-ID"),
         PdoOperation(

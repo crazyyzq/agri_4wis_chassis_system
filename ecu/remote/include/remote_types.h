@@ -48,9 +48,11 @@ typedef enum {
 
 typedef enum {
     ADJUST_STATE_IDLE = 0,
+    ADJUST_STATE_READY,
     ADJUST_STATE_CLEARANCE_ACTIVE,
     ADJUST_STATE_TRACK_PREPARE,
     ADJUST_STATE_TRACK_ACTIVE,
+    ADJUST_STATE_HYDRAULIC_ACTIVE,
     ADJUST_STATE_TRACK_EXITING,
     ADJUST_STATE_ABORTED
 } remote_adjust_state_t;
@@ -58,8 +60,14 @@ typedef enum {
 typedef enum {
     REMOTE_ADJUST_OWNER_NONE = 0,
     REMOTE_ADJUST_OWNER_CLEARANCE,
-    REMOTE_ADJUST_OWNER_TRACK
+    REMOTE_ADJUST_OWNER_TRACK,
+    REMOTE_ADJUST_OWNER_HYDRAULIC
 } remote_adjust_owner_t;
+
+typedef enum {
+    REMOTE_HYDRAULIC_SUSPENSION_FRONT = 0,
+    REMOTE_HYDRAULIC_SUSPENSION_REAR
+} remote_hydraulic_suspension_target_t;
 
 typedef enum {
     INDICATOR_OFF = 0,
@@ -170,6 +178,7 @@ typedef struct {
     ecu_motion_mode_t active_motion_mode;
     remote_adjust_state_t adjust_state;
     remote_adjust_owner_t adjust_owner;
+    remote_hydraulic_suspension_target_t hydraulic_suspension_target;
     remote_power_state_t power_state;
     remote_authority_state_t authority_state;
     bool high_voltage_enable_request;

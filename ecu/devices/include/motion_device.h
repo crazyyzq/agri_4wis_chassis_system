@@ -7,6 +7,7 @@
 #include "canopen_master_service.h"
 #include "ecu_config.h"
 #include "ecu_types.h"
+#include "steering_transition_planner.h"
 #include "vehicle_types.h"
 
 typedef enum {
@@ -45,6 +46,11 @@ typedef enum {
     STEER_REMOTE_COMMISSION_WAIT_POST_COMMAND_TPDO,
     STEER_REMOTE_COMMISSION_FAULT
 } steer_remote_commission_state_t;
+
+typedef enum {
+    MOTION_DRIVE_COMMAND_VELOCITY = 0,
+    MOTION_DRIVE_COMMAND_CURRENT
+} motion_drive_command_kind_t;
 
 typedef struct {
     uint32_t apply_count;
@@ -105,6 +111,8 @@ typedef struct {
     bool drive_velocity_mode_ready[ECU_WHEEL_COUNT];
     bool drive_last_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_last_velocity_units[ECU_WHEEL_COUNT];
+    int16_t drive_last_current_10ma[ECU_WHEEL_COUNT];
+    motion_drive_command_kind_t drive_last_command_kind[ECU_WHEEL_COUNT];
     bool drive_last_enable_requested[ECU_WHEEL_COUNT];
     uint8_t can2_motion_operational_nmt_sent_mask;
     uint32_t can2_motion_operational_nmt_last_ms;
@@ -114,21 +122,31 @@ typedef struct {
     uint32_t drive_active_group_sequence;
     uint32_t drive_active_group_submit_ms;
     int32_t drive_active_group_velocity_units[ECU_WHEEL_COUNT];
+    int16_t drive_active_group_current_10ma[ECU_WHEEL_COUNT];
+    motion_drive_command_kind_t drive_active_group_kind;
     bool drive_active_group_enable_requested[ECU_WHEEL_COUNT];
     int32_t drive_next_group_velocity_units[ECU_WHEEL_COUNT];
+    int16_t drive_next_group_current_10ma[ECU_WHEEL_COUNT];
+    motion_drive_command_kind_t drive_next_group_kind;
     bool drive_next_group_enable_requested[ECU_WHEEL_COUNT];
     bool drive_group_active;
     bool drive_next_group_valid;
     bool drive_latest_velocity_valid[ECU_WHEEL_COUNT];
     int32_t drive_latest_velocity_units[ECU_WHEEL_COUNT];
+    int16_t drive_latest_current_10ma[ECU_WHEEL_COUNT];
+    motion_drive_command_kind_t drive_latest_command_kind[ECU_WHEEL_COUNT];
     bool drive_latest_enable_requested[ECU_WHEEL_COUNT];
     bool drive_pending_velocity[ECU_WHEEL_COUNT];
     bool drive_realtime_enabled[ECU_WHEEL_COUNT];
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
+    bool track_assist_steer_approximately_ready;
     ecu_motion_mode_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
+    uint8_t track_assist_missing_axis_mask;
     uint32_t presteer_hold_start_ms;
+    uint32_t track_assist_steer_ready_since_ms;
+    uint32_t track_assist_steer_ready_eval_ms;
     uint32_t presteer_timeout_count;
     uint32_t presteer_last_timeout_ms;
     uint32_t drive_group_complete_count;
@@ -145,6 +163,7 @@ typedef struct {
     bool steer_commanded_target_valid[ECU_WHEEL_COUNT];
     int32_t steer_commanded_target_counts[ECU_WHEEL_COUNT];
     int32_t steer_commanded_velocity_counts_per_sec[ECU_WHEEL_COUNT];
+    steering_transition_planner_t steer_transition_planner;
     bool steer_pending_target[ECU_WHEEL_COUNT];
     bool steer_last_commanded_position_valid[ECU_WHEEL_COUNT];
     int32_t steer_last_commanded_position_counts[ECU_WHEEL_COUNT];

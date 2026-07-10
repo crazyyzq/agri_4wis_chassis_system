@@ -2,6 +2,7 @@
 #define LIFT_HYDRAULIC_DEVICE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "canopen_master_service.h"
 #include "dio_service.h"
@@ -9,12 +10,80 @@
 #include "ecu_types.h"
 #include "vehicle_types.h"
 
+typedef enum {
+    HYDRAULIC_PUMP_STATE_STOPPED = 0,
+    HYDRAULIC_PUMP_STATE_CONFIGURING,
+    HYDRAULIC_PUMP_STATE_STARTING,
+    HYDRAULIC_PUMP_STATE_VALVE_READY,
+    HYDRAULIC_PUMP_STATE_START_TIMEOUT
+} hydraulic_pump_state_t;
+
+typedef enum {
+    LIFT_INTERPOLATION_STATE_STOPPED = 0,
+    LIFT_INTERPOLATION_STATE_CONFIGURING,
+    LIFT_INTERPOLATION_STATE_PRELOADING,
+    LIFT_INTERPOLATION_STATE_TRIGGERING,
+    LIFT_INTERPOLATION_STATE_RUNNING,
+    LIFT_INTERPOLATION_STATE_STOPPING,
+    LIFT_INTERPOLATION_STATE_FAULT
+} lift_interpolation_state_t;
+
 typedef struct {
     uint32_t apply_count;
     uint32_t skipped_lift_canopen_count;
+    uint32_t valve_interlock_reject_count;
+    uint32_t lift_setup_request_mask;
+    uint32_t lift_feedback_fresh_mask;
+    uint32_t lift_interpolation_group_sequence;
+    uint32_t lift_interpolation_queued_count;
+    uint32_t lift_interpolation_reject_count;
+    uint32_t lift_interpolation_failure_count;
+    uint32_t lift_hold_count;
+    uint32_t pump_group_sequence;
+    uint32_t pump_velocity_queued_count;
+    uint32_t pump_velocity_reject_count;
+    uint32_t pump_positive_clamp_count;
+    uint32_t pump_feedback_reject_count;
+    uint32_t pump_start_timeout_count;
+    uint32_t pump_setup_reject_count;
+    uint32_t pump_setup_failure_count;
+    uint32_t pump_start_request_ms;
+    uint32_t pump_setup_deadline_ms;
+    uint32_t pump_setup_expected_download_count;
+    uint32_t pump_setup_abort_count_baseline;
+    uint32_t pump_last_speed_ready_ms;
+    uint32_t valve_change_hold_until_ms;
+    uint32_t last_requested_valve_mask;
+    uint32_t pending_valve_mask;
     uint32_t last_valve_mask;
+    uint32_t last_interlocked_valve_mask;
     uint32_t last_lift_command_queue_ms;
+    uint32_t last_lift_setup_request_ms;
+    uint32_t last_lift_interpolation_ms;
+    uint32_t lift_setup_deadline_ms;
+    uint32_t lift_setup_expected_download_count;
+    uint32_t lift_setup_abort_count_baseline;
+    uint32_t lift_active_group_sequence;
+    uint32_t last_pump_velocity_ms;
+    int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
+    int32_t last_pump_velocity_units;
+    int32_t pump_actual_velocity_units;
+    uint16_t last_pump_controlword;
+    uint8_t pump_speed_ready_samples;
+    uint8_t lift_preload_points_completed;
+    int8_t lift_requested_direction;
+    int8_t lift_active_direction;
+    hydraulic_pump_state_t pump_state;
+    lift_interpolation_state_t lift_interpolation_state;
+    bool pump_feedback_valid;
+    bool pump_pressure_ready;
+    bool pump_velocity_setup_ready;
+    bool pump_setup_in_flight;
     bool last_lift_command_valid;
+    bool last_pump_velocity_command_valid;
+    bool lift_targets_initialized;
+    bool lift_group_in_flight;
     vehicle_actuator_command_t last_lift_command;
     ecu_device_apply_result_t last_result;
 } lift_hydraulic_device_state_t;
@@ -25,6 +94,16 @@ typedef struct {
  * ISR: not safe.
  */
 void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state);
+
+/* Convert a logical pump request into a motor-side velocity command.
+ *
+ * Zero means stop.  A positive logical request means "run hydraulic pump" and
+ * is clamped to the configured 1500..2400 rpm working range.  Field
+ * commissioning confirms the physical pump motor must run only in reverse; if
+ * a future code path would emit positive motor velocity, this helper clamps it
+ * to zero.
+ */
+int32_t hydraulic_pump_safe_velocity_units(int32_t requested_velocity_units);
 
 /* Apply final lift and track-width hydraulic intent.
  *

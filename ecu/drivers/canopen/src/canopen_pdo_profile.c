@@ -5,7 +5,9 @@
 #define CONTRACT_MODE_FOR_ROLE(role_) \
     (((role_) == CANOPEN_AXIS_ROLE_DRIVE_VELOCITY || \
       (role_) == CANOPEN_AXIS_ROLE_HYDRAULIC_VELOCITY) ? \
-         CANOPEN_PDO_MODE_PROFILE_VELOCITY : CANOPEN_PDO_MODE_PROFILE_POSITION)
+         CANOPEN_PDO_MODE_PROFILE_VELOCITY : \
+     ((role_) == CANOPEN_AXIS_ROLE_LIFT_POSITION) ? \
+         CANOPEN_PDO_MODE_INTERPOLATED_POSITION : CANOPEN_PDO_MODE_PROFILE_POSITION)
 
 #define CONTRACT_ENTRY(bus_, node_, leg_, role_, name_) \
     { \
@@ -15,6 +17,7 @@
         .role = (role_), \
         .rpdo0_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO0_BASE + (node_)), \
         .rpdo1_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO1_BASE + (node_)), \
+        .rpdo2_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO2_BASE + (node_)), \
         .rpdo3_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_RPDO3_BASE + (node_)), \
         .tpdo0_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_TPDO0_BASE + (node_)), \
         .tpdo1_cob_id = (uint16_t)(CANOPEN_PDO_STANDARD_TPDO1_BASE + (node_)), \
@@ -176,6 +179,7 @@ bool canopen_pdo_profile_init(uint8_t node_id,
     profile->role = contract->role;
     profile->rpdo0_cob_id = contract->rpdo0_cob_id;
     profile->rpdo1_cob_id = contract->rpdo1_cob_id;
+    profile->rpdo2_cob_id = contract->rpdo2_cob_id;
     profile->rpdo3_cob_id = contract->rpdo3_cob_id;
     profile->tpdo0_cob_id = contract->tpdo0_cob_id;
     profile->tpdo1_cob_id = contract->tpdo1_cob_id;
@@ -230,6 +234,28 @@ bool canopen_pdo_build_position_rpdo1(
     write_le_u16(&request->data[0], controlword);
     request->data[2] = (uint8_t)CANOPEN_PDO_MODE_PROFILE_POSITION;
     write_le_i32(&request->data[3], target_position);
+    return true;
+}
+
+bool canopen_pdo_build_interpolated_position_rpdo2(
+    const canopen_node_pdo_profile_t *profile,
+    int32_t interpolation_position,
+    canopen_master_pdo_request_t *request,
+    uint32_t group_sequence,
+    canopen_master_pdo_phase_t phase)
+{
+    if (profile == 0 || request == 0 ||
+        profile->required_mode != CANOPEN_PDO_MODE_INTERPOLATED_POSITION) {
+        return false;
+    }
+
+    memset(request, 0, sizeof(*request));
+    request->cob_id = profile->rpdo2_cob_id;
+    request->size = 4U;
+    request->node_id = profile->node_id;
+    request->group_sequence = group_sequence;
+    request->phase = phase;
+    write_le_i32(&request->data[0], interpolation_position);
     return true;
 }
 

@@ -41,8 +41,12 @@ void remote_gear_fsm_update(remote_gear_fsm_t *fsm,
     fsm->request_rejected = false;
     fsm->requested_gear = gear_from_position(input->gear);
 
-    if (preconditions->adjustment_active && fsm->requested_gear == ECU_GEAR_REQUEST_P) {
-        fsm->state = GEAR_STATE_TRACK_COMPLIANT; /* TRACK_COMPLIANT keeps active P while allowing track adjust. */
+    if (preconditions->adjustment_active) {
+        /* HOME-center adjustment uses the physical three-position gear switch
+         * as a hydraulic direction selector for suspension service.  Keep the
+         * real driving gear parked regardless of D/P/R switch position.
+         */
+        fsm->state = GEAR_STATE_TRACK_COMPLIANT;
         fsm->active_gear = ECU_GEAR_REQUEST_P;
         fsm->diagnostic = DIAG_OK;
         return;

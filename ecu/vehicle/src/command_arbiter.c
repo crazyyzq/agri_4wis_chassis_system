@@ -15,6 +15,7 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     for (uint8_t i = 0U; i < ECU_WHEEL_COUNT; ++i) {
         out->target_wheel_speed_mps[i] = 0.0f;
         out->target_steer_deg[i] = 0.0f;
+        out->track_assist_current_10ma[i] = 0;
     }
     out->target_height_mm = 0.0f;
     out->height_rate_mm_s = 0.0f;
@@ -27,6 +28,8 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->high_voltage_feedback_ready = false;
     out->hydraulic_enable = false;
     out->hydraulic_valve_mask = 0U;
+    out->track_assist_requested = false;
+    out->track_assist_active = false;
     out->indicator_mode = INDICATOR_OFF;
     out->horn_on = false;
     out->headlight_on = false;
@@ -205,28 +208,208 @@ static float auto_speed_command_mps(const auto_control_request_t *auto_request)
                                            auto_request->target_speed_mps);
 }
 
+static bool remote_in_adjust_domain(const remote_control_request_t *remote)
+{
+    return remote != 0 &&
+           remote->adjust_state != ADJUST_STATE_IDLE;
+}
+
+static uint32_t track_width_valve_mask_from_remote(const remote_control_request_t *remote)
+{
+    if (remote->track_per_mille >= ECU_REMOTE_TRACK_EXTEND_PER_MILLE_MIN) {
+        return ECU_HYD_VALVE_TRACK_EXTEND_MASK;
+    }
+    if (remote->track_per_mille <= ECU_REMOTE_TRACK_RETRACT_PER_MILLE_MAX) {
+        return ECU_HYD_VALVE_TRACK_RETRACT_MASK;
+    }
+    return 0U;
+}
+
+static uint32_t suspension_valve_mask_from_remote(const remote_control_request_t *remote)
+{
+    if (remote == 0 ||
+        remote->adjust_state != ADJUST_STATE_HYDRAULIC_ACTIVE ||
+        remote->adjust_owner != REMOTE_ADJUST_OWNER_HYDRAULIC) {
+        return 0U;
+    }
+
+    /* In HOME-center adjustment the physical D/P/R switch is reused only as a
+     * suspension direction selector.  P is a hard hold command: no front/rear
+     * suspension valve may remain energized merely because the adjustment FSM
+     * was previously hydraulic-active.
+     */
+    if (remote->requested_gear == ECU_GEAR_REQUEST_P) {
+        return 0U;
+    }
+    if (remote->requested_gear == ECU_GEAR_REQUEST_D) {
+        return remote->hydraulic_suspension_target == REMOTE_HYDRAULIC_SUSPENSION_FRONT ?
+               ECU_HYD_VALVE_FRONT_SUSPENSION_RETRACT_MASK :
+               ECU_HYD_VALVE_REAR_SUSPENSION_RETRACT_MASK;
+    }
+    if (remote->requested_gear == ECU_GEAR_REQUEST_R) {
+        return remote->hydraulic_suspension_target == REMOTE_HYDRAULIC_SUSPENSION_FRONT ?
+               ECU_HYD_VALVE_FRONT_SUSPENSION_EXTEND_MASK :
+               ECU_HYD_VALVE_REAR_SUSPENSION_EXTEND_MASK;
+    }
+    return 0U;
+}
+
+static bool remote_adjust_state_allows_clearance(remote_adjust_state_t state)
+{
+    return state == ADJUST_STATE_CLEARANCE_ACTIVE;
+}
+
+static bool remote_adjust_state_allows_track(remote_adjust_state_t state)
+{
+    return state == ADJUST_STATE_TRACK_PREPARE ||
+           state == ADJUST_STATE_TRACK_ACTIVE;
+}
+
+static bool remote_adjust_state_keeps_track_posture(remote_adjust_state_t state)
+{
+    return remote_adjust_state_allows_track(state) ||
+           state == ADJUST_STATE_TRACK_EXITING;
+}
+
+static bool remote_adjust_state_allows_suspension(remote_adjust_state_t state)
+{
+    return state == ADJUST_STATE_HYDRAULIC_ACTIVE;
+}
+
+static void apply_track_adjust_steering_posture(vehicle_actuator_command_t *out)
+{
+    const track_adjust_config_t *track_config = ecu_track_adjust_config_default();
+
+    if (track_config == 0) {
+        return;
+    }
+
+    /* Track-width adjustment is a CAN2/CAN3 coordinated mode:
+     * - steering first moves into the sideways track posture;
+     * - CAN3 may open the valve only after the CAN2 presteer gate reports ready;
+     * - drive current is enabled later by the executor only after the valve is
+     *   actually open.  This function only builds the coherent steering intent.
+     *
+     * The TRACK_EXITING state also calls this helper so the wheels remain
+     * visibly sideways for ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS after CH14
+     * returns to center; it does not request valves or assist current.
+     */
+    out->motion_mode = ECU_MOTION_MODE_CRAB;
+    out->active_gear = ECU_GEAR_REQUEST_P;
+    out->track_assist_requested = true;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->target_steer_deg[wheel] = track_config->steer_target_deg[wheel];
+        out->target_wheel_speed_mps[wheel] = 0.0f;
+    }
+}
+
+static void apply_track_adjust_drive_assist(vehicle_actuator_command_t *out,
+                                            uint32_t hydraulic_valve_mask)
+{
+    const track_adjust_config_t *track_config = ecu_track_adjust_config_default();
+    const bool extend =
+        (hydraulic_valve_mask & ECU_HYD_VALVE_TRACK_EXTEND_MASK) != 0U;
+    const bool retract =
+        (hydraulic_valve_mask & ECU_HYD_VALVE_TRACK_RETRACT_MASK) != 0U;
+
+    if (track_config == 0 || (!extend && !retract)) {
+        return;
+    }
+
+    /* This helper only expresses the configured assist-current intent.  The
+     * executor clears these currents until CAN3 reports that one of the
+     * track-width valves is actually energized, preventing a wheel from
+     * pushing a closed hydraulic circuit.
+     */
+    out->brake_release = true;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        float outward_sign = track_config->assist_torque_sign[wheel];
+        int16_t configured_current_10ma = track_config->assist_current_10ma[wheel];
+        if (configured_current_10ma < 0) {
+            configured_current_10ma = (int16_t)-configured_current_10ma;
+        }
+        int16_t current_10ma =
+            outward_sign >= 0.0f ? configured_current_10ma :
+                                   (int16_t)-configured_current_10ma;
+        if (retract) {
+            current_10ma = (int16_t)-current_10ma;
+        }
+        out->track_assist_current_10ma[wheel] = current_10ma;
+    }
+}
+
 static void apply_remote_adjust_command(const remote_control_request_t *remote,
                                         vehicle_actuator_command_t *out)
 {
     float height_rate = 0.0f;
     float track_rate = 0.0f;
 
-    if (remote->adjust_state == ADJUST_STATE_CLEARANCE_ACTIVE) {
-        height_rate = scale_signed_per_mille(remote->clearance_per_mille,
-                                             ECU_REMOTE_MAX_HEIGHT_RATE_MM_S);
-        if (height_rate > 0.0f) {
-            out->target_height_mm = ECU_REMOTE_MAX_HEIGHT_TARGET_MM;
-        } else if (height_rate < 0.0f) {
-            out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
-        }
-    } else if (remote->adjust_state == ADJUST_STATE_TRACK_ACTIVE) {
+    if (!remote_in_adjust_domain(remote) ||
+        remote->adjust_state == ADJUST_STATE_ABORTED) {
+        return;
+    }
+
+    if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
+        remote->clearance_per_mille >= ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN) {
+        /* Ground-clearance adjustment is an electric four-leg CAN3 servo
+         * function, not a hydraulic-valve function.  The right stick is used as
+         * a three-state command: >1850 ppm extends at fixed speed, <1150 ppm
+         * retracts at fixed speed, and the middle band holds position.
+         */
+        height_rate = ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
+        out->target_height_mm = ECU_REMOTE_MAX_HEIGHT_TARGET_MM;
+    } else if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
+               remote->clearance_per_mille <= ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX) {
+        height_rate = -ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
+        out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
+    }
+
+    uint32_t hydraulic_valve_mask =
+        remote_adjust_state_allows_track(remote->adjust_state) ?
+        track_width_valve_mask_from_remote(remote) : 0U;
+    if (remote_adjust_state_keeps_track_posture(remote->adjust_state)) {
+        apply_track_adjust_steering_posture(out);
+    }
+    if (hydraulic_valve_mask != 0U) {
         track_rate = scale_signed_per_mille(remote->track_per_mille,
                                             ECU_REMOTE_MAX_TRACK_RATE_MM_S);
+        apply_track_adjust_drive_assist(out, hydraulic_valve_mask);
+    }
+    if (remote_adjust_state_allows_suspension(remote->adjust_state)) {
+        hydraulic_valve_mask |= suspension_valve_mask_from_remote(remote);
     }
 
     out->height_rate_mm_s = height_rate;
     out->track_rate_mm_s = track_rate;
-    out->hydraulic_enable = height_rate != 0.0f || track_rate != 0.0f;
+    out->hydraulic_valve_mask |= hydraulic_valve_mask;
+    /* HOME-center adjustment owns the hydraulic station.  Keep Node13 running
+     * throughout the adjustment domain so pressure is already available when a
+     * valve request appears; valve_mask only selects which hydraulic circuit is
+     * allowed to open.
+     */
+    out->hydraulic_enable = true;
+}
+
+/* HOME-center adjustment is an actuator domain boundary.
+ *
+ * The remote may operate CAN3 lift/hydraulic functions in this domain, but it
+ * must not retain authority over CAN2 drive or steering.  Build the complete
+ * CAN2-safe intent here before returning from the arbiter so CH1, CH3, CH5 and
+ * a previously selected steering mode cannot leak into wheel commands.
+ */
+static void inhibit_can2_motion_in_adjust_domain(vehicle_actuator_command_t *out)
+{
+    out->motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
+    out->active_gear = ECU_GEAR_REQUEST_P;
+    out->target_speed_mps = 0.0f;
+    out->brake_release = false;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->target_wheel_speed_mps[wheel] = 0.0f;
+        out->target_steer_deg[wheel] = 0.0f;
+        out->track_assist_current_10ma[wheel] = 0;
+    }
+    out->track_assist_requested = false;
+    out->track_assist_active = false;
 }
 
 void command_arbiter_update(const remote_control_request_t *remote,
@@ -269,6 +452,11 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->horn_on = remote->horn_on;
         out->headlight_on = remote->headlight_on;
         out->diagnostic = remote->diagnostic;
+        if (remote_in_adjust_domain(remote)) {
+            inhibit_can2_motion_in_adjust_domain(out);
+            apply_remote_adjust_command(remote, out);
+            return;
+        }
         /* CH1 field convention: pushing the right stick left must steer the
          * vehicle left.  Positive steering in the vehicle/servo layers already
          * means left, so keep the operator sign correction centralized here

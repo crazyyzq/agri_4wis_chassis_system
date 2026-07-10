@@ -53,6 +53,11 @@
 #define ECU_CPU0_IO_PERIOD_MS            (10U)
 #define ECU_CPU0_DIAG_PERIOD_MS          (100U)
 #define ECU_CPU1_SERVICE_PERIOD_MS       (20U)
+/* CAN3 owns hydraulic valves.  If the vehicle task stops publishing a fresh
+ * coherent command, the CAN3 task must fail closed instead of leaving the last
+ * nonzero valve output latched.
+ */
+#define ECU_CAN3_COMMAND_STALE_TIMEOUT_MS (50U)
 
 #ifndef ECU_ENABLE_DEBUG_MONITOR
 #define ECU_ENABLE_DEBUG_MONITOR         (1)
@@ -153,8 +158,8 @@
 #define ECU_POWER_DCAC_STATUS_TIMEOUT_MS     (1500U)
 #define ECU_DCDC48_DEFAULT_TERMINAL_VOLTAGE_DV (140U)
 #define ECU_DCDC48_DEFAULT_CURRENT_DA        (200U)
-#define ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV (275U)
-#define ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA (100U)
+#define ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV (138U)
+#define ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA (1000U)
 #define ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV   (2200U)
 
 /* Vehicle CANopen node contract.
@@ -274,6 +279,12 @@
  * setup retry.
  */
 #define ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS     (100U)
+#define ECU_CANOPEN_LIFT_INTERPOLATION_PERIOD_MS  (20U)
+#define ECU_CANOPEN_LIFT_INTERPOLATION_REFRESH_MS (20U)
+#define ECU_CANOPEN_LIFT_FEEDBACK_TIMEOUT_MS      (200U)
+#define ECU_CANOPEN_LIFT_SETUP_TIMEOUT_MS         (5000U)
+#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (20U)
+#define ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS      (100U)
 /* A single non-trigger PDO TX fault must not permanently freeze the vehicle.
  * The CAN2 realtime owner cancels the local group, discards stale queued
  * frames, and retries from the newest vehicle command.  Trigger-phase steering
@@ -320,11 +331,27 @@
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC    (120000)
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC   (350000)
 #define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC  (1400000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (4000000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (5000000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_NEAR_COUNTS_PER_SEC2        (100000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2       (300000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2      (500000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2       (500000)
+/* Fixed-posture transitions (spin/crab) are planned as one four-axis
+ * trajectory from TPDO actual positions.  Keep the speed below the drive
+ * profile velocity, but high enough that a 135 degree spin->crab axis does not
+ * lag seconds behind the shorter axes.
+ */
+#define ECU_STEER_FIXED_TRANSITION_MAX_SPEED_COUNTS_PER_SEC (2700000)
+#define ECU_STEER_FIXED_TRANSITION_MIN_MS                   (900U)
+#define ECU_STEER_FIXED_TRANSITION_MAX_MS                   (2200U)
+/* Node6 and Node8 were measured to arrive late when changing from spin to crab
+ * because they can travel roughly twice the steering distance of the other two
+ * axes.  Keep this as a configuration mask so field tuning can change the
+ * compensation without touching the planner logic.  bit1=Node6, bit3=Node8.
+ */
+#define ECU_STEER_CRAB_FAST_AXIS_MASK                       ((uint8_t)0x0AU)
+#define ECU_STEER_CRAB_FAST_AXIS_PROGRESS_NUMERATOR         (2U)
+#define ECU_STEER_CRAB_FAST_AXIS_PROGRESS_DENOMINATOR       (1U)
 /* Spin and crab are not safe to drive while the wheels are still slewing
  * toward their large steering angles.  The CAN2 motion adapter therefore keeps
  * drive RPDOs disabled until TPDO position feedback from all four steering
@@ -332,6 +359,17 @@
  * installed 490:1 steering reducer and 10000 count/rev encoder feedback.
  */
 #define ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS             (50000)
+/* Track-width hydraulics only need the wheels roughly sideways before the
+ * valve opens.  Keep this looser than the drive presteer tolerance, but still
+ * require fresh feedback from all four steering axes before any valve request
+ * reaches the hydraulic device.  100000 counts is about 7.35 degrees.
+ */
+#define ECU_TRACK_ASSIST_STEER_APPROX_TOLERANCE_COUNTS             (100000)
+/* Track-width valves must not open from one lucky steering feedback sample.
+ * Require all four steering axes to stay inside the approximate sideways
+ * posture window for this time before CAN3 may energize a valve.
+ */
+#define ECU_TRACK_ASSIST_STEER_READY_STABLE_MS                     (300U)
 #define ECU_CANOPEN_PRESTEER_TIMEOUT_MS                            (12000U)
 #define ECU_CANOPEN_PRESTEER_REQUIRED_AXIS_MASK \
     ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL
@@ -437,6 +475,10 @@
 #define ECU_CANOPEN_OBJ_COMMAND_CURRENT  (0x2340U)
 #define ECU_CANOPEN_OBJ_TARGET_POSITION  (0x607AU)
 #define ECU_CANOPEN_OBJ_TARGET_VELOCITY  (0x60FFU)
+#define ECU_CANOPEN_OBJ_INTERPOLATION_DATA_RECORD (0x60C1U)
+#define ECU_CANOPEN_OBJ_INTERPOLATION_TIME_PERIOD (0x60C2U)
+#define ECU_CANOPEN_OBJ_INTERPOLATION_MODE        (0x60C0U)
+#define ECU_CANOPEN_OBJ_INTERPOLATION_BUFFER_CLEAR (0x60C4U)
 #define ECU_CANOPEN_OBJ_DIGITAL_INPUT_STATES (0x2190U)
 #define ECU_CANOPEN_OBJ_DENY_PROGRAM_CONTROL_OUTPUT_STATES (0x2194U)
 #define ECU_CANOPEN_OBJ_RPDO1_COMM_PARAM (0x1400U)
@@ -497,8 +539,9 @@ typedef enum {
 #define ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC (10.0f)
 #define ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM \
     (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV / 0.1f / 60.0f)
-#define ECU_SERVO_COMMISSIONING_MAX_RPM              (2400.0f)
-#define ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM        (4000000)
+#define ECU_SERVO_MOTION_MAX_RPM                     (3000.0f)
+/* 3000 rpm * 10000 encoder-count/rev / 0.1 / 60 = 5,000,000 velocity units. */
+#define ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM (5000000)
 /* Profile acceleration/deceleration objects 0x6083/0x6084 are kept at or below
  * 50 motor rev/s^2 during commissioning.  With the installed 2500-line encoder
  * and drive-side 4x decoding, that is 50 * 10000 = 500000 count/s^2.
@@ -508,13 +551,14 @@ typedef enum {
 #define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)
 #define ECU_DRIVE_WHEEL_DIAMETER_M                   (0.580f)
 #define ECU_DRIVE_WHEEL_CIRCUMFERENCE_M              (1.822124f)
-#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_COMMISSIONING_MAX_RPM
+#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_MOTION_MAX_RPM
 #define ECU_DRIVE_MAX_SPEED_MPS \
     ((ECU_DRIVE_MOTOR_MAX_RPM / ECU_DRIVE_GEAR_REDUCTION) * \
      ECU_DRIVE_WHEEL_CIRCUMFERENCE_M / 60.0f)
 /* Current whole-machine commissioning keeps operator speed authority at
- * 0.50 m/s.  The motor-speed ceiling is separately capped at 2400 rpm
- * (about 0.842 m/s at the installed 86.6:1 gearbox and 580 mm wheel), but
+ * 0.50 m/s.  The CAN2/CAN3 motion-servo ceiling is separately capped at
+ * 3000 rpm (about 1.05 m/s at the installed 86.6:1 gearbox and 580 mm wheel),
+ * but
  * field tuning stays below that ceiling until brake release, current limit
  * and drive alarm behavior are verified on each wheel.
  */
@@ -522,13 +566,52 @@ typedef enum {
 #define ECU_STEER_GEAR_REDUCTION                     (490.0f)
 #define ECU_STEER_COUNTS_PER_OUTPUT_REV \
     (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV * ECU_STEER_GEAR_REDUCTION)
-#define ECU_STEER_POSITION_SPEED_UNITS               (4000000)
-#if ECU_STEER_POSITION_SPEED_UNITS > ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM
-#error ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MAX_VELOCITY_UNITS_FROM_RPM
+#define ECU_STEER_POSITION_SPEED_UNITS               (5000000)
+/* Steering has a 490:1 reducer and was field-tested as too slow at the generic
+ * old hydraulic-pump 2400 rpm commissioning limit.  CAN2 drive and steering
+ * servos are allowed to use the field-confirmed 3000 rpm motor ceiling.
+ */
+#if ECU_STEER_POSITION_SPEED_UNITS > ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
+#error ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
 #endif
-#define ECU_LIFT_POSITION_SPEED_UNITS                (833333)
-#define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS     (833333)
+#define ECU_LIFT_POSITION_SPEED_UNITS                ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
+#define ECU_LIFT_SHORTEST_POSITION_COUNTS            (-10000)
+#define ECU_LIFT_LONGEST_POSITION_COUNTS             (-8000000)
+#define ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC  (100000)
+#define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS    (50000)
+#define ECU_LIFT_SYNC_RECOVERY_TOLERANCE_COUNTS      (10000)
+#define ECU_LIFT_SYNC_RECOVERY_MAX_EXTRA_COUNTS      (5000)
+#define ECU_HYDRAULIC_PUMP_WORK_RPM                  (1500.0f)
+#define ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)
+#define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM        (800.0f)
+#define ECU_HYDRAULIC_PUMP_SPEED_READY_SAMPLES       (3U)
+#define ECU_HYDRAULIC_PUMP_START_TIMEOUT_MS          (3000U)
+#define ECU_HYDRAULIC_VALVE_CHANGE_DEADTIME_MS       (10U)
+#define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS \
+    ((int32_t)((ECU_HYDRAULIC_PUMP_WORK_RPM * \
+                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_HYDRAULIC_PUMP_MIN_WORK_VELOCITY_UNITS \
+    ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS
+#define ECU_HYDRAULIC_PUMP_MAX_REVERSE_VELOCITY_UNITS \
+    ((int32_t)((ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM * \
+                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS \
+    ((int32_t)((ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM * \
+                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_HYDRAULIC_PUMP_DIRECTION_SIGN (-1)
+#define ECU_HYDRAULIC_PUMP_ALLOW_POSITIVE_VELOCITY (0)
 #define ECU_SERVO_COMMAND_CURRENT_RAMP_MA_PER_SEC    (1000)
+/* Track-width assist is intentionally conservative for hydraulic tests.
+ * The four drive motors use RPDO3 current mode only after the track valve is
+ * physically opened by the CAN3 hydraulic adapter.  Unit: 10 mA.
+ *
+ * Field setting: legs 1/4 stay at 7 A; legs 2/3 are raised to 10 A because
+ * they still needed more assist under track-width load. */
+#define ECU_TRACK_ASSIST_LEG1_CURRENT_10MA           (700)
+#define ECU_TRACK_ASSIST_LEG2_CURRENT_10MA           (1000)
+#define ECU_TRACK_ASSIST_LEG3_CURRENT_10MA           (1000)
+#define ECU_TRACK_ASSIST_LEG4_CURRENT_10MA           (700)
+#define ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS       (5000U)
 
 /* Commissioning scale factors.  BC/BC2 0x60FF and 0x606C use velocity units of
  * 0.1 motor-encoder count/s.  The drive conversion includes the installed
@@ -548,29 +631,72 @@ typedef enum {
 /* Local digital outputs stay limited to board-level loads.  Servo brakes are
  * controlled by the drive internal brake controller, not by PCB DIO and not by
  * ECU writes to drive output objects.
+ *
+ * Relay box wiring v1.5:
+ *   - MOS1  / EX_OUT1  -> hydraulic valve 1 control, relay input active low.
+ *   - MOS2  / EX_OUT2  -> headlight control, relay input active low.
+ *   - MOS3  / EX_OUT3  -> hydraulic valve 2 control, relay input active low.
+ *   - MOS4  / EX_OUT4  -> horn control, relay input active low.
+ *   - MOS5  / EX_OUT5  -> hydraulic valve 3 control, relay input active low.
+ *   - MOS6  / EX_OUT6  -> battery key / high-voltage key control, relay input active low.
+ *   - MOS7  / EX_OUT7  -> hydraulic valve 4 control, relay input active low.
+ *   - MOS8  / EX_OUT8  -> reserved 3 control, relay input active low.
+ *   - MOS9  / EX_OUT9  -> hydraulic valve 5 control, relay input active low.
+ *   - MOS10 / EX_OUT10 -> flash relay 1 / left indicator control, relay input active low.
+ *   - MOS11 / EX_OUT11 -> hydraulic valve 6 control, relay input active low.
+ *   - MOS12 / EX_OUT12 -> flash relay 2 / right indicator control, relay input active low.
+ *
+ * The relay input is low-level active, but the ECU GPIO command is active high:
+ * GPIO high turns the MOS output on, and the MOS output pulls the relay control
+ * terminal low.  Therefore dio_active_high remains true.
+ *
+ * MOS6 / EX_OUT6 is the battery-key high-voltage request output.  Keep MOS8
+ * reserved so the old high-voltage output assignment cannot be reintroduced by
+ * mistake.
  */
 #define ECU_DIO_BRAKE_RELEASE_MASK       (0UL)
-#define ECU_DIO_HYDRAULIC_ENABLE_MASK    (1UL << 1)
-#define ECU_DIO_HORN_MASK                (1UL << 2)
-#define ECU_DIO_HEADLIGHT_MASK           (1UL << 3)
-#define ECU_DIO_LEFT_INDICATOR_MASK      (1UL << 4)
-#define ECU_DIO_RIGHT_INDICATOR_MASK     (1UL << 5)
-#define ECU_DIO_HIGH_VOLTAGE_RELAY_MASK  (1UL << 7)
+#define ECU_DIO_HYDRAULIC_ENABLE_MASK    (0UL)
+#define ECU_DIO_HEADLIGHT_MASK           (1UL << 1)
+#define ECU_DIO_HORN_MASK                (1UL << 3)
+#define ECU_DIO_HIGH_VOLTAGE_RELAY_MASK  (1UL << 5)
+#define ECU_DIO_RESERVED3_MASK           (1UL << 7)
+#define ECU_DIO_LEFT_INDICATOR_MASK      (1UL << 9)
+#define ECU_DIO_RIGHT_INDICATOR_MASK     (1UL << 11)
 #define ECU_DIO_MANAGED_OUTPUT_MASK      (ECU_DIO_HYDRAULIC_ENABLE_MASK | \
-                                                ECU_DIO_HORN_MASK | \
                                                 ECU_DIO_HEADLIGHT_MASK | \
+                                                ECU_DIO_HORN_MASK | \
+                                                ECU_DIO_HIGH_VOLTAGE_RELAY_MASK | \
+                                                ECU_DIO_RESERVED3_MASK | \
                                                 ECU_DIO_LEFT_INDICATOR_MASK | \
-                                                ECU_DIO_RIGHT_INDICATOR_MASK | \
-                                                ECU_DIO_HIGH_VOLTAGE_RELAY_MASK)
+                                                ECU_DIO_RIGHT_INDICATOR_MASK)
 
-#define ECU_HYD_VALVE_TRACK_EXTEND_MASK  (1UL << 8)
-#define ECU_HYD_VALVE_TRACK_RETRACT_MASK (1UL << 9)
-#define ECU_HYD_VALVE_LIFT_UP_MASK       (1UL << 10)
-#define ECU_HYD_VALVE_LIFT_DOWN_MASK     (1UL << 11)
-#define ECU_HYD_VALVE_MANAGED_MASK       (ECU_HYD_VALVE_TRACK_EXTEND_MASK | \
-                                                ECU_HYD_VALVE_TRACK_RETRACT_MASK | \
-                                                ECU_HYD_VALVE_LIFT_UP_MASK | \
-                                                ECU_HYD_VALVE_LIFT_DOWN_MASK)
+#define ECU_HYD_VALVE1_MASK              (1UL << 0)
+#define ECU_HYD_VALVE2_MASK              (1UL << 2)
+#define ECU_HYD_VALVE3_MASK              (1UL << 4)
+#define ECU_HYD_VALVE4_MASK              (1UL << 6)
+#define ECU_HYD_VALVE5_MASK              (1UL << 8)
+#define ECU_HYD_VALVE6_MASK              (1UL << 10)
+/* Hydraulic function mapping confirmed from relay-box wiring.
+ *
+ * Valve 1/2 operate the front suspension and valve 3/4 operate track width.
+ * Valve 5/6 operate the rear suspension.  A later wiring correction should
+ * only modify these masks; pump/valve sequencing stays unchanged.
+ */
+#define ECU_HYD_VALVE_TRACK_EXTEND_MASK  ECU_HYD_VALVE4_MASK
+#define ECU_HYD_VALVE_TRACK_RETRACT_MASK ECU_HYD_VALVE3_MASK
+#define ECU_HYD_VALVE_FRONT_SUSPENSION_RETRACT_MASK ECU_HYD_VALVE1_MASK
+#define ECU_HYD_VALVE_FRONT_SUSPENSION_EXTEND_MASK  ECU_HYD_VALVE2_MASK
+#define ECU_HYD_VALVE_REAR_SUSPENSION_RETRACT_MASK  ECU_HYD_VALVE5_MASK
+#define ECU_HYD_VALVE_REAR_SUSPENSION_EXTEND_MASK   ECU_HYD_VALVE6_MASK
+#define ECU_HYD_VALVE_PAIR12_MASK        (ECU_HYD_VALVE1_MASK | ECU_HYD_VALVE2_MASK)
+#define ECU_HYD_VALVE_PAIR34_MASK        (ECU_HYD_VALVE3_MASK | ECU_HYD_VALVE4_MASK)
+#define ECU_HYD_VALVE_PAIR56_MASK        (ECU_HYD_VALVE5_MASK | ECU_HYD_VALVE6_MASK)
+#define ECU_HYD_VALVE_MANAGED_MASK       (ECU_HYD_VALVE1_MASK | \
+                                          ECU_HYD_VALVE2_MASK | \
+                                          ECU_HYD_VALVE3_MASK | \
+                                          ECU_HYD_VALVE4_MASK | \
+                                          ECU_HYD_VALVE5_MASK | \
+                                          ECU_HYD_VALVE6_MASK)
 
 #define ECU_ADC_CHANNEL_COUNT       (8U)
 #define ECU_ADC_RAW_MAX             (4095U)
@@ -625,7 +751,17 @@ typedef enum {
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (400.0f)
 #define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
+#define ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN     (778)
+#define ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX   (-778)
 #define ECU_REMOTE_MAX_TRACK_RATE_MM_S    (20.0f)
+#define ECU_REMOTE_TRACK_EXTEND_PER_MILLE_MIN     (778)
+#define ECU_REMOTE_TRACK_RETRACT_PER_MILLE_MAX    (-778)
+/* CH14 is an analog wheel.  The engage/release split prevents valve chatter
+ * when the wheel is near the threshold or mechanically springs back slowly.
+ */
+#define ECU_REMOTE_TRACK_EXTEND_RELEASE_PER_MILLE_MIN     (650)
+#define ECU_REMOTE_TRACK_RETRACT_RELEASE_PER_MILLE_MAX    (-650)
+#define ECU_REMOTE_TRACK_REQUEST_STABLE_MS                (150U)
 #define ECU_RS485_BAUDRATE          (115200UL)
 #define ECU_RS232_BAUDRATE          (115200UL)
 #define ECU_SBUS_UART_RX_IDLE_BITS  (24U)
@@ -719,7 +855,7 @@ typedef struct {
 typedef struct {
     float steer_target_deg[ECU_WHEEL_COUNT];
     float assist_torque_sign[ECU_WHEEL_COUNT];
-    float assist_torque_limit_nm[ECU_WHEEL_COUNT];
+    int16_t assist_current_10ma[ECU_WHEEL_COUNT];
     float assist_wheel_speed_limit_rpm[ECU_WHEEL_COUNT];
 } track_adjust_config_t;
 
@@ -772,9 +908,10 @@ typedef struct {
     bool dio_active_high;
     uint32_t hydraulic_track_extend_mask;
     uint32_t hydraulic_track_retract_mask;
-    uint32_t hydraulic_lift_up_mask;
-    uint32_t hydraulic_lift_down_mask;
     uint32_t hydraulic_managed_valve_mask;
+    uint32_t hydraulic_valve_interlock_pair12_mask;
+    uint32_t hydraulic_valve_interlock_pair34_mask;
+    uint32_t hydraulic_valve_interlock_pair56_mask;
     uint32_t adc_channel_count;
     uint32_t adc_raw_max;
     uint32_t adc_external_mv_max;

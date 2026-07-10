@@ -52,11 +52,14 @@ typedef struct {
      * feedback that says the high-voltage bus is actually present.  Motion
      * devices use this as the servo-enable prerequisite; it is deliberately
      * separate from high_voltage_enable, which is only the operator/safety
-     * request that latches MOS8.
+     * request that latches the MOS6 battery-key output.
      */
     bool high_voltage_feedback_ready;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
+    bool track_assist_requested;
+    bool track_assist_active;
+    int16_t track_assist_current_10ma[ECU_WHEEL_COUNT];
     indicator_mode_t indicator_mode;
     bool horn_on;
     bool headlight_on;
@@ -72,6 +75,20 @@ typedef struct {
     ecu_device_apply_result_t local_io_result;
     ecu_device_apply_result_t warning_light_result;
     bool high_voltage_relay_latched;
+    uint32_t hydraulic_requested_valve_mask;
+    uint32_t hydraulic_applied_valve_mask;
+    uint32_t hydraulic_interlocked_valve_mask;
+    uint32_t hydraulic_valve_interlock_reject_count;
+    uint8_t hydraulic_pump_state;
+    bool hydraulic_pump_feedback_valid;
+    int32_t hydraulic_pump_actual_velocity_units;
+    uint32_t hydraulic_pump_start_timeout_count;
+    uint8_t lift_interpolation_state;
+    int8_t lift_requested_direction;
+    int8_t lift_active_direction;
+    uint8_t lift_feedback_fresh_mask;
+    uint8_t lift_preload_points_completed;
+    uint32_t lift_interpolation_failure_count;
     bool steer_normal_pdo_allowed;
     bool steer_safety_inhibited;
     uint8_t steer_inhibit_reason;
@@ -91,9 +108,20 @@ typedef struct {
     uint32_t can2_realtime_last_recovery_ms;
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
+    bool track_assist_steer_approximately_ready;
     uint8_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
     uint32_t presteer_timeout_count;
+    bool steer_transition_active;
+    bool steer_transition_completed;
+    bool steer_transition_rejected_stale_feedback;
+    uint32_t steer_transition_id;
+    uint8_t steer_transition_feedback_fresh_mask;
+    uint8_t steer_transition_moving_axis_mask;
+    int32_t steer_transition_max_distance_counts;
+    int32_t steer_transition_actual_counts[ECU_WHEEL_COUNT];
+    int32_t steer_transition_output_counts[ECU_WHEEL_COUNT];
+    int32_t steer_transition_error_counts[ECU_WHEEL_COUNT];
 } vehicle_executor_state_t;
 
 #endif /* VEHICLE_TYPES_H */

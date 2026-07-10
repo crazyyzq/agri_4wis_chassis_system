@@ -229,8 +229,8 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
      * interlock when the operator is holding throttle low and no previous
      * high-voltage command is active.  This avoids a commissioning deadlock:
      * without this pre-HV window, a boot-time SBUS timeout latch could require
-     * drive TPDO zero speed before MOS8 can energize the high-voltage relay
-     * that powers those drives.
+     * drive TPDO zero speed before the logical high-voltage request can power
+     * those drives through the BMS/power path.
      */
     bool pre_hv_stationary_window =
         !s_runtime.final_command.high_voltage_enable &&
@@ -460,6 +460,10 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->power_state = s_runtime.remote_request.power_state;
     out->authority_state = s_runtime.remote_request.authority_state;
     out->adjust_state = s_runtime.remote_request.adjust_state;
+    out->remote_steer_per_mille = s_runtime.remote_request.steer_per_mille;
+    out->remote_throttle_per_mille = s_runtime.remote_request.throttle_per_mille;
+    out->remote_clearance_per_mille = s_runtime.remote_request.clearance_per_mille;
+    out->remote_track_per_mille = s_runtime.remote_request.track_per_mille;
     out->status_led_pattern = s_runtime.status_led.last_pattern;
     out->diagnostic = s_runtime.final_command.diagnostic;
     out->source = s_runtime.final_command.source;
@@ -472,12 +476,41 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     }
     out->brake_release = s_runtime.final_command.brake_release;
     out->high_voltage_enable = s_runtime.final_command.high_voltage_enable;
+    out->high_voltage_feedback_ready =
+        s_runtime.final_command.high_voltage_feedback_ready;
     out->high_voltage_relay_latched =
         s_runtime.executor.high_voltage_relay_latched;
     out->commissioning_power_debug_active =
         s_runtime.commissioning_debug.power_debug_active;
     out->hydraulic_enable = s_runtime.final_command.hydraulic_enable;
     out->hydraulic_valve_mask = s_runtime.final_command.hydraulic_valve_mask;
+    out->hydraulic_requested_valve_mask =
+        s_runtime.executor.hydraulic_requested_valve_mask;
+    out->hydraulic_applied_valve_mask =
+        s_runtime.executor.hydraulic_applied_valve_mask;
+    out->hydraulic_interlocked_valve_mask =
+        s_runtime.executor.hydraulic_interlocked_valve_mask;
+    out->hydraulic_valve_interlock_reject_count =
+        s_runtime.executor.hydraulic_valve_interlock_reject_count;
+    out->hydraulic_pump_state = s_runtime.executor.hydraulic_pump_state;
+    out->hydraulic_pump_feedback_valid =
+        s_runtime.executor.hydraulic_pump_feedback_valid;
+    out->hydraulic_pump_actual_velocity_units =
+        s_runtime.executor.hydraulic_pump_actual_velocity_units;
+    out->hydraulic_pump_start_timeout_count =
+        s_runtime.executor.hydraulic_pump_start_timeout_count;
+    out->lift_interpolation_state =
+        s_runtime.executor.lift_interpolation_state;
+    out->lift_requested_direction =
+        s_runtime.executor.lift_requested_direction;
+    out->lift_active_direction =
+        s_runtime.executor.lift_active_direction;
+    out->lift_feedback_fresh_mask =
+        s_runtime.executor.lift_feedback_fresh_mask;
+    out->lift_preload_points_completed =
+        s_runtime.executor.lift_preload_points_completed;
+    out->lift_interpolation_failure_count =
+        s_runtime.executor.lift_interpolation_failure_count;
     out->steer_normal_pdo_allowed =
         s_runtime.executor.steer_normal_pdo_allowed;
     out->steer_safety_inhibited =
@@ -516,12 +549,36 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.presteer_drive_hold_active;
     out->presteer_target_reached =
         s_runtime.executor.presteer_target_reached;
+    out->track_assist_steer_approximately_ready =
+        s_runtime.executor.track_assist_steer_approximately_ready;
     out->presteer_mode =
         s_runtime.executor.presteer_mode;
     out->presteer_missing_axis_mask =
         s_runtime.executor.presteer_missing_axis_mask;
     out->presteer_timeout_count =
         s_runtime.executor.presteer_timeout_count;
+    out->steer_transition_active =
+        s_runtime.executor.steer_transition_active;
+    out->steer_transition_completed =
+        s_runtime.executor.steer_transition_completed;
+    out->steer_transition_rejected_stale_feedback =
+        s_runtime.executor.steer_transition_rejected_stale_feedback;
+    out->steer_transition_id =
+        s_runtime.executor.steer_transition_id;
+    out->steer_transition_feedback_fresh_mask =
+        s_runtime.executor.steer_transition_feedback_fresh_mask;
+    out->steer_transition_moving_axis_mask =
+        s_runtime.executor.steer_transition_moving_axis_mask;
+    out->steer_transition_max_distance_counts =
+        s_runtime.executor.steer_transition_max_distance_counts;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->steer_transition_actual_counts[wheel] =
+            s_runtime.executor.steer_transition_actual_counts[wheel];
+        out->steer_transition_output_counts[wheel] =
+            s_runtime.executor.steer_transition_output_counts[wheel];
+        out->steer_transition_error_counts[wheel] =
+            s_runtime.executor.steer_transition_error_counts[wheel];
+    }
     out->steer_calibration_ram_override_sequence =
         g_ecu_steer_calibration_override.sequence;
     out->steer_calibration_ram_override_enabled =
@@ -687,10 +744,11 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
                                                   &s_runtime.safety_snapshot,
                                                   &s_runtime.final_command,
                                                   now_ms);
-    /* MOS8 is latched by high_voltage_enable, but servo and accessory output
-     * must wait for measured BMS contactor feedback.  This prevents the motion
-     * task from enabling drives during the gap between operator request and
-     * actual high-voltage bus availability.
+    /* high_voltage_enable is a logical request; servo and accessory output must
+     * wait for measured BMS contactor feedback.  This prevents the motion task
+     * from enabling drives during the gap between operator request and actual
+     * high-voltage bus availability.  Relay-box wiring v1.5 assigns MOS6 to
+     * the battery-key high-voltage request output; MOS8 remains reserved.
      */
     s_runtime.final_command.high_voltage_feedback_ready =
         bms_high_voltage_feedback_ready();
@@ -725,13 +783,6 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
     ecu_runtime_init_once(now_ms);
     canopen_master_service_process_realtime_pdo(&s_runtime.can3_lift_hydraulic_canopen,
                                                 now_ms);
-    if ((uint32_t)(now_ms - s_runtime.last_can3_feedback_sync_ms) >=
-        ECU_CANOPEN_STEER_PDO_PERIOD_MS) {
-        if (canopen_master_service_send_sync(&s_runtime.can3_lift_hydraulic_canopen,
-                                             now_ms)) {
-            s_runtime.last_can3_feedback_sync_ms = now_ms;
-        }
-    }
     (void)vehicle_command_executor_flush_can3_lift_hydraulic(
         &s_runtime.executor,
         &s_runtime.can3_lift_hydraulic_canopen,
@@ -743,6 +794,18 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
         canopen_master_service_process_realtime_pdo(
             &s_runtime.can3_lift_hydraulic_canopen,
             now_ms);
+    }
+    /* Lift RPDO groups already append their own common SYNC.  Emit a periodic
+     * feedback SYNC only while the realtime lane is idle; otherwise a second
+     * SYNC could consume an extra interpolation-buffer point. */
+    if (canopen_master_service_realtime_pdo_idle(
+            &s_runtime.can3_lift_hydraulic_canopen) &&
+        (uint32_t)(now_ms -
+            s_runtime.can3_lift_hydraulic_canopen.snapshot.last_sync_tx_ms) >=
+            ECU_CANOPEN_LIFT_INTERPOLATION_PERIOD_MS &&
+        canopen_master_service_send_feedback_sync(
+            &s_runtime.can3_lift_hydraulic_canopen, now_ms)) {
+        s_runtime.last_can3_feedback_sync_ms = now_ms;
     }
     canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen,
                                               now_ms);

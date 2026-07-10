@@ -117,18 +117,41 @@ def test_remote_arming_gear_requests_release_brake_before_active_drive(root: pat
         assert token in text, token
 
 
-def test_track_adjust_prepare_requests_brake_release_before_active_adjust(root: pathlib.Path) -> None:
+def test_home_center_hydraulic_adjust_keeps_drive_parked_and_uses_valve_intent(root: pathlib.Path) -> None:
     text = read(root, "ecu/vehicle/src/command_arbiter.c")
     adjust = read(root, "ecu/remote/src/remote_adjust_fsm.c")
+    gear = read(root, "ecu/remote/src/remote_gear_fsm.c")
 
-    assert "ADJUST_STATE_TRACK_PREPARE" in adjust
-    assert "preconditions->brake_release_confirmed" in adjust
     for token in [
-        "ADJUST_STATE_TRACK_PREPARE",
-        "ADJUST_STATE_TRACK_ACTIVE",
+        "ADJUST_STATE_READY",
+        "ADJUST_STATE_HYDRAULIC_ACTIVE",
+        "suspension_request_active",
+        "hydraulic_suspension_target",
+    ]:
+        assert token in adjust, token
+    for token in [
+        "preconditions->adjustment_active",
+        "fsm->active_gear = ECU_GEAR_REQUEST_P",
+        "HOME-center adjustment uses the physical three-position gear switch",
+    ]:
+        assert token in gear, token
+    for token in [
+        "track_width_valve_mask_from_remote",
+        "suspension_valve_mask_from_remote",
+        "remote->requested_gear == ECU_GEAR_REQUEST_D",
+        "remote->requested_gear == ECU_GEAR_REQUEST_R",
+        "out->hydraulic_enable = true",
         "remote->adjust_state",
+        "inhibit_can2_motion_in_adjust_domain",
     ]:
         assert token in text, token
+
+    adjust_gate = text.split("if (remote_in_adjust_domain(remote))", 1)[1].split(
+        "/* CH1 field convention", 1
+    )[0]
+    assert "inhibit_can2_motion_in_adjust_domain(out);" in adjust_gate
+    assert "apply_remote_adjust_command(remote, out);" in adjust_gate
+    assert "return;" in adjust_gate
 
 
 def test_track_adjust_configuration_is_parameterized(root: pathlib.Path) -> None:
@@ -137,12 +160,117 @@ def test_track_adjust_configuration_is_parameterized(root: pathlib.Path) -> None
         "track_adjust_config_t",
         "steer_target_deg",
         "assist_torque_sign",
-        "assist_torque_limit_nm",
+        "assist_current_10ma",
         "assist_wheel_speed_limit_rpm",
         "ECU_WHEEL_COUNT",
     ]
     for token in required:
         assert token in text, token
+
+
+def test_track_width_assist_is_presteered_and_valve_gated(root: pathlib.Path) -> None:
+    """Track-width hydraulics must not open or push the wheels before steering is ready."""
+
+    types_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    remote_adjust_c = read(root, "ecu/remote/src/remote_adjust_fsm.c")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS",
+        "ECU_TRACK_ASSIST_LEG1_CURRENT_10MA",
+        "ECU_TRACK_ASSIST_LEG2_CURRENT_10MA",
+        "ECU_TRACK_ASSIST_LEG3_CURRENT_10MA",
+        "ECU_TRACK_ASSIST_LEG4_CURRENT_10MA",
+        "#define ECU_TRACK_ASSIST_LEG1_CURRENT_10MA           (700)",
+        "#define ECU_TRACK_ASSIST_LEG2_CURRENT_10MA           (1000)",
+        "#define ECU_TRACK_ASSIST_LEG3_CURRENT_10MA           (1000)",
+        "#define ECU_TRACK_ASSIST_LEG4_CURRENT_10MA           (700)",
+        "ECU_TRACK_ASSIST_STEER_APPROX_TOLERANCE_COUNTS",
+    ]:
+        assert token in config_h, token
+
+    for token in [
+        "track_assist_requested",
+        "track_assist_active",
+        "track_assist_current_10ma",
+    ]:
+        assert token in types_h, token
+
+    for token in [
+        "track_center_since_ms",
+        "ADJUST_STATE_TRACK_PREPARE",
+        "ADJUST_STATE_TRACK_ACTIVE",
+        "ADJUST_STATE_TRACK_EXITING",
+        "ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS",
+    ]:
+        assert token in remote_adjust_c, token
+
+    assert "ecu_track_adjust_config_default" in arbiter_c
+    assert "static void apply_track_adjust_steering_posture" in arbiter_c
+    assert "static void apply_track_adjust_drive_assist" in arbiter_c
+    adjust_fn = arbiter_c.split("static void apply_remote_adjust_command", 1)[1].split(
+        "static void inhibit_can2_motion_in_adjust_domain", 1
+    )[0]
+    for token in [
+        "apply_track_adjust_steering_posture",
+        "apply_track_adjust_drive_assist",
+        "hydraulic_valve_mask != 0U",
+        "remote_adjust_state_keeps_track_posture",
+        "remote_adjust_state_allows_clearance",
+        "remote_adjust_state_allows_track",
+        "remote_adjust_state_allows_suspension",
+    ]:
+        assert token in adjust_fn, token
+
+    posture_fn = arbiter_c.split("static void apply_track_adjust_steering_posture", 1)[1].split(
+        "static void apply_track_adjust_drive_assist", 1
+    )[0]
+    for token in [
+        "track_assist_requested = true",
+        "out->motion_mode = ECU_MOTION_MODE_CRAB",
+        "out->target_steer_deg[wheel] = track_config->steer_target_deg[wheel]",
+    ]:
+        assert token in posture_fn, token
+    assert "track_assist_current_10ma[wheel]" not in posture_fn
+
+    helper_fn = arbiter_c.split("static void apply_track_adjust_drive_assist", 1)[1].split(
+        "static void apply_remote_adjust_command", 1
+    )[0]
+    for token in [
+        "track_assist_current_10ma[wheel]",
+        "configured_current_10ma",
+        "track_config->assist_current_10ma[wheel]",
+    ]:
+        assert token in helper_fn, token
+
+    can3_flush = executor_c.split("vehicle_command_executor_flush_can3_lift_hydraulic", 1)[1]
+    assert "gate_track_valves_until_presteer_ready" in executor_c
+    assert "s_runtime.motion.track_assist_steer_approximately_ready" in executor_c
+    assert "s_runtime.motion.presteer_target_reached" in executor_c
+    assert "track_gate_request_timestamp_ms" in executor_c
+    assert "track_assist_steer_ready_eval_ms" in executor_c
+    assert "timestamp_reached(s_runtime.motion.track_assist_steer_ready_eval_ms" in executor_c
+    assert "gate_track_valves_until_presteer_ready(&command, command_timestamp_ms)" in can3_flush
+
+    can2_flush = executor_c.split("vehicle_command_executor_flush_can2_motion", 1)[1].split(
+        "vehicle_command_executor_flush_can3_lift_hydraulic", 1
+    )[0]
+    assert "gate_track_assist_current_until_valve_open" in executor_c
+    assert "s_runtime.lift_hydraulic.last_valve_mask" in executor_c
+    assert "gate_track_assist_current_until_valve_open(&command)" in can2_flush
+
+    for token in [
+        "build_drive_current_rpdo_request",
+        "canopen_pdo_build_current_rpdo3",
+        "MOTION_DRIVE_COMMAND_CURRENT",
+        "drive_latest_command_kind",
+        "track_assist_steer_approximately_ready",
+        "ECU_TRACK_ASSIST_STEER_APPROX_TOLERANCE_COUNTS",
+    ]:
+        assert token in motion_c, token
 
 
 def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib.Path) -> None:
@@ -215,6 +343,51 @@ def test_whole_vehicle_crab_keeps_full_90_degree_steering_range(root: pathlib.Pa
     ]
     assert "(1225000)" in max_range_block
     assert "(612500)" not in max_range_block
+
+
+def test_fixed_posture_steering_transition_planner_is_isolated(root: pathlib.Path) -> None:
+    """Spin/crab posture changes need a focused planner, not more trajectory code in motion_device.c."""
+    planner_h = read(root, "ecu/control/include/steering_transition_planner.h")
+    planner_c = read(root, "ecu/control/src/steering_transition_planner.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "steering_transition_planner_t",
+        "steering_transition_planner_init",
+        "steering_transition_planner_mode_is_fixed_posture",
+        "steering_transition_planner_update",
+        "feedback_fresh_mask",
+        "actual_position_counts",
+        "requested_target_counts",
+        "output_target_counts",
+        "rejected_stale_feedback",
+    ]:
+        assert token in planner_h, token
+
+    assert "smoothstep" in planner_c
+    assert "axis_progress_q15" in planner_c
+    assert "ECU_STEER_CRAB_FAST_AXIS_MASK" in planner_c
+    assert "#define ECU_STEER_CRAB_FAST_AXIS_MASK" in read(root, "ecu/config/include/ecu_config.h")
+    assert "transition_id" in planner_c
+    assert "same_target" in planner_c
+    assert "planner->completed && same_target" in planner_c
+    assert "ECU_STEER_FIXED_TRANSITION_MAX_SPEED_COUNTS_PER_SEC" in planner_c
+    assert "steering_transition_planner_update" in motion_c
+    assert '#include "steering_transition_planner.h"' in motion_c
+    assert "../../control/src/steering_transition_planner.c" in cmake
+
+
+def test_fixed_posture_planner_uses_feedback_and_ackermann_bypasses_it(root: pathlib.Path) -> None:
+    """Fixed posture transitions use TPDO actual position; Ackermann stays realtime-follow."""
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    planner_c = read(root, "ecu/control/src/steering_transition_planner.c")
+
+    assert "collect_steering_feedback_for_planner" in motion_c
+    assert "steering_transition_planner_mode_is_fixed_posture(command->motion_mode)" in motion_c
+    assert "MOTION_STEER_INHIBIT_AXIS_NOT_READY" in motion_c
+    assert "ECU_MOTION_MODE_POSITIVE_ACKERMANN" not in planner_c
+    assert "ECU_MOTION_MODE_REVERSE_ACKERMANN" not in planner_c
 
 
 def test_ackermann_remote_steering_limit_is_50_degrees_not_crab_limit(root: pathlib.Path) -> None:
