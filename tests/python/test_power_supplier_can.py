@@ -106,6 +106,8 @@ def test_power_device_decodes_feedback_and_schedules_commands(root: pathlib.Path
         "ECU_POWER_DCAC_COMMAND_PERIOD_MS",
         "ECU_DCDC48_DEFAULT_TERMINAL_VOLTAGE_DV",
         "ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV",
+        "#define ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV (138U)",
+        "#define ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA (1000U)",
         "ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV",
         "ECU_POWER_PROTOCOL_SUPPLIER_CAN",
     ]:

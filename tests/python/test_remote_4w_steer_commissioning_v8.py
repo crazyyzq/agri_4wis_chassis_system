@@ -455,7 +455,9 @@ def test_v10_full_range_90_profile_is_explicit_and_does_not_enable_other_motion(
     assert "#define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS" in config_h
     assert "(1225000)" in config_h
     assert "remote_steer_range_text" in monitor_c
-    assert "drive_rpdo=%s can3_rpdo=0" in monitor_c
+    assert "drive_rpdo=%s can3_rpdo=%s" in monitor_c
+    assert "ECU_ENABLE_CAN3_LIFT_CANOPEN &&" in monitor_c
+    assert "ECU_CANOPEN_COMMISSIONING_POLICY_PDO_OUTPUT_ENABLED" in monitor_c
     assert "ECU_COMMISSIONING_STEER_ONLY_MODE == 0" in monitor_c
 
 

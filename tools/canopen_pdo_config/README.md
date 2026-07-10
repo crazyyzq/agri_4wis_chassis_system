@@ -25,9 +25,22 @@ All Node1..13 use the same active PDO layout. Only node ID, bus, COB-ID and runt
 | RPDO2 interpolation | `0x400 + node` | `60C1:01` | 4 | 1 |
 | RPDO3 torque/current | `0x500 + node` | `6040:00` + `6060:00` + `2340:00` | 5 | 1 |
 | TPDO0 motion feedback | `0x180 + node` | `6064:00` + `606C:00` | 8 | 1 |
-| TPDO1 health feedback | `0x280 + node` | `2183:00` + `6041:00` + `221C:00` | 8 | 4 |
+| TPDO1 health feedback | `0x280 + node` | `2183:00` + `6041:00` + `221C:00` | 8 | 10 |
 
 `6060:00` is deliberately mapped into RPDO0/RPDO1/RPDO3.  It costs one byte in velocity/position commands, but every realtime command carries its required mode and is safer during field commissioning if a drive was reset, manually changed, or incompletely initialized.
+
+TPDO0 stays type 1 because realtime steering, drive, lift and pump control need
+fresh actual position / actual velocity after every SYNC.  TPDO1 is fault,
+stateword and current feedback; it is still important, but it does not need to
+arrive every SYNC.
+
+The project profile sets `0x1801:02 = 10` for TPDO1, matching the vendor table's
+transmission-type field with value `0x0A`.  Field verification on 2026-07-10
+showed that Node1..13 store this value across power cycle, but the tested
+BC/BC2 drives still transmit TPDO1 on every SYNC.  Do not assume this object
+alone reduces bus load.  A separate RAM-only Node5 experiment with
+`0x1801:02 = 255` and `0x1801:05 = 500 ms` did reduce TPDO1 to event-timer
+rate, but that is not the current saved project profile.
 
 RPDO2 uses synchronous type 1 because the CAN3 lift controller sends one
 four-axis interpolation point group and then one SYNC every 20 ms.  Type 4 would

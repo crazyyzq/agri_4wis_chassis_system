@@ -40,11 +40,18 @@ void remote_manager_update(remote_manager_t *manager,
     remote_arm_fsm_update(&manager->arm, input, &derived, config->neutral_qualify_ms);
     derived.arm_ready = manager->arm.state == REMOTE_ARM_READY;
 
-    remote_adjust_fsm_update(&manager->adjust, input, &derived);
-    derived.adjustment_active = manager->adjust.state != ADJUST_STATE_IDLE;
+    /* HOME-center is an actuator-domain boundary.  Gate the gear FSM before
+     * updating the adjustment FSM so the physical D/P/R switch remains a
+     * hydraulic direction selector and never becomes an active drive gear while
+     * the operator is in the adjustment domain.
+     */
+    derived.adjustment_active = input->home == REMOTE_POS_CENTER ||
+                                manager->adjust.state != ADJUST_STATE_IDLE;
     remote_gear_fsm_update(&manager->gear, input, &derived);
     derived.active_gear = manager->gear.active_gear;
     derived.requested_gear = manager->gear.requested_gear;
+    remote_adjust_fsm_update(&manager->adjust, input, &derived);
+    derived.adjustment_active = manager->adjust.state != ADJUST_STATE_IDLE;
 
     remote_mode_fsm_update(&manager->mode, input, &derived, config->domain_event_guard_ms);
     remote_power_fsm_update(&manager->power, input, &derived, config);
@@ -75,7 +82,11 @@ void remote_manager_update(remote_manager_t *manager,
     manager->request.steer_per_mille = input->steer_per_mille;
     manager->request.throttle_per_mille = input->throttle_per_mille;
     manager->request.clearance_per_mille = input->clearance_per_mille;
-    manager->request.track_per_mille = input->track_per_mille;
+    int8_t stable_track_direction =
+        remote_adjust_fsm_get_track_direction(&manager->adjust);
+    manager->request.track_per_mille =
+        (int16_t)(stable_track_direction > 0 ? 1000 :
+                  stable_track_direction < 0 ? -1000 : 0);
     manager->request.indicator_mode = manager->lights.indicator_mode;
     manager->request.horn_on = manager->lights.horn_on;
     manager->request.headlight_on = manager->lights.headlight_on;

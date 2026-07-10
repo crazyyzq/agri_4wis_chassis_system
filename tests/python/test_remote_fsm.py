@@ -161,10 +161,50 @@ def test_remote_input_model_keeps_sbus_channels_distinct(root: pathlib.Path) -> 
     assert "input->clearance" in adjust
     assert "input->track" in adjust
     assert "suspension_request_active" in adjust
+    assert "input->gear == REMOTE_POS_CENTER" in adjust
     assert "input->r1_changed" in adjust
     assert "input->r2_changed" in adjust
     assert "REMOTE_HYDRAULIC_SUSPENSION_FRONT" in types
     assert "REMOTE_HYDRAULIC_SUSPENSION_REAR" in types
+
+
+def test_track_adjust_hysteresis_and_no_manual_steer_in_adjust_domain(root: pathlib.Path) -> None:
+    """Track-width mode must debounce CH14 and ignore manual CH1 steering."""
+
+    adjust = read(root, "ecu/remote/src/remote_adjust_fsm.c")
+
+    for token in [
+        "raw_track_direction",
+        "update_stable_track_direction",
+        "remote_adjust_fsm_get_track_direction",
+        "track_owner_center_exit_active",
+        "track_request_pending",
+        "input->track_per_mille >= ECU_REMOTE_TRACK_EXTEND_PER_MILLE_MIN",
+        "input->track_per_mille <= ECU_REMOTE_TRACK_RETRACT_PER_MILLE_MAX",
+        "ECU_REMOTE_TRACK_EXTEND_RELEASE_PER_MILLE_MIN",
+        "ECU_REMOTE_TRACK_RETRACT_RELEASE_PER_MILLE_MAX",
+        "ECU_REMOTE_TRACK_REQUEST_STABLE_MS",
+        "Do not clear a pending CH14 track-width request",
+        "fsm->state = ADJUST_STATE_TRACK_EXITING",
+        "ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS",
+    ]:
+        assert token in adjust, token
+
+    precondition_block = adjust.split("static bool adjust_preconditions_ok", 1)[1].split(
+        "static bool clearance_request_active", 1
+    )[0]
+    assert "preconditions->steering_neutral" not in precondition_block
+    assert "entering_adjust_domain" in precondition_block
+    assert "(!entering_adjust_domain || preconditions->zero_speed)" in precondition_block
+    assert "CH1" in adjust
+    assert "not used as an" in adjust
+    assert "would abort the track operation and chatter the hydraulic valve" in adjust
+    assert "track_owner_allows_non_neutral_steering" not in adjust
+
+    exit_block = adjust.split("track_owner_center_exit_active", 1)[1].split(
+        "if (!clearance_active && !track_active && !suspension_active)", 1
+    )[0]
+    assert "return;" in exit_block
 
 
 def test_mode_fsm_requires_fresh_r1_r2_event(root: pathlib.Path) -> None:

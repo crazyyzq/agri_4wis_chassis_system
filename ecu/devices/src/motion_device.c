@@ -346,6 +346,7 @@ static bool steering_feedback_is_at_targets(
     const canopen_master_service_t *canopen,
     const ecu_hardware_config_t *config,
     const int32_t target_counts[ECU_WHEEL_COUNT],
+    int32_t tolerance_counts,
     uint8_t *missing_axis_mask)
 {
     uint8_t missing_mask = 0U;
@@ -383,7 +384,7 @@ static bool steering_feedback_is_at_targets(
             feedback.actual_position_counts;
         if (abs_i32_delta(feedback.actual_position_counts,
                           target_counts[wheel]) >
-            ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS) {
+            tolerance_counts) {
             missing_mask |= axis_bit;
         }
     }
@@ -406,14 +407,23 @@ static bool presteer_gate_allows_drive(
     bool requires_presteer =
         command != NULL && motion_mode_requires_presteer(command->motion_mode);
     bool drive_motion_requested = command_requests_drive_motion(command);
+    bool track_assist_requested =
+        command != NULL && command->track_assist_requested;
+    bool presteer_check_needed =
+        requires_presteer &&
+        ((drive_allowed_by_safety && drive_motion_requested) ||
+         track_assist_requested);
 
-    if (state == NULL || !requires_presteer ||
-        !drive_allowed_by_safety || !drive_motion_requested) {
+    if (state == NULL || !presteer_check_needed) {
         if (state != NULL) {
             state->presteer_drive_hold_active = false;
             state->presteer_target_reached = false;
+            state->track_assist_steer_approximately_ready = false;
             state->presteer_missing_axis_mask = 0U;
+            state->track_assist_missing_axis_mask = 0U;
             state->presteer_hold_start_ms = 0U;
+            state->track_assist_steer_ready_since_ms = 0U;
+            state->track_assist_steer_ready_eval_ms = 0U;
             state->presteer_mode =
                 command != NULL ? command->motion_mode : ECU_MOTION_MODE_POSITIVE_ACKERMANN;
         }
@@ -423,10 +433,40 @@ static bool presteer_gate_allows_drive(
     state->presteer_mode = command->motion_mode;
     uint8_t missing_mask = 0U;
     bool target_reached = steering_feedback_is_at_targets(state,
-                                                         canopen,
-                                                         config,
-                                                         steer_target_counts,
-                                                         &missing_mask);
+                                                          canopen,
+                                                          config,
+                                                          steer_target_counts,
+                                                          ECU_CANOPEN_PRESTEER_POSITION_TOLERANCE_COUNTS,
+                                                          &missing_mask);
+    uint8_t track_assist_missing_mask = 0U;
+    bool track_assist_ready_raw =
+        track_assist_requested &&
+        steering_feedback_is_at_targets(state,
+                                        canopen,
+                                        config,
+                                        steer_target_counts,
+                                        ECU_TRACK_ASSIST_STEER_APPROX_TOLERANCE_COUNTS,
+                                        &track_assist_missing_mask);
+    if (track_assist_requested) {
+        /* CAN3 valve gating is task-decoupled from CAN2 steering.  Record the
+         * time at which CAN2 evaluated the current track-width steering target
+         * so the CAN3 task can reject a stale "ready" bit left over from a
+         * previous track-width session.
+         */
+        state->track_assist_steer_ready_eval_ms = now_ms;
+    }
+    state->track_assist_missing_axis_mask = track_assist_missing_mask;
+    if (!track_assist_ready_raw) {
+        state->track_assist_steer_approximately_ready = false;
+        state->track_assist_steer_ready_since_ms = 0U;
+    } else {
+        if (state->track_assist_steer_ready_since_ms == 0U) {
+            state->track_assist_steer_ready_since_ms = now_ms;
+        }
+        state->track_assist_steer_approximately_ready =
+            (uint32_t)(now_ms - state->track_assist_steer_ready_since_ms) >=
+            ECU_TRACK_ASSIST_STEER_READY_STABLE_MS;
+    }
     state->presteer_target_reached = target_reached;
     state->presteer_missing_axis_mask = missing_mask;
 
@@ -925,7 +965,11 @@ static bool command_changed(const motion_device_state_t *state,
         state->last_motion_command.steer_commission_interlock_ok !=
             command->steer_commission_interlock_ok ||
         state->last_motion_command.steer_commission_steering_neutral !=
-            command->steer_commission_steering_neutral) {
+            command->steer_commission_steering_neutral ||
+        state->last_motion_command.track_assist_requested !=
+            command->track_assist_requested ||
+        state->last_motion_command.track_assist_active !=
+            command->track_assist_active) {
         return true;
     }
 
@@ -936,6 +980,10 @@ static bool command_changed(const motion_device_state_t *state,
         }
         if (state->last_motion_command.target_steer_deg[wheel] !=
             command->target_steer_deg[wheel]) {
+            return true;
+        }
+        if (state->last_motion_command.track_assist_current_10ma[wheel] !=
+            command->track_assist_current_10ma[wheel]) {
             return true;
         }
     }
@@ -982,10 +1030,10 @@ static bool build_steer_rpdo_request(canopen_master_pdo_request_t *request,
 }
 
 static bool build_drive_velocity_rpdo_request(canopen_master_pdo_request_t *request,
-                                              const ecu_canopen_node_config_t *node,
-                                              uint16_t control_word,
-                                              int32_t target_velocity_units,
-                                              uint32_t group_sequence)
+                                               const ecu_canopen_node_config_t *node,
+                                               uint16_t control_word,
+                                               int32_t target_velocity_units,
+                                               uint32_t group_sequence)
 {
     canopen_node_pdo_profile_t profile;
 
@@ -1002,6 +1050,29 @@ static bool build_drive_velocity_rpdo_request(canopen_master_pdo_request_t *requ
                                             request,
                                             group_sequence,
                                             CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY);
+}
+
+static bool build_drive_current_rpdo_request(canopen_master_pdo_request_t *request,
+                                             const ecu_canopen_node_config_t *node,
+                                             uint16_t control_word,
+                                             int16_t target_current_10ma,
+                                             uint32_t group_sequence)
+{
+    canopen_node_pdo_profile_t profile;
+
+    if (request == NULL || node == NULL ||
+        !canopen_pdo_profile_init(node->node_id,
+                                  CANOPEN_AXIS_ROLE_DRIVE_VELOCITY,
+                                  &profile)) {
+        return false;
+    }
+
+    return canopen_pdo_build_current_rpdo3(&profile,
+                                           control_word,
+                                           target_current_10ma,
+                                           request,
+                                           group_sequence,
+                                           CANOPEN_MASTER_PDO_PHASE_DRIVE_CURRENT);
 }
 
 static bool build_node5_steer_rpdo_request(canopen_master_pdo_request_t *request,
@@ -1173,9 +1244,9 @@ static int32_t rate_limit_velocity_units(int32_t current,
 }
 
 static bool cache_latest_drive_velocity(motion_device_state_t *state,
-                                        uint32_t wheel,
-                                        int32_t velocity_units,
-                                        bool enable_requested)
+                                         uint32_t wheel,
+                                         int32_t velocity_units,
+                                         bool enable_requested)
 {
     if (state == NULL || wheel >= ECU_WHEEL_COUNT) {
         return false;
@@ -1191,11 +1262,41 @@ static bool cache_latest_drive_velocity(motion_device_state_t *state,
     }
 
     if (!state->drive_latest_velocity_valid[wheel] ||
+        state->drive_latest_command_kind[wheel] != MOTION_DRIVE_COMMAND_VELOCITY ||
         i32_changed_beyond_deadband(state->drive_latest_velocity_units[wheel],
                                     velocity_units,
                                     ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS) ||
         state->drive_latest_enable_requested[wheel] != enable_requested) {
         state->drive_latest_velocity_units[wheel] = velocity_units;
+        state->drive_latest_current_10ma[wheel] = 0;
+        state->drive_latest_command_kind[wheel] = MOTION_DRIVE_COMMAND_VELOCITY;
+        state->drive_latest_enable_requested[wheel] = enable_requested;
+        state->drive_latest_velocity_valid[wheel] = true;
+        state->drive_pending_velocity[wheel] = true;
+    }
+    return true;
+}
+
+static bool cache_latest_drive_current(motion_device_state_t *state,
+                                       uint32_t wheel,
+                                       int16_t current_10ma,
+                                       bool enable_requested)
+{
+    if (state == NULL || wheel >= ECU_WHEEL_COUNT) {
+        return false;
+    }
+
+    if (!enable_requested) {
+        current_10ma = 0;
+    }
+
+    if (!state->drive_latest_velocity_valid[wheel] ||
+        state->drive_latest_command_kind[wheel] != MOTION_DRIVE_COMMAND_CURRENT ||
+        state->drive_latest_current_10ma[wheel] != current_10ma ||
+        state->drive_latest_enable_requested[wheel] != enable_requested) {
+        state->drive_latest_velocity_units[wheel] = 0;
+        state->drive_latest_current_10ma[wheel] = current_10ma;
+        state->drive_latest_command_kind[wheel] = MOTION_DRIVE_COMMAND_CURRENT;
         state->drive_latest_enable_requested[wheel] = enable_requested;
         state->drive_latest_velocity_valid[wheel] = true;
         state->drive_pending_velocity[wheel] = true;
@@ -1636,19 +1737,39 @@ static bool build_drive_group_targets(motion_device_state_t *state,
                                       uint32_t elapsed_ms,
                                       uint32_t now_ms,
                                       int32_t out_velocity_units[ECU_WHEEL_COUNT],
+                                      int16_t out_current_10ma[ECU_WHEEL_COUNT],
+                                      motion_drive_command_kind_t *out_kind,
                                       bool out_enable_requested[ECU_WHEEL_COUNT])
 {
     bool group_changed = false;
+    motion_drive_command_kind_t group_kind = MOTION_DRIVE_COMMAND_VELOCITY;
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         if (!state->drive_latest_velocity_valid[wheel]) {
             return false;
         }
 
+        motion_drive_command_kind_t requested_kind =
+            state->drive_latest_command_kind[wheel];
+        if (wheel == 0U) {
+            group_kind = requested_kind;
+        } else if (requested_kind != group_kind) {
+            return false;
+        }
+
         int32_t requested = state->drive_latest_velocity_units[wheel];
         bool enable_requested = state->drive_latest_enable_requested[wheel];
         int32_t limited = requested;
-        if (state->drive_last_velocity_valid[wheel]) {
+        int16_t current_10ma = state->drive_latest_current_10ma[wheel];
+
+        if (requested_kind == MOTION_DRIVE_COMMAND_CURRENT) {
+            limited = 0;
+            if (!enable_requested) {
+                current_10ma = 0;
+            }
+        } else if (state->drive_last_velocity_valid[wheel] &&
+                   state->drive_last_command_kind[wheel] ==
+                       MOTION_DRIVE_COMMAND_VELOCITY) {
             limited = rate_limit_velocity_units(state->drive_last_velocity_units[wheel],
                                                 requested,
                                                 elapsed_ms);
@@ -1658,23 +1779,39 @@ static bool build_drive_group_targets(motion_device_state_t *state,
         }
 
         out_velocity_units[wheel] = limited;
+        out_current_10ma[wheel] = current_10ma;
         out_enable_requested[wheel] = enable_requested;
         bool nonzero_velocity_refresh_due =
+            requested_kind == MOTION_DRIVE_COMMAND_VELOCITY &&
             enable_requested &&
             (limited != 0 || state->drive_last_velocity_units[wheel] != 0) &&
+            (uint32_t)(now_ms - state->drive_last_target_update_ms[wheel]) >=
+                ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS;
+        bool current_refresh_due =
+            requested_kind == MOTION_DRIVE_COMMAND_CURRENT &&
+            enable_requested &&
+            current_10ma != 0 &&
             (uint32_t)(now_ms - state->drive_last_target_update_ms[wheel]) >=
                 ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS;
         if (!state->drive_last_velocity_valid[wheel] ||
             state->drive_pending_velocity[wheel] ||
             nonzero_velocity_refresh_due ||
+            current_refresh_due ||
+            state->drive_last_command_kind[wheel] != requested_kind ||
             state->drive_last_enable_requested[wheel] != enable_requested ||
-            i32_changed_beyond_deadband(state->drive_last_velocity_units[wheel],
-                                        limited,
-                                        ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS)) {
+            (requested_kind == MOTION_DRIVE_COMMAND_VELOCITY &&
+             i32_changed_beyond_deadband(state->drive_last_velocity_units[wheel],
+                                         limited,
+                                         ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS)) ||
+            (requested_kind == MOTION_DRIVE_COMMAND_CURRENT &&
+             state->drive_last_current_10ma[wheel] != current_10ma)) {
             group_changed = true;
         }
     }
 
+    if (out_kind != NULL) {
+        *out_kind = group_kind;
+    }
     return group_changed;
 }
 
@@ -1682,6 +1819,8 @@ static bool queue_drive_group(canopen_master_service_t *canopen,
                               const ecu_hardware_config_t *config,
                               motion_device_state_t *state,
                               const int32_t velocity_units[ECU_WHEEL_COUNT],
+                              const int16_t current_10ma[ECU_WHEEL_COUNT],
+                              motion_drive_command_kind_t group_kind,
                               const bool enable_requested[ECU_WHEEL_COUNT],
                               uint32_t now_ms)
 {
@@ -1696,12 +1835,22 @@ static bool queue_drive_group(canopen_master_service_t *canopen,
         uint16_t control_word = enable_requested[wheel] ?
             SERVO_DRIVE_CONTROL_ENABLE_OPERATION :
             SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE;
-        if (!build_drive_velocity_rpdo_request(&requests[wheel],
-                                               &config->drive_nodes[wheel],
-                                               control_word,
-                                               velocity_units[wheel],
-                                               group_sequence)) {
-            return false;
+        if (group_kind == MOTION_DRIVE_COMMAND_CURRENT) {
+            if (!build_drive_current_rpdo_request(&requests[wheel],
+                                                  &config->drive_nodes[wheel],
+                                                  control_word,
+                                                  current_10ma[wheel],
+                                                  group_sequence)) {
+                return false;
+            }
+        } else {
+            if (!build_drive_velocity_rpdo_request(&requests[wheel],
+                                                   &config->drive_nodes[wheel],
+                                                   control_word,
+                                                   velocity_units[wheel],
+                                                   group_sequence)) {
+                return false;
+            }
         }
     }
 
@@ -1732,6 +1881,10 @@ static bool queue_drive_group(canopen_master_service_t *canopen,
     memcpy(state->drive_active_group_velocity_units,
            velocity_units,
            sizeof(state->drive_active_group_velocity_units));
+    memcpy(state->drive_active_group_current_10ma,
+           current_10ma,
+           sizeof(state->drive_active_group_current_10ma));
+    state->drive_active_group_kind = group_kind;
     memcpy(state->drive_active_group_enable_requested,
            enable_requested,
            sizeof(state->drive_active_group_enable_requested));
@@ -1744,14 +1897,19 @@ static void finish_completed_drive_group(motion_device_state_t *state,
 {
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         int32_t velocity = state->drive_active_group_velocity_units[wheel];
+        int16_t current_10ma = state->drive_active_group_current_10ma[wheel];
         bool enable_requested =
             state->drive_active_group_enable_requested[wheel];
         state->drive_last_velocity_valid[wheel] = true;
         state->drive_last_velocity_units[wheel] = velocity;
+        state->drive_last_current_10ma[wheel] = current_10ma;
+        state->drive_last_command_kind[wheel] = state->drive_active_group_kind;
         state->drive_last_enable_requested[wheel] = enable_requested;
         state->drive_last_target_update_ms[wheel] = now_ms;
         state->drive_pending_velocity[wheel] =
+            state->drive_active_group_kind != state->drive_latest_command_kind[wheel] ||
             velocity != state->drive_latest_velocity_units[wheel] ||
+            current_10ma != state->drive_latest_current_10ma[wheel] ||
             enable_requested != state->drive_latest_enable_requested[wheel];
     }
 
@@ -1760,6 +1918,7 @@ static void finish_completed_drive_group(motion_device_state_t *state,
     state->can2_realtime_consecutive_failure_count = 0U;
     state->drive_group_active = false;
     state->drive_active_group_sequence = 0U;
+    state->drive_active_group_kind = MOTION_DRIVE_COMMAND_VELOCITY;
 }
 
 static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state,
@@ -1911,8 +2070,12 @@ static void reset_can2_realtime_motion_state(motion_device_state_t *state,
 
     state->presteer_drive_hold_active = false;
     state->presteer_target_reached = false;
+    state->track_assist_steer_approximately_ready = false;
     state->presteer_missing_axis_mask = 0U;
+    state->track_assist_missing_axis_mask = 0U;
     state->presteer_hold_start_ms = 0U;
+    state->track_assist_steer_ready_since_ms = 0U;
+    state->track_assist_steer_ready_eval_ms = 0U;
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         state->drive_realtime_enabled[wheel] = false;
@@ -2048,6 +2211,8 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
                                         config,
                                         state,
                                         state->drive_next_group_velocity_units,
+                                        state->drive_next_group_current_10ma,
+                                        state->drive_next_group_kind,
                                         state->drive_next_group_enable_requested,
                                         now_ms);
         if (queued) {
@@ -2073,11 +2238,15 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
     }
 
     int32_t velocity_units[ECU_WHEEL_COUNT] = {0};
+    int16_t current_10ma[ECU_WHEEL_COUNT] = {0};
     bool enable_requested[ECU_WHEEL_COUNT] = {false};
+    motion_drive_command_kind_t group_kind = MOTION_DRIVE_COMMAND_VELOCITY;
     if (!build_drive_group_targets(state,
                                    elapsed_ms,
                                    now_ms,
                                    velocity_units,
+                                   current_10ma,
+                                   &group_kind,
                                    enable_requested)) {
         canopen_master_service_note_pdo_same_target_coalesced(canopen);
         return ECU_DEVICE_APPLY_OK;
@@ -2088,6 +2257,10 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
         memcpy(state->drive_next_group_velocity_units,
                velocity_units,
                sizeof(state->drive_next_group_velocity_units));
+        memcpy(state->drive_next_group_current_10ma,
+               current_10ma,
+               sizeof(state->drive_next_group_current_10ma));
+        state->drive_next_group_kind = group_kind;
         memcpy(state->drive_next_group_enable_requested,
                enable_requested,
                sizeof(state->drive_next_group_enable_requested));
@@ -2099,11 +2272,17 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
                            config,
                            state,
                            velocity_units,
+                           current_10ma,
+                           group_kind,
                            enable_requested,
                            now_ms)) {
         memcpy(state->drive_next_group_velocity_units,
                velocity_units,
                sizeof(state->drive_next_group_velocity_units));
+        memcpy(state->drive_next_group_current_10ma,
+               current_10ma,
+               sizeof(state->drive_next_group_current_10ma));
+        state->drive_next_group_kind = group_kind;
         memcpy(state->drive_next_group_enable_requested,
                enable_requested,
                sizeof(state->drive_next_group_enable_requested));
@@ -2875,6 +3054,13 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
     bool drive_enable_requested =
         command->high_voltage_feedback_ready &&
         !command->high_voltage_disable_request;
+    bool track_assist_current_allowed =
+        command->track_assist_requested &&
+        command->track_assist_active &&
+        command->high_voltage_feedback_ready &&
+        !command->high_voltage_disable_request &&
+        steer_allowed &&
+        state->track_assist_steer_approximately_ready;
     bool ok = true;
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         int32_t velocity_units = 0;
@@ -2895,13 +3081,22 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
          * safety inhibit or brake-release transition immediately overwrites a
          * previous nonzero velocity instead of waiting for the 500 ms refresh.
          */
-        ok = cache_latest_drive_velocity(state,
-                                          wheel,
-                                          velocity_units,
-                                          drive_enable_requested) && ok;
+        if (track_assist_current_allowed) {
+            ok = cache_latest_drive_current(state,
+                                            wheel,
+                                            command->track_assist_current_10ma[wheel],
+                                            drive_enable_requested) && ok;
+        } else {
+            ok = cache_latest_drive_velocity(state,
+                                             wheel,
+                                             velocity_units,
+                                             drive_enable_requested) && ok;
+        }
         if (!commissioning_policy_allows_drive_rpdo()) {
             state->drive_last_velocity_valid[wheel] = true;
             state->drive_last_velocity_units[wheel] = 0;
+            state->drive_last_current_10ma[wheel] = 0;
+            state->drive_last_command_kind[wheel] = MOTION_DRIVE_COMMAND_VELOCITY;
             state->drive_last_enable_requested[wheel] = false;
             state->drive_velocity_mode_ready[wheel] = false;
         }

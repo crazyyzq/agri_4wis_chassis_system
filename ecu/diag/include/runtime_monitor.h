@@ -90,6 +90,10 @@ typedef struct {
     remote_power_state_t power_state;
     remote_authority_state_t authority_state;
     remote_adjust_state_t adjust_state;
+    int16_t remote_steer_per_mille;
+    int16_t remote_throttle_per_mille;
+    int16_t remote_clearance_per_mille;
+    int16_t remote_track_per_mille;
     status_led_pattern_t status_led_pattern;
     diag_code_t diagnostic;
 
@@ -113,6 +117,12 @@ typedef struct {
     bool hydraulic_pump_feedback_valid;
     int32_t hydraulic_pump_actual_velocity_units;
     uint32_t hydraulic_pump_start_timeout_count;
+    uint8_t lift_interpolation_state;
+    int8_t lift_requested_direction;
+    int8_t lift_active_direction;
+    uint8_t lift_feedback_fresh_mask;
+    uint8_t lift_preload_points_completed;
+    uint32_t lift_interpolation_failure_count;
     bool steer_normal_pdo_allowed;
     bool steer_safety_inhibited;
     uint8_t steer_inhibit_reason;
@@ -132,6 +142,7 @@ typedef struct {
     uint32_t can2_realtime_last_recovery_ms;
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
+    bool track_assist_steer_approximately_ready;
     uint8_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
     uint32_t presteer_timeout_count;

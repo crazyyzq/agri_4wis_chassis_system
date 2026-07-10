@@ -488,6 +488,7 @@ static bool pdo_phase_is_arm(canopen_master_pdo_phase_t phase)
     return phase == CANOPEN_MASTER_PDO_PHASE_STEER_ARM ||
            phase == CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM ||
            phase == CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY ||
+           phase == CANOPEN_MASTER_PDO_PHASE_DRIVE_CURRENT ||
            phase == CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT ||
            phase == CANOPEN_MASTER_PDO_PHASE_HYDRAULIC_PUMP_VELOCITY;
 }
@@ -661,13 +662,11 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
         if (queued->node_id == node_id &&
             queued->index == index &&
             queued->subindex == subindex) {
-            /* Control-word edges such as 0x000F -> 0x001F must remain ordered,
-             * but repeated identical control words are just backlog.  Replacing
-             * the older identical value preserves the required edge semantics
-             * while keeping the field bus responsive during joystick motion.
+            /* Preserve-order SDOs are state-machine edges, not idempotent
+             * settings.  Even two equal values can be separated by other PDO
+             * or SDO phases in a device-level sequence, so never coalesce them.
              */
-            if ((queued->preserve_order || request.preserve_order) &&
-                queued->value != request.value) {
+            if (queued->preserve_order || request.preserve_order) {
                 continue;
             }
             *queued = request;
@@ -917,6 +916,32 @@ uint8_t canopen_master_service_pdo_queue_available(const canopen_master_service_
     }
     taskEXIT_CRITICAL();
     return available;
+}
+
+bool canopen_master_service_realtime_pdo_idle(
+    const canopen_master_service_t *service)
+{
+    if (service == NULL) {
+        return false;
+    }
+    return service->pdo_queue_count == 0U &&
+           !service->pdo_in_flight &&
+           service->active_pdo_group_state !=
+               CANOPEN_MASTER_PDO_GROUP_STATE_QUEUED &&
+           service->active_pdo_group_state !=
+               CANOPEN_MASTER_PDO_GROUP_STATE_ARM_IN_FLIGHT &&
+           service->active_pdo_group_state !=
+               CANOPEN_MASTER_PDO_GROUP_STATE_TRIGGER_IN_FLIGHT;
+}
+
+bool canopen_master_service_sdo_download_idle(
+    const canopen_master_service_t *service)
+{
+    if (service == NULL) {
+        return false;
+    }
+    return service->command_queue_count == 0U &&
+           !service->sdo_download_active;
 }
 
 bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *service,
@@ -2274,7 +2299,13 @@ static void refresh_tpdo_freshness(canopen_master_service_t *service,
             feedback->last_tpdo1_ms = feedback->last_tpdo0_ms;
             tpdo1_fresh = true;
         }
-        feedback->feedback_fresh = tpdo0_fresh && tpdo1_fresh;
+        /* Realtime motion only needs fresh TPDO0 position/velocity feedback.
+         * TPDO1 carries lower-rate fault/status/current information; a latched
+         * fault received on TPDO1 is still honored by device layers, but TPDO1
+         * freshness must not make healthy position feedback stale or increase
+         * the required feedback traffic rate.
+         */
+        feedback->feedback_fresh = tpdo0_fresh;
         end_feedback_write(feedback);
     }
 }

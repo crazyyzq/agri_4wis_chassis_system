@@ -84,7 +84,9 @@ typedef enum {
     CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_ARM,
     CANOPEN_MASTER_PDO_PHASE_NODE5_POSITION_TRIGGER,
     CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY,
+    CANOPEN_MASTER_PDO_PHASE_DRIVE_CURRENT,
     CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT,
+    CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_TRIGGER,
     CANOPEN_MASTER_PDO_PHASE_HYDRAULIC_PUMP_VELOCITY,
     CANOPEN_MASTER_PDO_PHASE_SAFE_STOP
 } canopen_master_pdo_phase_t;
@@ -390,6 +392,10 @@ bool canopen_master_service_get_node_feedback(const canopen_master_service_t *se
 bool canopen_master_service_steer_tpdo_observers_ready(const canopen_master_service_t *service);
 
 uint8_t canopen_master_service_pdo_queue_available(const canopen_master_service_t *service);
+bool canopen_master_service_realtime_pdo_idle(
+    const canopen_master_service_t *service);
+bool canopen_master_service_sdo_download_idle(
+    const canopen_master_service_t *service);
 bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *service,
                                               uint32_t group_sequence);
 bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *service,

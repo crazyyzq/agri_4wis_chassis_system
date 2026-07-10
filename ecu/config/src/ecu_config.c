@@ -58,13 +58,24 @@ static const ecu_config_t s_default_config = {
 
 /* Track-width adjustment helper gains in vehicle leg order:
  *   leg 1 front-right, leg 2 front-left, leg 3 rear-left, leg 4 rear-right.
- * Steering targets point the wheels into the adjustment posture.  Assist torque
- * signs are positive on the right side and negative on the left side, matching
- * the confirmed vehicle geometry. */
+ *
+ * Current-mode RPDO3 writes this table directly to each drive node's 0x2340
+ * target-current object; it is not multiplied by drive_direction_sign.  With
+ * the steering posture below, field commissioning shows that track-width
+ * extension pushes correctly with negative current on legs 1/4 and positive
+ * current on legs 2/3.  Retraction negates this table in the command arbiter.
+ * Keep the signs here rather than in the actuator logic so a later
+ * plumbing/posture change is a configuration edit.
+ */
 static const track_adjust_config_t s_track_adjust_config = {
     .steer_target_deg = { 90.0f, -90.0f, -90.0f, 90.0f },
-    .assist_torque_sign = { 1.0f, -1.0f, -1.0f, 1.0f },
-    .assist_torque_limit_nm = { 8.0f, 8.0f, 8.0f, 8.0f },
+    .assist_torque_sign = { -1.0f, 1.0f, 1.0f, -1.0f },
+    .assist_current_10ma = {
+        ECU_TRACK_ASSIST_LEG1_CURRENT_10MA,
+        ECU_TRACK_ASSIST_LEG2_CURRENT_10MA,
+        ECU_TRACK_ASSIST_LEG3_CURRENT_10MA,
+        ECU_TRACK_ASSIST_LEG4_CURRENT_10MA
+    },
     .assist_wheel_speed_limit_rpm = { 12.0f, 12.0f, 12.0f, 12.0f }
 };
 

@@ -20,12 +20,15 @@ void safety_manager_apply(const vehicle_safety_snapshot_t *safety,
         command->target_speed_mps = 0.0f;
         for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
             command->target_wheel_speed_mps[wheel] = 0.0f;
+            command->track_assist_current_10ma[wheel] = 0;
         }
         command->height_rate_mm_s = 0.0f;
         command->track_rate_mm_s = 0.0f;
         command->hydraulic_enable = false;
         command->high_voltage_enable = false;
         command->hydraulic_valve_mask = 0U;
+        command->track_assist_requested = false;
+        command->track_assist_active = false;
         command->horn_on = false;
         command->steer_commission_interlock_ok = false;
         command->steer_commission_steering_neutral = false;
