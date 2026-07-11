@@ -207,6 +207,11 @@ void remote_sbus_mapper_build_input(remote_sbus_mapper_t *mapper,
     out->r2 = stable_position_from_channel(mapper, ppm_sbus, ECU_SBUS_CH_R2, config, now_ms);
     out->r1_changed = mapper->discrete_channels[ECU_SBUS_CH_R1].changed;
     out->r2_changed = mapper->discrete_channels[ECU_SBUS_CH_R2].changed;
+    /* Field remote mapping: B1 is CH10, which this project historically names
+     * ECU_SBUS_CH_HORN.  Keep the channel mapping stable and expose a semantic
+     * B1 edge for maintenance gestures such as steering zero calibration.
+     */
+    out->b1_changed = mapper->discrete_channels[ECU_SBUS_CH_HORN].changed;
 
     if (out->sbus_valid) {
         out->steer_per_mille =

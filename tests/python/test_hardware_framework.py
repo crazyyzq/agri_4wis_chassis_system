@@ -477,6 +477,8 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
     controlcan_py = read(root, "tools/can/controlcan.py")
     monitor_py = read(root, "tools/can/can2_monitor.py")
     motion_debug_py = read(root, "tools/canopen_motion_debug/motion8_remote_sim_debug.py")
+    steer_zero_py = read(root, "tools/canopen_position_debug/steer4_zero_calibration_debug.py")
+    steer_zero_doc = read(root, "doc/ECU/转向零点校准脚本说明.md")
     modbus_py = read(root, "tools/modbus/rtu_probe.py")
 
     for token in [
@@ -505,10 +507,117 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
     assert "Node5..8 steering axes" in motion_debug_py
     assert "CONTROL_DISABLE_VOLTAGE" in motion_debug_py
     assert "SYNC_COB_ID" in motion_debug_py
+    for token in [
+        "--allow-motion",
+        "dry-run by default",
+        "--stall-current-10ma",
+        "--stall-immediate-current-10ma",
+        "--stall-dwell-ms",
+        "--set-current-position-zero",
+        "--zero-object-index",
+        "--save-drive-parameters",
+        "CANOPEN_STORE_SAVE_SIGNATURE",
+        "0x221C",
+        "stop_all_axes",
+        "set_current_position_zero",
+        "steer_zero_calibration.json",
+        "midpoint_counts_by_node",
+        "0x6064",
+    ]:
+        assert token in steer_zero_py, token
+    assert "--reset-at-midpoint-to-zero" not in steer_zero_py
+    assert "NMT_COMMAND_RESET_NODE" not in steer_zero_py
+    assert "write_home_offsets_607c" not in steer_zero_py
+    assert "--write-home-offset-607c" not in steer_zero_py
+    assert "requires --set-current-position-zero" in steer_zero_py
+    for token in [
+        "写 `0x6064:00 = 0`",
+        "0x6064:00 = 0",
+        "不采用 `0x607C home offset` 作为正式方案",
+        "B1 为 CH10",
+        "短按 3 次",
+        "9A",
+        "三段速度",
+        "速度模式闭环回到各自中值位置",
+        "0x1010:01 = 0x65766173",
+    ]:
+        assert token in steer_zero_doc, token
     assert "COM10" in modbus_py
     assert "serial.Serial" in modbus_py
     assert "read_holding_registers" in modbus_py
     assert "write_register" not in modbus_py
+
+
+def test_steering_zero_calibration_uses_field_verified_three_stage_method(root: pathlib.Path) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    remote_h = read(root, "ecu/remote/include/remote_types.h")
+    remote_c = read(root, "ecu/remote/src/remote_manager.c")
+    arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+
+    for token in [
+        "ECU_STEER_ZERO_SEARCH_FAST_VELOCITY_UNITS             (800000)",
+        "ECU_STEER_ZERO_SEARCH_MEDIUM_VELOCITY_UNITS           (250000)",
+        "ECU_STEER_ZERO_SEARCH_SLOW_VELOCITY_UNITS             (60000)",
+        "ECU_STEER_ZERO_SEARCH_SLOWDOWN1_ABS_COUNTS            (1200000)",
+        "ECU_STEER_ZERO_SEARCH_SLOWDOWN2_ABS_COUNTS            (1650000)",
+        "ECU_STEER_ZERO_PROTECTION_CURRENT_10MA                (900)",
+        "ECU_STEER_ZERO_SPEED_STOP_WINDOW_UNITS                (30000)",
+        "ECU_STEER_ZERO_SPEED_STOP_DWELL_MS                    (300U)",
+        "ECU_STEER_ZERO_MIN_TRAVEL_COUNTS                      (1500000)",
+        "ECU_STEER_ZERO_INNER_SAFE_ABS_COUNTS                  (300000)",
+        "ECU_STEER_ZERO_MID_RETURN_FAST_VELOCITY_UNITS         (500000)",
+        "ECU_STEER_ZERO_MID_RETURN_MEDIUM_VELOCITY_UNITS       (240000)",
+        "ECU_STEER_ZERO_MID_RETURN_SLOW_VELOCITY_UNITS         (30000)",
+        "ECU_STEER_ZERO_MIDPOINT_TOLERANCE_COUNTS              (2000)",
+        "ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS        (600U)",
+        "ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS                 (50U)",
+        "ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (30000U)",
+        "ECU_STEER_ZERO_SDO_TIMEOUT_MS                         (1000U)",
+    ]:
+        assert token in config_h, token
+    assert "ECU_STEER_ZERO_STALL_IMMEDIATE_CURRENT_10MA           (1500)" not in config_h
+
+    assert "bool steer_zero_calibration_request;" in remote_h
+    assert "bool b1_zero_calibration_raw_request;" in remote_h
+    assert "remote_manager_update_b1_zero_calibration_request" in remote_c
+    assert "ECU_REMOTE_B1_ZERO_CALIBRATION_PRESS_COUNT" in remote_c
+    assert "Count every debounced CH10 state transition as one short press" in remote_c
+    assert "manager->b1_zero_calibration_press_latched = input->b1_changed" in remote_c
+    assert "steer_zero_calibration_request_hold_active" in remote_c
+    assert "ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS" in remote_c
+    assert "b1_zero_calibration_press_latched" in remote_c
+    zero_gate = remote_c.split(
+        "manager->request.steer_zero_calibration_request", 1
+    )[0].split("bool steer_zero_calibration_gate_open", 1)[1]
+    assert "input->home == REMOTE_POS_CENTER" in zero_gate
+    assert "input->home != REMOTE_POS_CENTER" not in remote_c.split(
+        "manager->request.steer_zero_calibration_request", 1
+    )[1].split("manager->request.orderly_shutdown_request", 1)[0]
+    assert "remote->steer_zero_calibration_request" in arbiter_c
+    assert "command->steer_zero_calibration_request" in motion_c
+    assert "steer_zero_calibration_requested = true" in motion_c
+    for token in [
+        "MOTION_STEER_ZERO_CAL_SETUP",
+        "MOTION_STEER_ZERO_CAL_SEARCH_LEFT",
+        "MOTION_STEER_ZERO_CAL_SEARCH_RIGHT",
+        "MOTION_STEER_ZERO_CAL_RETURN_MID",
+        "MOTION_STEER_ZERO_CAL_WRITE_ZERO",
+        "MOTION_STEER_ZERO_CAL_FAULT",
+    ]:
+        assert token in motion_h, token
+    for token in [
+        "steer_zero_calibration_step",
+        "0x6064",
+        "canopen_master_service_request_sdo_write",
+        "build_steer_zero_velocity_rpdo_request",
+        "ECU_STEER_ZERO_PROTECTION_CURRENT_10MA",
+        "ECU_STEER_ZERO_SPEED_STOP_DWELL_MS",
+    ]:
+        assert token in motion_c, token
+    assert "NMT_COMMAND_RESET_NODE" not in motion_c
+    assert "0x607C" not in motion_c
 
 
 def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path) -> None:

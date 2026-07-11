@@ -344,6 +344,61 @@
 #define ECU_STEER_FIXED_TRANSITION_MAX_SPEED_COUNTS_PER_SEC (2700000)
 #define ECU_STEER_FIXED_TRANSITION_MIN_MS                   (900U)
 #define ECU_STEER_FIXED_TRANSITION_MAX_MS                   (2200U)
+/* Field return-to-zero tuning, CAN analyzer 2026-07-10:
+ * - profile position mode, RPDO1, 0x000F arm -> 0x001F trigger;
+ * - 0x6081 = 2400000, 0x6083/0x6084 = 1200000;
+ * - arrival judged by ±20000 counts and ±30000 velocity-units for 3 feedback
+ *   samples.  Keep these separate from joystick smoothing so calibration and
+ *   fixed-posture recovery can be tightened without changing normal steering.
+ */
+#define ECU_STEER_RETURN_ZERO_PROFILE_VELOCITY_COUNTS_PER_SEC (2400000)
+#define ECU_STEER_RETURN_ZERO_PROFILE_ACCEL_COUNTS_PER_SEC2   (1200000)
+#define ECU_STEER_RETURN_ZERO_POSITION_TOLERANCE_COUNTS       (20000)
+#define ECU_STEER_RETURN_ZERO_VELOCITY_TOLERANCE_UNITS        (30000)
+#define ECU_STEER_RETURN_ZERO_STABLE_SAMPLES                  (3U)
+/* Field steering zero-search parameters, CAN analyzer verified 2026-07-10.
+ *
+ * The installed steering mechanism does not always build high current at the
+ * mechanical end stop.  Waiting for 7.5 A/15 A either times out on some axes or
+ * pushes the drive too close to protection.  The stable method is:
+ * 1) velocity-mode search in three stages: fast -> medium -> slow;
+ * 2) stop immediately if current reaches 9 A;
+ * 3) otherwise accept the end stop only after minimum travel and zero-speed
+ *    dwell are both true;
+ * 4) retreat all axes to the inner safe band before changing direction;
+ * 5) return to midpoint with velocity closed-loop, not profile-position mode;
+ * 6) only then write 0 to 0x6064 in the explicit maintenance/calibration flow.
+ */
+#define ECU_STEER_ZERO_SEARCH_FAST_VELOCITY_UNITS             (800000)
+#define ECU_STEER_ZERO_SEARCH_MEDIUM_VELOCITY_UNITS           (250000)
+#define ECU_STEER_ZERO_SEARCH_SLOW_VELOCITY_UNITS             (60000)
+#define ECU_STEER_ZERO_SEARCH_SLOWDOWN1_ABS_COUNTS            (1200000)
+#define ECU_STEER_ZERO_SEARCH_SLOWDOWN2_ABS_COUNTS            (1650000)
+#define ECU_STEER_ZERO_SEARCH_PROFILE_VELOCITY_COUNTS_PER_SEC (800000)
+#define ECU_STEER_ZERO_SEARCH_PROFILE_ACCEL_COUNTS_PER_SEC2   (500000)
+#define ECU_STEER_ZERO_PROTECTION_CURRENT_10MA                (900)
+#define ECU_STEER_ZERO_SPEED_STOP_WINDOW_UNITS                (30000)
+#define ECU_STEER_ZERO_SPEED_STOP_DWELL_MS                    (300U)
+#define ECU_STEER_ZERO_MIN_TRAVEL_COUNTS                      (1500000)
+#define ECU_STEER_ZERO_INNER_SAFE_ABS_COUNTS                  (300000)
+#define ECU_STEER_ZERO_MID_RETURN_FAST_VELOCITY_UNITS         (500000)
+#define ECU_STEER_ZERO_MID_RETURN_MEDIUM_VELOCITY_UNITS       (240000)
+#define ECU_STEER_ZERO_MID_RETURN_SLOW_VELOCITY_UNITS         (30000)
+#define ECU_STEER_ZERO_MID_RETURN_MEDIUM_ERROR_COUNTS         (300000)
+#define ECU_STEER_ZERO_MID_RETURN_SLOW_ERROR_COUNTS           (30000)
+#define ECU_STEER_ZERO_MIDPOINT_TOLERANCE_COUNTS              (2000)
+#define ECU_STEER_ZERO_MIDPOINT_STABLE_SAMPLES                (5U)
+#define ECU_STEER_ZERO_STALL_ARM_DELAY_MS                     (800U)
+#define ECU_STEER_ZERO_MAX_TRAVEL_COUNTS                      (3700000)
+#define ECU_REMOTE_B1_ZERO_CALIBRATION_PRESS_COUNT            (3U)
+#define ECU_REMOTE_B1_ZERO_CALIBRATION_WINDOW_MS              (2000U)
+#define ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS        (600U)
+#define ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS                 (50U)
+#define ECU_STEER_ZERO_SETUP_TIMEOUT_MS                       (20000U)
+#define ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (30000U)
+#define ECU_STEER_ZERO_RETREAT_TIMEOUT_MS                     (10000U)
+#define ECU_STEER_ZERO_RETURN_TIMEOUT_MS                      (20000U)
+#define ECU_STEER_ZERO_SDO_TIMEOUT_MS                         (1000U)
 /* Node6 and Node8 were measured to arrive late when changing from spin to crab
  * because they can travel roughly twice the steering distance of the other two
  * axes.  Keep this as a configuration mask so field tuning can change the

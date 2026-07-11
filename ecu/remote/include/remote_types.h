@@ -157,6 +157,7 @@ typedef struct {
     int16_t track_per_mille;
     bool r1_changed;
     bool r2_changed;
+    bool b1_changed;
     remote_position_t left_indicator;
     remote_position_t right_indicator;
     remote_position_t hazard;
@@ -183,6 +184,11 @@ typedef struct {
     remote_authority_state_t authority_state;
     bool high_voltage_enable_request;
     bool high_voltage_disable_request;
+    bool steer_zero_calibration_request;
+    bool b1_zero_calibration_pressed_latched;
+    bool b1_zero_calibration_raw_request;
+    bool b1_zero_calibration_gate_blocked;
+    uint8_t b1_zero_calibration_press_count;
     bool orderly_shutdown_request;
     bool auto_control_allowed;
     int16_t steer_per_mille;

@@ -46,6 +46,7 @@ typedef struct {
     bool brake_release;
     bool steer_commission_interlock_ok;
     bool steer_commission_steering_neutral;
+    bool steer_zero_calibration_request;
     bool high_voltage_enable;
     bool high_voltage_disable_request;
     /* True only after the power task has observed validated BMS contactor
@@ -112,6 +113,12 @@ typedef struct {
     uint8_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
     uint32_t presteer_timeout_count;
+    uint8_t steer_zero_calibration_state;
+    uint8_t steer_zero_calibration_done_mask;
+    uint8_t steer_zero_calibration_fault_mask;
+    uint32_t steer_zero_calibration_request_count;
+    int32_t steer_zero_calibration_midpoint_counts[ECU_WHEEL_COUNT];
+    int16_t steer_zero_calibration_peak_current_10ma[ECU_WHEEL_COUNT];
     bool steer_transition_active;
     bool steer_transition_completed;
     bool steer_transition_rejected_stale_feedback;

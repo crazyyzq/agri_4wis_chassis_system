@@ -27,6 +27,12 @@ typedef struct {
     remote_event_lifecycle_t power_event;
     remote_event_lifecycle_t estop_reset_event;
     remote_event_lifecycle_t light_event;
+    uint8_t b1_zero_calibration_press_count;
+    bool b1_zero_calibration_press_latched;
+    bool b1_zero_calibration_last_raw_request;
+    bool b1_zero_calibration_last_gate_blocked;
+    uint32_t b1_zero_calibration_window_start_ms;
+    uint32_t b1_zero_calibration_last_request_ms;
     remote_control_request_t request;
 } remote_manager_t;
 

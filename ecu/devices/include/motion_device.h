@@ -52,6 +52,19 @@ typedef enum {
     MOTION_DRIVE_COMMAND_CURRENT
 } motion_drive_command_kind_t;
 
+typedef enum {
+    MOTION_STEER_ZERO_CAL_IDLE = 0,
+    MOTION_STEER_ZERO_CAL_SETUP,
+    MOTION_STEER_ZERO_CAL_SEARCH_LEFT,
+    MOTION_STEER_ZERO_CAL_RETREAT_LEFT,
+    MOTION_STEER_ZERO_CAL_SEARCH_RIGHT,
+    MOTION_STEER_ZERO_CAL_RETREAT_RIGHT,
+    MOTION_STEER_ZERO_CAL_RETURN_MID,
+    MOTION_STEER_ZERO_CAL_WRITE_ZERO,
+    MOTION_STEER_ZERO_CAL_COMPLETE,
+    MOTION_STEER_ZERO_CAL_FAULT
+} motion_steer_zero_calibration_state_t;
+
 typedef struct {
     uint32_t apply_count;
     uint32_t skipped_count;
@@ -79,6 +92,34 @@ typedef struct {
     bool steer_safe_stop_pending;
     uint32_t steer_group_complete_count;
     uint32_t steer_group_failure_count;
+    bool steer_zero_calibration_requested;
+    uint32_t steer_zero_calibration_request_count;
+    uint32_t steer_zero_calibration_last_request_ms;
+    motion_steer_zero_calibration_state_t steer_zero_calibration_state;
+    uint32_t steer_zero_calibration_state_enter_ms;
+    uint32_t steer_zero_calibration_last_pdo_ms;
+    uint32_t steer_zero_calibration_active_group_sequence;
+    bool steer_zero_calibration_group_active;
+    uint8_t steer_zero_calibration_done_mask;
+    uint8_t steer_zero_calibration_fault_mask;
+    uint8_t steer_zero_calibration_setup_node_index;
+    uint8_t steer_zero_calibration_setup_step;
+    uint8_t steer_zero_calibration_zero_write_index;
+    bool steer_zero_calibration_sdo_active;
+    uint8_t steer_zero_calibration_sdo_node_id;
+    uint16_t steer_zero_calibration_sdo_index;
+    uint8_t steer_zero_calibration_sdo_subindex;
+    uint8_t steer_zero_calibration_sdo_size;
+    int32_t steer_zero_calibration_sdo_value;
+    uint32_t steer_zero_calibration_sdo_download_count_before;
+    uint32_t steer_zero_calibration_sdo_abort_count_before;
+    uint32_t steer_zero_calibration_sdo_start_ms;
+    int32_t steer_zero_calibration_direction_start_counts[ECU_WHEEL_COUNT];
+    int32_t steer_zero_calibration_left_hit_counts[ECU_WHEEL_COUNT];
+    int32_t steer_zero_calibration_right_hit_counts[ECU_WHEEL_COUNT];
+    int32_t steer_zero_calibration_midpoint_counts[ECU_WHEEL_COUNT];
+    int16_t steer_zero_calibration_peak_current_10ma[ECU_WHEEL_COUNT];
+    uint32_t steer_zero_calibration_zero_speed_since_ms[ECU_WHEEL_COUNT];
     uint32_t can2_realtime_transient_recovery_count;
     uint32_t can2_realtime_consecutive_failure_count;
     uint32_t can2_realtime_last_recovery_ms;

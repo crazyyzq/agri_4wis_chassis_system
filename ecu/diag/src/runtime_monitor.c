@@ -280,7 +280,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
            "frames=%lu dec_err=%lu link=%s "
            "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s "
-           "estop=%s diag=%s remote[steer=%d thr=%d clr=%d trk=%d ch14=%u]\r\n",
+           "estop=%s diag=%s "
+           "remote[steer=%d thr=%d clr=%d trk=%d ch10=%u ch14=%u "
+           "b1_cnt=%u b1_lat=%s zero_raw=%s zero_req=%s zero_blk=%s]\r\n",
            (unsigned long)snapshot->now_ms,
            (unsigned long)snapshot->executor_sequence,
            status_led_pattern_text(snapshot->status_led_pattern),
@@ -301,7 +303,13 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (int)snapshot->remote_throttle_per_mille,
            (int)snapshot->remote_clearance_per_mille,
            (int)snapshot->remote_track_per_mille,
-           (unsigned int)snapshot->sbus_ppm_channels[ECU_SBUS_CH_TRACK]);
+           (unsigned int)snapshot->sbus_ppm_channels[ECU_SBUS_CH_HORN],
+           (unsigned int)snapshot->sbus_ppm_channels[ECU_SBUS_CH_TRACK],
+           (unsigned int)snapshot->b1_zero_calibration_press_count,
+           bool_text(snapshot->b1_zero_calibration_pressed_latched),
+           bool_text(snapshot->b1_zero_calibration_raw_request),
+           bool_text(snapshot->steer_zero_calibration_request),
+           bool_text(snapshot->b1_zero_calibration_gate_blocked));
 
     /* Keep one compact command line outside verbose mode.  During vehicle
      * commissioning this is the minimum evidence needed to distinguish a
@@ -665,6 +673,21 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (long)snapshot->steer_transition_error_counts[1],
            (long)snapshot->steer_transition_error_counts[2],
            (long)snapshot->steer_transition_error_counts[3]);
+
+    printf("[ECU STEER ZERO] state=%u req=%lu done=0x%02x fault=0x%02x "
+           "mid=[%ld,%ld,%ld,%ld] peak_cur_10ma=[%d,%d,%d,%d]\r\n",
+           (unsigned int)snapshot->steer_zero_calibration_state,
+           (unsigned long)snapshot->steer_zero_calibration_request_count,
+           (unsigned int)snapshot->steer_zero_calibration_done_mask,
+           (unsigned int)snapshot->steer_zero_calibration_fault_mask,
+           (long)snapshot->steer_zero_calibration_midpoint_counts[0],
+           (long)snapshot->steer_zero_calibration_midpoint_counts[1],
+           (long)snapshot->steer_zero_calibration_midpoint_counts[2],
+           (long)snapshot->steer_zero_calibration_midpoint_counts[3],
+           (int)snapshot->steer_zero_calibration_peak_current_10ma[0],
+           (int)snapshot->steer_zero_calibration_peak_current_10ma[1],
+           (int)snapshot->steer_zero_calibration_peak_current_10ma[2],
+           (int)snapshot->steer_zero_calibration_peak_current_10ma[3]);
 
     printf("[ECU STEER CAL] ram_override=%s valid=%s seq=%lu",
            bool_text(snapshot->steer_calibration_ram_override_enabled),

@@ -2,6 +2,47 @@
 
 #include "remote_manager.h"
 
+static bool remote_manager_update_b1_zero_calibration_request(remote_manager_t *manager,
+                                                              const remote_input_snapshot_t *input)
+{
+    if (manager == 0 || input == 0) {
+        return false;
+    }
+
+    manager->b1_zero_calibration_last_raw_request = false;
+    manager->b1_zero_calibration_last_gate_blocked = false;
+
+    /* Field operation requirement: B1/CH10 is a maintenance gesture button.
+     * Count every debounced CH10 state transition as one short press, regardless
+     * of whether the new stable endpoint is low or high.  This matches the
+     * actual transmitter behavior used during commissioning.
+     */
+    manager->b1_zero_calibration_press_latched = input->b1_changed;
+    if (!input->b1_changed) {
+        return false;
+    }
+
+    uint32_t now_ms = input->now_ms;
+    if (manager->b1_zero_calibration_press_count == 0U ||
+        (uint32_t)(now_ms - manager->b1_zero_calibration_window_start_ms) >
+            ECU_REMOTE_B1_ZERO_CALIBRATION_WINDOW_MS) {
+        manager->b1_zero_calibration_press_count = 0U;
+        manager->b1_zero_calibration_window_start_ms = now_ms;
+    }
+
+    manager->b1_zero_calibration_press_count++;
+    if (manager->b1_zero_calibration_press_count >=
+        ECU_REMOTE_B1_ZERO_CALIBRATION_PRESS_COUNT) {
+        manager->b1_zero_calibration_press_count = 0U;
+        manager->b1_zero_calibration_window_start_ms = now_ms;
+        manager->b1_zero_calibration_last_request_ms = now_ms;
+        manager->b1_zero_calibration_last_raw_request = true;
+        return true;
+    }
+
+    return false;
+}
+
 void remote_manager_init(remote_manager_t *manager, uint32_t now_ms)
 {
     if (manager == 0) {
@@ -57,6 +98,21 @@ void remote_manager_update(remote_manager_t *manager,
     remote_power_fsm_update(&manager->power, input, &derived, config);
     remote_authority_fsm_update(&manager->authority, input, &derived);
     remote_lights_fsm_update(&manager->lights, input, derived.estop_latched || derived.a_class_fault);
+    (void)remote_manager_update_b1_zero_calibration_request(manager, input);
+    bool steer_zero_calibration_request_hold_active =
+        manager->b1_zero_calibration_last_request_ms != 0U &&
+        (uint32_t)(input->now_ms - manager->b1_zero_calibration_last_request_ms) <=
+            ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS;
+    bool steer_zero_calibration_raw_event =
+        manager->b1_zero_calibration_last_raw_request;
+    bool steer_zero_calibration_gate_open =
+        manager->link.state == REMOTE_LINK_ONLINE &&
+        manager->arm.state == REMOTE_ARM_READY &&
+        manager->estop.state == REMOTE_ESTOP_CLEAR &&
+        manager->gear.active_gear == ECU_GEAR_REQUEST_P &&
+        input->home == REMOTE_POS_CENTER;
+    manager->b1_zero_calibration_last_gate_blocked =
+        steer_zero_calibration_request_hold_active && !steer_zero_calibration_gate_open;
 
     manager->request.link_state = manager->link.state;
     manager->request.arm_state = manager->arm.state;
@@ -77,6 +133,16 @@ void remote_manager_update(remote_manager_t *manager,
     manager->request.authority_state = manager->authority.state;
     manager->request.high_voltage_enable_request = manager->power.high_voltage_enable_request;
     manager->request.high_voltage_disable_request = manager->power.high_voltage_disable_request;
+    manager->request.steer_zero_calibration_request =
+        steer_zero_calibration_request_hold_active && steer_zero_calibration_gate_open;
+    manager->request.b1_zero_calibration_pressed_latched =
+        manager->b1_zero_calibration_press_latched;
+    manager->request.b1_zero_calibration_raw_request =
+        steer_zero_calibration_raw_event || steer_zero_calibration_request_hold_active;
+    manager->request.b1_zero_calibration_gate_blocked =
+        manager->b1_zero_calibration_last_gate_blocked;
+    manager->request.b1_zero_calibration_press_count =
+        manager->b1_zero_calibration_press_count;
     manager->request.orderly_shutdown_request = manager->power.orderly_shutdown_request;
     manager->request.auto_control_allowed = manager->authority.auto_control_allowed;
     manager->request.steer_per_mille = input->steer_per_mille;

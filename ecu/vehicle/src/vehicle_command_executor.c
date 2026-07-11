@@ -154,6 +154,20 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.presteer_missing_axis_mask;
     executor->presteer_timeout_count =
         s_runtime.motion.presteer_timeout_count;
+    executor->steer_zero_calibration_state =
+        (uint8_t)s_runtime.motion.steer_zero_calibration_state;
+    executor->steer_zero_calibration_done_mask =
+        s_runtime.motion.steer_zero_calibration_done_mask;
+    executor->steer_zero_calibration_fault_mask =
+        s_runtime.motion.steer_zero_calibration_fault_mask;
+    executor->steer_zero_calibration_request_count =
+        s_runtime.motion.steer_zero_calibration_request_count;
+    memcpy(executor->steer_zero_calibration_midpoint_counts,
+           s_runtime.motion.steer_zero_calibration_midpoint_counts,
+           sizeof(executor->steer_zero_calibration_midpoint_counts));
+    memcpy(executor->steer_zero_calibration_peak_current_10ma,
+           s_runtime.motion.steer_zero_calibration_peak_current_10ma,
+           sizeof(executor->steer_zero_calibration_peak_current_10ma));
     executor->steer_transition_active =
         s_runtime.motion.steer_transition_planner.active;
     executor->steer_transition_completed =

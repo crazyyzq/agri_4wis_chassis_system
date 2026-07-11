@@ -94,6 +94,11 @@ typedef struct {
     int16_t remote_throttle_per_mille;
     int16_t remote_clearance_per_mille;
     int16_t remote_track_per_mille;
+    bool steer_zero_calibration_request;
+    bool b1_zero_calibration_pressed_latched;
+    bool b1_zero_calibration_raw_request;
+    bool b1_zero_calibration_gate_blocked;
+    uint8_t b1_zero_calibration_press_count;
     status_led_pattern_t status_led_pattern;
     diag_code_t diagnostic;
 
@@ -146,6 +151,12 @@ typedef struct {
     uint8_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
     uint32_t presteer_timeout_count;
+    uint8_t steer_zero_calibration_state;
+    uint8_t steer_zero_calibration_done_mask;
+    uint8_t steer_zero_calibration_fault_mask;
+    uint32_t steer_zero_calibration_request_count;
+    int32_t steer_zero_calibration_midpoint_counts[ECU_WHEEL_COUNT];
+    int16_t steer_zero_calibration_peak_current_10ma[ECU_WHEEL_COUNT];
     bool steer_transition_active;
     bool steer_transition_completed;
     bool steer_transition_rejected_stale_feedback;

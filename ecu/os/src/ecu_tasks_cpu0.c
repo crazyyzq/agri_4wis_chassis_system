@@ -464,6 +464,16 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->remote_throttle_per_mille = s_runtime.remote_request.throttle_per_mille;
     out->remote_clearance_per_mille = s_runtime.remote_request.clearance_per_mille;
     out->remote_track_per_mille = s_runtime.remote_request.track_per_mille;
+    out->steer_zero_calibration_request =
+        s_runtime.remote_request.steer_zero_calibration_request;
+    out->b1_zero_calibration_pressed_latched =
+        s_runtime.remote_request.b1_zero_calibration_pressed_latched;
+    out->b1_zero_calibration_raw_request =
+        s_runtime.remote_request.b1_zero_calibration_raw_request;
+    out->b1_zero_calibration_gate_blocked =
+        s_runtime.remote_request.b1_zero_calibration_gate_blocked;
+    out->b1_zero_calibration_press_count =
+        s_runtime.remote_request.b1_zero_calibration_press_count;
     out->status_led_pattern = s_runtime.status_led.last_pattern;
     out->diagnostic = s_runtime.final_command.diagnostic;
     out->source = s_runtime.final_command.source;
@@ -557,6 +567,20 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.presteer_missing_axis_mask;
     out->presteer_timeout_count =
         s_runtime.executor.presteer_timeout_count;
+    out->steer_zero_calibration_state =
+        s_runtime.executor.steer_zero_calibration_state;
+    out->steer_zero_calibration_done_mask =
+        s_runtime.executor.steer_zero_calibration_done_mask;
+    out->steer_zero_calibration_fault_mask =
+        s_runtime.executor.steer_zero_calibration_fault_mask;
+    out->steer_zero_calibration_request_count =
+        s_runtime.executor.steer_zero_calibration_request_count;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->steer_zero_calibration_midpoint_counts[wheel] =
+            s_runtime.executor.steer_zero_calibration_midpoint_counts[wheel];
+        out->steer_zero_calibration_peak_current_10ma[wheel] =
+            s_runtime.executor.steer_zero_calibration_peak_current_10ma[wheel];
+    }
     out->steer_transition_active =
         s_runtime.executor.steer_transition_active;
     out->steer_transition_completed =

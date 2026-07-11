@@ -23,6 +23,7 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     out->brake_release = false;
     out->steer_commission_interlock_ok = false;
     out->steer_commission_steering_neutral = false;
+    out->steer_zero_calibration_request = false;
     out->high_voltage_enable = false;
     out->high_voltage_disable_request = false;
     out->high_voltage_feedback_ready = false;
@@ -448,6 +449,10 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->brake_release = remote_requests_brake_release(remote);
         out->high_voltage_enable = remote->high_voltage_enable_request;
         out->high_voltage_disable_request = remote->high_voltage_disable_request;
+        out->steer_zero_calibration_request =
+            remote->steer_zero_calibration_request &&
+            remote->active_gear == ECU_GEAR_REQUEST_P &&
+            remote->throttle_per_mille == 0;
         out->indicator_mode = remote->indicator_mode;
         out->horn_on = remote->horn_on;
         out->headlight_on = remote->headlight_on;
