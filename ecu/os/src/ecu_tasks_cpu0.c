@@ -13,6 +13,7 @@
 #include "ecu_config.h"
 #include "ecu_tasks.h"
 #include "ipc_snapshot.h"
+#include "lift_hydraulic_device.h"
 #include "modbus_master_service.h"
 #include "motion_device.h"
 #include "power_device.h"
@@ -492,6 +493,10 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.high_voltage_relay_latched;
     out->commissioning_power_debug_active =
         s_runtime.commissioning_debug.power_debug_active;
+    out->target_height_milli_mm =
+        float_to_milli(s_runtime.final_command.target_height_mm);
+    out->height_rate_milli_mm_s =
+        float_to_milli(s_runtime.final_command.height_rate_mm_s);
     out->hydraulic_enable = s_runtime.final_command.hydraulic_enable;
     out->hydraulic_valve_mask = s_runtime.final_command.hydraulic_valve_mask;
     out->hydraulic_requested_valve_mask =
@@ -519,8 +524,22 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.lift_feedback_fresh_mask;
     out->lift_preload_points_completed =
         s_runtime.executor.lift_preload_points_completed;
+    out->lift_interpolation_queued_count =
+        s_runtime.executor.lift_interpolation_queued_count;
+    out->lift_interpolation_reject_count =
+        s_runtime.executor.lift_interpolation_reject_count;
     out->lift_interpolation_failure_count =
         s_runtime.executor.lift_interpolation_failure_count;
+    out->lift_interpolation_recovery_count =
+        s_runtime.executor.lift_interpolation_recovery_count;
+    out->lift_stream_planned_delta_counts =
+        s_runtime.executor.lift_stream_planned_delta_counts;
+    memcpy(out->lift_actual_position_counts,
+           s_runtime.executor.lift_actual_position_counts,
+           sizeof(out->lift_actual_position_counts));
+    memcpy(out->lift_target_position_counts,
+           s_runtime.executor.lift_target_position_counts,
+           sizeof(out->lift_target_position_counts));
     out->steer_normal_pdo_allowed =
         s_runtime.executor.steer_normal_pdo_allowed;
     out->steer_safety_inhibited =
@@ -664,6 +683,19 @@ static status_led_pattern_t select_status_led_pattern(void)
     }
 
     return STATUS_LED_PATTERN_READY;
+}
+
+static bool can3_lift_realtime_window_active(void)
+{
+    switch ((lift_interpolation_state_t)s_runtime.executor.lift_interpolation_state) {
+    case LIFT_INTERPOLATION_STATE_PRELOADING:
+    case LIFT_INTERPOLATION_STATE_TRIGGERING:
+    case LIFT_INTERPOLATION_STATE_RUNNING:
+    case LIFT_INTERPOLATION_STATE_STOPPING:
+        return true;
+    default:
+        return false;
+    }
 }
 
 const ecu_task_descriptor_t *ecu_cpu0_task_descriptor(ecu_cpu0_task_id_t task_id)
@@ -810,7 +842,6 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
     (void)vehicle_command_executor_flush_can3_lift_hydraulic(
         &s_runtime.executor,
         &s_runtime.can3_lift_hydraulic_canopen,
-        &s_runtime.dio,
         now_ms);
     for (uint8_t pass = 0U;
          pass < ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES;
@@ -819,11 +850,16 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
             &s_runtime.can3_lift_hydraulic_canopen,
             now_ms);
     }
+    const bool lift_realtime_window_active = can3_lift_realtime_window_active();
+    canopen_master_service_set_periodic_sdo_enabled(
+        &s_runtime.can3_lift_hydraulic_canopen,
+        !lift_realtime_window_active);
     /* Lift RPDO groups already append their own common SYNC.  Emit a periodic
      * feedback SYNC only while the realtime lane is idle; otherwise a second
      * SYNC could consume an extra interpolation-buffer point. */
     if (canopen_master_service_realtime_pdo_idle(
             &s_runtime.can3_lift_hydraulic_canopen) &&
+        !lift_realtime_window_active &&
         (uint32_t)(now_ms -
             s_runtime.can3_lift_hydraulic_canopen.snapshot.last_sync_tx_ms) >=
             ECU_CANOPEN_LIFT_INTERPOLATION_PERIOD_MS &&
@@ -831,11 +867,18 @@ void ecu_task_can3_lift_hydraulic_step(uint32_t now_ms)
             &s_runtime.can3_lift_hydraulic_canopen, now_ms)) {
         s_runtime.last_can3_feedback_sync_ms = now_ms;
     }
-    canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen,
-                                              now_ms);
-    commissioning_debug_scan_can3(&s_runtime.commissioning_debug,
-                                  &s_runtime.can3_lift_hydraulic_canopen,
-                                  now_ms);
+    if (!lift_realtime_window_active ||
+        s_runtime.can3_lift_hydraulic_canopen.sdo_download_active ||
+        s_runtime.can3_lift_hydraulic_canopen.sdo_active ||
+        s_runtime.can3_lift_hydraulic_canopen.command_queue_count != 0U) {
+        canopen_master_service_process_background(&s_runtime.can3_lift_hydraulic_canopen,
+                                                  now_ms);
+    }
+    if (!lift_realtime_window_active) {
+        commissioning_debug_scan_can3(&s_runtime.commissioning_debug,
+                                      &s_runtime.can3_lift_hydraulic_canopen,
+                                      now_ms);
+    }
     commissioning_debug_process_can4_physical_test(&s_runtime.commissioning_debug,
                                                    now_ms);
     refresh_lift_hydraulic_feedback();
@@ -845,6 +888,8 @@ void ecu_task_io_service_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
     const ecu_hardware_config_t *hardware_config = ecu_hardware_config_default();
+    (void)vehicle_command_executor_flush_local_io(&s_runtime.executor,
+                                                  &s_runtime.dio);
     analog_modbus_device_process(&s_runtime.analog_modbus_adc,
                                  &s_runtime.adc_modbus_master,
                                  &s_runtime.rs485_1_hw,

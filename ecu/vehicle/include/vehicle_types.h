@@ -89,7 +89,13 @@ typedef struct {
     int8_t lift_active_direction;
     uint8_t lift_feedback_fresh_mask;
     uint8_t lift_preload_points_completed;
+    uint32_t lift_interpolation_queued_count;
+    uint32_t lift_interpolation_reject_count;
     uint32_t lift_interpolation_failure_count;
+    uint32_t lift_interpolation_recovery_count;
+    int32_t lift_stream_planned_delta_counts;
+    int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
     bool steer_normal_pdo_allowed;
     bool steer_safety_inhibited;
     uint8_t steer_inhibit_reason;
@@ -107,6 +113,8 @@ typedef struct {
     uint32_t can2_realtime_transient_recovery_count;
     uint32_t can2_realtime_consecutive_failure_count;
     uint32_t can2_realtime_last_recovery_ms;
+    uint32_t can2_command_stale_count;
+    uint32_t can2_last_command_stale_ms;
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
     bool track_assist_steer_approximately_ready;

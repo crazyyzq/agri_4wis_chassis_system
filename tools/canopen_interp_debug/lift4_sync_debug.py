@@ -40,14 +40,15 @@ TPDO0_BASE = 0x180
 TPDO1_BASE = 0x280
 EMCY_BASE = 0x080
 LIFT_COUNTS_PER_MOTOR_REV = 131_072
-LIFT_MOTOR_REVS_PER_MM = 12.0 / 5.0
+LIFT_MOTOR_REVS_PER_MM = 12.0 / 10.0
 LIFT_COUNTS_PER_MM = LIFT_COUNTS_PER_MOTOR_REV * LIFT_MOTOR_REVS_PER_MM
-# Mechanical calibration: 490 mm * 12 rev / 5 mm * 131072 count / rev.
+# Mechanical calibration: 490 mm * 12 rev / 10 mm * 131072 count / rev.
 # Keep the commissioning limit equal to the measured full stroke.  Callers
 # must not add an overshoot margin beyond this absolute endpoint.
-LIFT_MIN_POSITION_COUNTS = -154_140_672
+LIFT_MIN_POSITION_COUNTS = -77_070_336
 LIFT_MAX_POSITION_COUNTS = 10_000
 LIFT_MAX_SYNC_SPREAD_MM = 3.0
+LIFT_LIMIT_MARGIN_COUNTS = round(LIFT_MAX_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM)
 # Vendor units are intentionally different:
 #   0x6081 profile velocity     = 0.1 count/s per object unit
 #   0x6083/0x6084 acceleration = 10 count/s^2 per object unit
@@ -224,11 +225,12 @@ class Lift4SyncDebug:
             self.sdo_write(node, 0x6040, 0x00, 2, 0x0006)
             self.sdo_write(node, 0x2300, 0x00, 2, 0x001E)
             self.sdo_write(node, 0x6060, 0x00, 1, 7)
-            # Continuous fixed-time interpolation.  Unlike submode 0, this
-            # mode does not implicitly discard the active buffer; therefore
-            # the explicit stop/clear sequence above is mandatory.  It is the
-            # vendor-recommended form for a continuously replenished stream.
-            self.sdo_write(node, 0x60C0, 0x00, 2, -1, signed=True)
+            # RPDO2 carries only 0x60C1:01 (the four-byte position point).
+            # CiA-402 submode -1 requires a per-segment write to 0x60C1:02
+            # as well, so it is incompatible with this fixed-size PDO.  Use
+            # submode 0: every position point becomes a fixed-period segment
+            # using the common 0x60C2:01 interpolation interval below.
+            self.sdo_write(node, 0x60C0, 0x00, 2, 0, signed=True)
             self.sdo_write(node, 0x60C2, 0x01, 1, period_ms)
             self.clear_interpolation_buffer(node)
             self.sdo_write(node, 0x6040, 0x00, 2, 0x0007)
@@ -428,7 +430,13 @@ class Lift4SyncDebug:
             cycles: int,
             speed_mm_s: float,
             acceleration_mm_s2: float,
-            tracking_window_mm: float) -> dict[str, object]:
+            tracking_window_mm: float,
+            sync_correction_gain: float,
+            sync_correction_max_counts: int,
+            absolute_target_mm: float | None,
+            completion_timeout_ms: int,
+            completion_tolerance_counts: int,
+            completion_stable_samples: int) -> dict[str, object]:
         if sample_count < 20 or (sample_count % 2) != 0:
             raise ValueError("sample-count must be even and at least 20")
         if cycles < 1:
@@ -439,6 +447,16 @@ class Lift4SyncDebug:
             raise ValueError("positive --speed-mm-s requires --accel-mm-s2")
         if tracking_window_mm <= 0.0 or tracking_window_mm > 3.0:
             raise ValueError("tracking window must be in (0, 3] mm")
+        if sync_correction_gain < 0.0 or sync_correction_gain > 1.0:
+            raise ValueError("sync correction gain must be in [0, 1]")
+        if sync_correction_max_counts < 0:
+            raise ValueError("sync correction maximum must be non-negative")
+        if completion_timeout_ms <= 0:
+            raise ValueError("completion timeout must be positive")
+        if completion_tolerance_counts <= 0:
+            raise ValueError("completion tolerance must be positive")
+        if completion_stable_samples < 1:
+            raise ValueError("completion stable samples must be >= 1")
         tracking_window_counts = math.ceil(
             tracking_window_mm * LIFT_COUNTS_PER_MM
         )
@@ -448,6 +466,41 @@ class Lift4SyncDebug:
             profile_velocity_units,
             profile_acceleration,
             tracking_window_counts,
+        )
+        if absolute_target_mm is not None:
+            if not one_way:
+                raise ValueError("absolute target requires --one-way")
+            if absolute_target_mm < 10.0 or absolute_target_mm > 490.0:
+                raise ValueError("absolute target must be within 10..490 mm")
+            target_count = -round(absolute_target_mm * LIFT_COUNTS_PER_MM)
+            final_deltas = {
+                node: target_count - starts[node]
+                for node in self.nodes
+            }
+            directions = {
+                1 if delta > 0 else -1
+                for delta in final_deltas.values()
+                if delta != 0
+            }
+            if len(directions) > 1:
+                raise ValueError(
+                    "absolute target would require mixed axis directions"
+                )
+            initial_absolute_spread = max(starts.values()) - min(starts.values())
+            absolute_spread_limit = max(
+                initial_absolute_spread,
+                round(LIFT_MAX_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM),
+            ) + round(0.5 * LIFT_COUNTS_PER_MM)
+        else:
+            final_deltas = {node: amplitude for node in self.nodes}
+            initial_absolute_spread = 0
+            absolute_spread_limit = 0
+        motion_distance_counts = max(abs(delta) for delta in final_deltas.values())
+        if motion_distance_counts == 0:
+            raise ValueError("absolute target is already reached on every axis")
+        motion_direction = next(
+            (1 if delta > 0 else -1 for delta in final_deltas.values() if delta != 0),
+            1,
         )
         next_tick = time.perf_counter()
         max_burst_us = 0.0
@@ -459,7 +512,7 @@ class Lift4SyncDebug:
         if speed_mm_s > 0.0:
             if not one_way:
                 raise ValueError("--speed-mm-s currently requires --one-way")
-            distance_counts = abs(amplitude)
+            distance_counts = motion_distance_counts
             speed_counts_s = speed_mm_s * LIFT_COUNTS_PER_MM
             acceleration_counts_s2 = acceleration_mm_s2 * LIFT_COUNTS_PER_MM
             accel_time_s = speed_counts_s / acceleration_counts_s2
@@ -514,11 +567,31 @@ class Lift4SyncDebug:
             )
         else:
             active_samples = sample_count if one_way else sample_count * cycles
-        total_samples = warmup_samples + active_samples + hold_samples + 1
+        # The trajectory clock can finish before the drives consume a target
+        # lead that was deliberately limited for synchronization.  Continue
+        # streaming the final point until all four measured positions reach it
+        # stably; a fixed number of trailing samples can otherwise terminate a
+        # safe but slow axis short of its requested travel.
+        minimum_total_samples = warmup_samples + active_samples + hold_samples + 1
+        maximum_total_samples = (
+            minimum_total_samples +
+            math.ceil(completion_timeout_ms / period_ms)
+        )
+        final_target_deltas = {
+            node: final_deltas[node] if one_way else 0
+            for node in self.nodes
+        }
+        final_tolerance_counts = max(
+            completion_tolerance_counts,
+            35_000 if absolute_target_mm is not None else 0,
+        )
+        completion_stable_count = 0
+        completed_final_target = False
         next_tick = 0.0
         previous_desired_delta = 0
+        previous_target_deltas = {node: 0 for node in self.nodes}
         trajectory_direction = -1
-        for sample_index in range(total_samples):
+        for sample_index in range(maximum_total_samples):
             if sample_index == warmup_samples:
                 # Manual-required start order: fill at least three segments,
                 # then create the bit-4 rising edge on every axis through the
@@ -534,7 +607,9 @@ class Lift4SyncDebug:
                 # physical start position when bit 4 is finally triggered.
                 desired_delta = 0
             elif active_index >= active_samples:
-                desired_delta = amplitude if one_way else 0
+                desired_delta = (
+                    motion_direction * motion_distance_counts if one_way else 0
+                )
             elif trapezoid is not None:
                 t_s = min(
                     active_index * period_ms / 1000.0,
@@ -560,7 +635,7 @@ class Lift4SyncDebug:
                         remaining_s * remaining_s
                     )
                 desired_delta = (
-                    -round(distance) if amplitude < 0 else round(distance)
+                    motion_direction * round(distance)
                 )
             elif one_way:
                 desired_delta = round(amplitude * active_index / sample_count)
@@ -570,40 +645,90 @@ class Lift4SyncDebug:
                     active_index % sample_count,
                     sample_count,
                 )
-            delta = desired_delta
-            actual_relative = [
-                self.feedback[node].position - starts[node]
+            progress = min(
+                1.0,
+                abs(desired_delta) / motion_distance_counts,
+            )
+            desired_deltas = {
+                node: round(final_deltas[node] * progress)
+                for node in self.nodes
+            }
+            actual_relative = {
+                node: self.feedback[node].position - starts[node]
                 for node in self.nodes
                 if self.feedback[node].tpdo0_count > 0
-            ]
+            }
             if desired_delta < previous_desired_delta:
                 trajectory_direction = -1
             elif desired_delta > previous_desired_delta:
                 trajectory_direction = 1
-            if len(actual_relative) == len(self.nodes):
-                if trajectory_direction < 0:
-                    # Negative/outward travel: the common target may not be
-                    # farther negative than the slowest axis minus the lead.
-                    delta = max(
-                        desired_delta,
-                        max(
-                            value - max_following_lead_counts
-                            for value in actual_relative
-                        ),
+
+            # Limit the lead for each axis independently.  A single common
+            # clamp based on the slowest axis can pull a faster axis's target
+            # backwards, producing a large following error and 0x7390.  Each
+            # axis may only advance along the selected trajectory direction;
+            # synchronization is checked separately from measured positions.
+            target_deltas: dict[int, int] = {}
+            sync_corrections: dict[int, int] = {node: 0 for node in self.nodes}
+            mean_relative = (
+                sum(actual_relative.values()) / len(actual_relative)
+                if actual_relative else 0.0
+            )
+            for node in self.nodes:
+                delta = desired_deltas[node]
+                if node in actual_relative:
+                    measured_delta = actual_relative[node]
+                    # A positive error means this axis has moved less far in
+                    # the currently requested negative direction.  Increase
+                    # its permissible target lead while reducing the lead of
+                    # an axis that has moved farther.  The correction never
+                    # changes the selected trajectory direction.
+                    if absolute_target_mm is not None:
+                        expected_position = starts[node] + desired_deltas[node]
+                        lag_counts = (
+                            expected_position - self.feedback[node].position
+                        ) * trajectory_direction
+                        correction = int(round(
+                            lag_counts * sync_correction_gain
+                        ))
+                    else:
+                        correction = int(round(
+                            (measured_delta - mean_relative) * sync_correction_gain
+                        ))
+                    correction = max(
+                        -sync_correction_max_counts,
+                        min(sync_correction_max_counts, correction),
                     )
-                else:
-                    # Positive/return travel uses the corresponding upper lead.
-                    delta = min(
-                        desired_delta,
-                        min(
-                            value + max_following_lead_counts
-                            for value in actual_relative
-                        ),
-                    )
+                    sync_corrections[node] = correction
+                    if trajectory_direction < 0:
+                        lead_counts = max(
+                            1,
+                            max_following_lead_counts + correction,
+                        )
+                        delta = max(
+                            desired_deltas[node],
+                            measured_delta - lead_counts,
+                        )
+                        delta = min(previous_target_deltas[node], delta)
+                    else:
+                        lead_counts = max(
+                            1,
+                            (max_following_lead_counts + correction
+                             if absolute_target_mm is not None
+                             else max_following_lead_counts - correction),
+                        )
+                        delta = min(
+                            desired_deltas[node],
+                            measured_delta + lead_counts,
+                        )
+                        delta = max(previous_target_deltas[node], delta)
+                target_deltas[node] = delta
+
             previous_desired_delta = desired_delta
-            targets = {node: starts[node] + delta for node in self.nodes}
-            if (min(targets.values()) < LIFT_MIN_POSITION_COUNTS or
-                    max(targets.values()) > LIFT_MAX_POSITION_COUNTS):
+            previous_target_deltas = target_deltas.copy()
+            targets = {node: starts[node] + target_deltas[node] for node in self.nodes}
+            if (min(targets.values()) < (LIFT_MIN_POSITION_COUNTS - LIFT_LIMIT_MARGIN_COUNTS) or
+                    max(targets.values()) > (LIFT_MAX_POSITION_COUNTS + LIFT_LIMIT_MARGIN_COUNTS)):
                 raise RuntimeError(f"target outside commissioning limits: {targets}")
 
             burst_start = time.perf_counter()
@@ -622,17 +747,29 @@ class Lift4SyncDebug:
                 for node in self.nodes
                 if self.feedback[node].tpdo0_count > 0
             ]
+            absolute_positions = [
+                self.feedback[node].position
+                for node in self.nodes
+                if self.feedback[node].tpdo0_count > 0
+            ]
             relative_spread = (
                 max(relatives) - min(relatives) if len(relatives) == len(self.nodes)
                 else 0
             )
-            max_relative_spread = max(max_relative_spread, relative_spread)
-            if relative_spread > round(
-                LIFT_MAX_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM
-            ):
+            absolute_spread = (
+                max(absolute_positions) - min(absolute_positions)
+                if len(absolute_positions) == len(self.nodes) else 0
+            )
+            observed_spread = absolute_spread if absolute_target_mm is not None else relative_spread
+            max_relative_spread = max(max_relative_spread, observed_spread)
+            spread_limit = (
+                absolute_spread_limit if absolute_target_mm is not None else
+                round(LIFT_MAX_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM)
+            )
+            if observed_spread > spread_limit:
                 raise RuntimeError(
-                    "relative synchronization error "
-                    f"{relative_spread / LIFT_COUNTS_PER_MM:.3f}mm"
+                    "synchronization error "
+                    f"{observed_spread / LIFT_COUNTS_PER_MM:.3f}mm"
                 )
             self.samples.append(
                 {
@@ -646,10 +783,12 @@ class Lift4SyncDebug:
                     ),
                     "active_index": active_index,
                     "desired_delta": desired_delta,
-                    "target_delta": delta,
+                    "target_deltas": target_deltas,
+                    "sync_corrections": sync_corrections,
                     "targets": targets,
                     "burst_us": round(burst_us, 1),
                     "relative_spread": relative_spread,
+                    "absolute_spread": absolute_spread,
                     "feedback": {
                         str(node): {
                             "position": self.feedback[node].position,
@@ -663,7 +802,12 @@ class Lift4SyncDebug:
                 }
             )
             if self.emcy:
-                raise RuntimeError(f"EMCY received: {self.emcy[-1]}")
+                raise RuntimeError(
+                    "EMCY received during interpolation stream "
+                    f"sample={sample_index} active={active_index} "
+                    f"desired_delta={desired_delta} target_deltas={target_deltas}: "
+                    f"{self.emcy[-1]}"
+                )
             for node in self.nodes:
                 item = self.feedback[node]
                 if item.fault != 0:
@@ -672,11 +816,35 @@ class Lift4SyncDebug:
                         f"status=0x{item.statusword:04X}"
                     )
 
+            if active_index >= active_samples:
+                final_errors = [
+                    abs(self.feedback[node].position -
+                        (starts[node] + final_target_deltas[node]))
+                    for node in self.nodes
+                    if self.feedback[node].tpdo0_count > 0
+                ]
+                if (len(final_errors) == len(self.nodes) and
+                        max(final_errors) <= final_tolerance_counts):
+                    completion_stable_count += 1
+                else:
+                    completion_stable_count = 0
+
             if sample_index >= warmup_samples:
                 next_tick += period_ms / 1000.0
                 remaining = next_tick - time.perf_counter()
                 if remaining > 0:
                     time.sleep(remaining)
+
+            if (sample_index >= minimum_total_samples and
+                    completion_stable_count >= completion_stable_samples):
+                completed_final_target = True
+                break
+
+        if not completed_final_target:
+            raise RuntimeError(
+                "final interpolation target was not reached within "
+                f"{completion_timeout_ms}ms"
+            )
 
         # The stream is intentionally maintained ahead of execution by the
         # preload depth.  Allow those final buffered hold points to execute
@@ -711,6 +879,10 @@ class Lift4SyncDebug:
         return {
             "nodes": self.nodes,
             "amplitude": amplitude,
+            "absolute_target_mm": absolute_target_mm,
+            "initial_absolute_spread_mm": round(
+                initial_absolute_spread / LIFT_COUNTS_PER_MM, 3
+            ),
             "period_ms": period_ms,
             "sample_count": sample_count,
             "cycles": cycles,
@@ -720,6 +892,13 @@ class Lift4SyncDebug:
             "profile_acceleration": profile_acceleration,
             "max_following_lead_counts": max_following_lead_counts,
             "tracking_window_mm": tracking_window_mm,
+            "sync_correction_gain": sync_correction_gain,
+            "sync_correction_max_counts": sync_correction_max_counts,
+            "completion_timeout_ms": completion_timeout_ms,
+            "completion_tolerance_counts": completion_tolerance_counts,
+            "effective_completion_tolerance_counts": final_tolerance_counts,
+            "completion_stable_samples": completion_stable_samples,
+            "completed_final_target": completed_final_target,
             "counts_per_mm": LIFT_COUNTS_PER_MM,
             "speed_mm_s": speed_mm_s,
             "acceleration_mm_s2": acceleration_mm_s2,
@@ -752,13 +931,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amplitude", type=int, default=-20_000)
     parser.add_argument("--period-ms", type=int, default=20)
     parser.add_argument("--sample-count", type=int, default=200)
-    parser.add_argument("--warmup-samples", type=int, default=10)
+    # The drive needs at least three buffered points.  Keeping exactly three
+    # limits the 20 ms feedback-control horizon to 60 ms instead of allowing
+    # a long preloaded trajectory to continue after measured axes diverge.
+    parser.add_argument("--warmup-samples", type=int, default=3)
     parser.add_argument("--hold-samples", type=int, default=10)
     parser.add_argument("--enable-settle-ms", type=int, default=1500)
     parser.add_argument("--profile-velocity-units", type=int, default=833_333)
     parser.add_argument("--profile-acceleration", type=int, default=500_000)
     parser.add_argument("--max-following-lead-counts", type=int, default=4_000)
     parser.add_argument("--tracking-window-mm", type=float, default=3.0)
+    parser.add_argument(
+        "--absolute-target-mm",
+        type=float,
+        default=None,
+        help="common absolute leg-height target in mm; valid range is 10..490",
+    )
+    parser.add_argument(
+        "--sync-correction-gain",
+        type=float,
+        default=0.25,
+        help="bounded proportional correction from relative four-axis position error",
+    )
+    parser.add_argument(
+        "--sync-correction-max-counts",
+        type=int,
+        default=50_000,
+        help="maximum per-axis lead correction applied for synchronization",
+    )
+    parser.add_argument(
+        "--completion-timeout-ms",
+        type=int,
+        default=30_000,
+        help="maximum extra stream time while measured axes close the final lead",
+    )
+    parser.add_argument(
+        "--completion-tolerance-counts",
+        type=int,
+        default=10_000,
+        help="per-axis final-position acceptance tolerance",
+    )
+    parser.add_argument(
+        "--completion-stable-samples",
+        type=int,
+        default=5,
+        help="consecutive TPDO0 samples required at the final target",
+    )
     parser.add_argument(
         "--speed-mm-s",
         type=float,
@@ -803,6 +1021,7 @@ def main() -> int:
         else REPO_ROOT / "tmp" /
              f"lift4_sync_{time.strftime('%Y%m%d_%H%M%S')}.json"
     )
+    debug: Lift4SyncDebug | None = None
     try:
         with Lift4SyncDebug(nodes, args.timeout_ms) as debug:
             report = debug.run(
@@ -820,6 +1039,12 @@ def main() -> int:
                 args.speed_mm_s,
                 args.accel_mm_s2,
                 args.tracking_window_mm,
+                args.sync_correction_gain,
+                args.sync_correction_max_counts,
+                args.absolute_target_mm,
+                args.completion_timeout_ms,
+                args.completion_tolerance_counts,
+                args.completion_stable_samples,
             )
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
@@ -831,6 +1056,36 @@ def main() -> int:
         print(f"Log written to {log_path}")
         return 0
     except Exception as exc:  # noqa: BLE001 - report and safe-stop hardware errors.
+        if debug is not None:
+            partial_report = {
+                "failed": True,
+                "error": str(exc),
+                "nodes": debug.nodes,
+                "emcy": debug.emcy,
+                "current_limit_emcy_count": debug.current_limit_emcy_count,
+                "current_limit_emcy_by_node": debug.current_limit_emcy_by_node,
+                "buffer_status_after_clear": debug.buffer_status_after_clear,
+                "feedback": {
+                    str(node): {
+                        "position": item.position,
+                        "velocity": item.velocity,
+                        "statusword": f"0x{item.statusword:04X}",
+                        "fault": f"0x{item.fault:08X}",
+                        "current": item.current,
+                        "peak_abs_current": item.peak_abs_current,
+                        "tpdo0_count": item.tpdo0_count,
+                        "tpdo1_count": item.tpdo1_count,
+                    }
+                    for node, item in debug.feedback.items()
+                },
+                "samples": debug.samples,
+            }
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                json.dumps(partial_report, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print(f"Failure log written to {log_path}", file=sys.stderr)
         print(f"FAILED: {exc}", file=sys.stderr)
         return 1
 

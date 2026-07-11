@@ -9,6 +9,22 @@ static const char *bool_text(bool value)
     return value ? "1" : "0";
 }
 
+static const char *steer_inhibit_reason_short(uint8_t reason)
+{
+    switch (reason) {
+    case 0U: return "none";
+    case 1U: return "estop";
+    case 2U: return "sbus";
+    case 3U: return "disarmed";
+    case 4U: return "park";
+    case 5U: return "axis_not_ready";
+    case 6U: return "group_degraded";
+    case 7U: return "bad_source";
+    case 8U: return "bench_disabled";
+    default: return "unknown";
+    }
+}
+
 #if ECU_DEBUG_MONITOR_VERBOSE
 static const char *steer_inhibit_reason_text(uint8_t reason)
 {
@@ -318,16 +334,19 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
      * interfere with realtime motion.
      */
     printf("[ECU CMD] src=%u mode=%u gear=%u speed_milli=%ld steer_cdeg=[%ld,%ld,%ld,%ld] "
+           "height_milli=%ld height_rate_milli=%ld "
            "brake=%s hv=%s hv_fb=%s hv_latch=%s res[pwr=%u mot=%u]\r\n",
            (unsigned int)snapshot->source,
            (unsigned int)snapshot->motion_mode,
            (unsigned int)snapshot->active_gear,
            (long)snapshot->target_speed_milli_mps,
            (long)snapshot->target_steer_centi_deg[0],
-           (long)snapshot->target_steer_centi_deg[1],
-           (long)snapshot->target_steer_centi_deg[2],
-           (long)snapshot->target_steer_centi_deg[3],
-           bool_text(snapshot->brake_release),
+            (long)snapshot->target_steer_centi_deg[1],
+            (long)snapshot->target_steer_centi_deg[2],
+            (long)snapshot->target_steer_centi_deg[3],
+            (long)snapshot->target_height_milli_mm,
+            (long)snapshot->height_rate_milli_mm_s,
+            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
            bool_text(snapshot->high_voltage_feedback_ready),
            bool_text(snapshot->high_voltage_relay_latched),
@@ -338,6 +357,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
     uint8_t drive_fault_mask = 0U;
     uint8_t steer_fresh_mask = 0U;
     uint8_t steer_fault_mask = 0U;
+    uint8_t drive_heartbeat_mask = 0U;
+    uint8_t steer_heartbeat_mask = 0U;
     for (uint8_t node = ECU_CANOPEN_DRIVE_FR_NODE_ID;
          node <= ECU_CANOPEN_DRIVE_RR_NODE_ID;
          ++node) {
@@ -346,6 +367,10 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         uint8_t bit = (uint8_t)(1U << (node - ECU_CANOPEN_DRIVE_FR_NODE_ID));
         if (feedback->feedback_fresh) {
             drive_fresh_mask |= bit;
+        }
+        if (feedback->heartbeat_valid &&
+            feedback->heartbeat_operational_seen) {
+            drive_heartbeat_mask |= bit;
         }
         if (feedback->fault_latched != 0U) {
             drive_fault_mask |= bit;
@@ -360,13 +385,18 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
         if (feedback->feedback_fresh) {
             steer_fresh_mask |= bit;
         }
+        if (feedback->heartbeat_valid &&
+            feedback->heartbeat_operational_seen) {
+            steer_heartbeat_mask |= bit;
+        }
         if (feedback->fault_latched != 0U) {
             steer_fault_mask |= bit;
         }
     }
     printf("[ECU CAN2 PDO] q=%lu drop=%lu tx=%lu tx_err=%lu state=%u group=%lu "
            "exp=%u done=%u fail=%u inflight=%u last_fail[g=%lu cob=0x%03x n=%u e=%ld] "
-           "fresh[d=0x%02x s=0x%02x] fault[d=0x%02x s=0x%02x] "
+           "fresh[d=0x%02x s=0x%02x] hb[d=0x%02x s=0x%02x] fault[d=0x%02x s=0x%02x] "
+           "steer_gate[allow=%s inh=%u/%s] "
            "presteer[hold=%s ready=%s track_ready=%s miss=0x%02x] "
            "recover=%lu consec_fail=%lu last_recover_ms=%lu\r\n",
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
@@ -382,14 +412,19 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->can2_canopen_snapshot.last_pdo_failed_group_sequence,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_cob_id,
            (unsigned int)snapshot->can2_canopen_snapshot.last_pdo_failed_node_id,
-           (long)snapshot->can2_canopen_snapshot.last_pdo_failed_error,
-           (unsigned int)drive_fresh_mask,
-           (unsigned int)steer_fresh_mask,
-           (unsigned int)drive_fault_mask,
-           (unsigned int)steer_fault_mask,
-           bool_text(snapshot->presteer_drive_hold_active),
-           bool_text(snapshot->presteer_target_reached),
-           bool_text(snapshot->track_assist_steer_approximately_ready),
+            (long)snapshot->can2_canopen_snapshot.last_pdo_failed_error,
+            (unsigned int)drive_fresh_mask,
+            (unsigned int)steer_fresh_mask,
+            (unsigned int)drive_heartbeat_mask,
+            (unsigned int)steer_heartbeat_mask,
+            (unsigned int)drive_fault_mask,
+            (unsigned int)steer_fault_mask,
+            bool_text(snapshot->steer_normal_pdo_allowed),
+            (unsigned int)snapshot->steer_inhibit_reason,
+            steer_inhibit_reason_short(snapshot->steer_inhibit_reason),
+            bool_text(snapshot->presteer_drive_hold_active),
+            bool_text(snapshot->presteer_target_reached),
+            bool_text(snapshot->track_assist_steer_approximately_ready),
            (unsigned int)snapshot->presteer_missing_axis_mask,
            (unsigned long)snapshot->can2_realtime_transient_recovery_count,
            (unsigned long)snapshot->can2_realtime_consecutive_failure_count,
@@ -402,10 +437,14 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
      */
     const canopen_node_feedback_t *pump_feedback =
         &snapshot->can3_canopen_snapshot.node_feedback[ECU_CANOPEN_HYDRAULIC_PUMP_NODE_ID];
+    const int32_t lift_axis0_error_counts =
+        snapshot->lift_target_position_counts[0] -
+        snapshot->lift_actual_position_counts[0];
     printf("[ECU HYD] hyd=%s valve_cmd=0x%08lx valve_req=0x%08lx valve_out=0x%08lx "
            "valve_block=0x%08lx pump[state=%u fb=%s vel=%ld timeout=%lu] "
            "pump_tpdo[fresh=%s t0=%lu/%lu t1=%lu/%lu sw=0x%04x flt=0x%08lx] "
-           "lift[state=%u req=%d active=%d fresh=0x%02x fail=%lu] "
+           "lift[state=%u req=%d active=%d fresh=0x%02x pre=%u q=%lu rej=%lu fail=%lu rec=%lu "
+           "delta=%ld a0=%ld t0=%ld e0=%ld] "
            "can3[tx=%lu err=%lu q=%lu drop=%lu st=%u grp=%lu done=%u fail=%u] "
            "res[lift=%u io=%u]\r\n",
            bool_text(snapshot->hydraulic_enable),
@@ -428,7 +467,15 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (int)snapshot->lift_requested_direction,
            (int)snapshot->lift_active_direction,
            (unsigned int)snapshot->lift_feedback_fresh_mask,
+           (unsigned int)snapshot->lift_preload_points_completed,
+           (unsigned long)snapshot->lift_interpolation_queued_count,
+           (unsigned long)snapshot->lift_interpolation_reject_count,
            (unsigned long)snapshot->lift_interpolation_failure_count,
+           (unsigned long)snapshot->lift_interpolation_recovery_count,
+           (long)snapshot->lift_stream_planned_delta_counts,
+           (long)snapshot->lift_actual_position_counts[0],
+           (long)snapshot->lift_target_position_counts[0],
+           (long)lift_axis0_error_counts,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_count,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_error_count,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_queued_count,

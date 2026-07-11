@@ -58,6 +58,7 @@
  * nonzero valve output latched.
  */
 #define ECU_CAN3_COMMAND_STALE_TIMEOUT_MS (50U)
+#define ECU_CAN2_COMMAND_STALE_TIMEOUT_MS (50U)
 
 #ifndef ECU_ENABLE_DEBUG_MONITOR
 #define ECU_ENABLE_DEBUG_MONITOR         (1)
@@ -283,8 +284,10 @@
 #define ECU_CANOPEN_LIFT_INTERPOLATION_REFRESH_MS (20U)
 #define ECU_CANOPEN_LIFT_FEEDBACK_TIMEOUT_MS      (200U)
 #define ECU_CANOPEN_LIFT_SETUP_TIMEOUT_MS         (5000U)
-#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (20U)
-#define ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS      (100U)
+#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (10U)
+#define ECU_CANOPEN_LIFT_INTERPOLATION_MODE       (0)
+#define ECU_CANOPEN_LIFT_ENABLE_SETTLE_MS         (1500U)
+#define ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS      (1000U)
 /* A single non-trigger PDO TX fault must not permanently freeze the vehicle.
  * The CAN2 realtime owner cancels the local group, discards stale queued
  * frames, and retries from the newest vehicle command.  Trigger-phase steering
@@ -292,6 +295,33 @@
  * steering axes may already have accepted a target edge.
  */
 #define ECU_CANOPEN_REALTIME_TRANSIENT_FAILURE_LIMIT (3U)
+#define ECU_CANOPEN_TRANSPORT_RECOVERY_BACKOFF_MS     (50U)
+#define ECU_CANOPEN_NODE_RECOVERY_RETRY_MS            (500U)
+#define ECU_CANOPEN_NODE_RECOVERY_COOLDOWN_MS         (5000U)
+#define ECU_CANOPEN_NODE_RECOVERY_FAST_ATTEMPTS       (3U)
+#define ECU_CANOPEN_HEARTBEAT_TIMEOUT_MS              (1500U)
+#define ECU_CANOPEN_TPDO1_STATUS_TIMEOUT_MS           (750U)
+
+/*
+ * Whole-vehicle commissioning startup gate:
+ *
+ * The BC/BC2 drives have their PDO mapping configured and saved by the CAN
+ * analyzer before ECU control.  Some field configurations do not produce a
+ * fresh steering TPDO before the ECU has already sent the first realtime RPDO.
+ * If steering output waits strictly for fresh TPDO0/TPDO1, CAN2 can deadlock:
+ * steering is blocked as "axis not ready", and drive is blocked by pre-steer.
+ *
+ * In the explicit whole_vehicle_motion image only, allow a recent operational
+ * heartbeat as the initial "remote node is alive" evidence.  The runtime still
+ * requires high-voltage feedback, no remote estop, no latched fault, ordered
+ * PDO group completion, and continues to replace this evidence with TPDO
+ * feedback as soon as TPDOs arrive.
+ */
+#ifndef ECU_CANOPEN_STEER_BOOT_HEARTBEAT_EVIDENCE_ENABLED
+#define ECU_CANOPEN_STEER_BOOT_HEARTBEAT_EVIDENCE_ENABLED \
+    (ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION)
+#endif
+#define ECU_CANOPEN_CAN2_MOTION_NODE_COUNT             (8U)
 /* Drive velocity is ramped in a few discrete commissioning-friendly bands.
  * Reversal is intentionally the slowest path so a D/R sign change first eases
  * through zero instead of commanding an abrupt torque step.
@@ -356,48 +386,43 @@
 #define ECU_STEER_RETURN_ZERO_POSITION_TOLERANCE_COUNTS       (20000)
 #define ECU_STEER_RETURN_ZERO_VELOCITY_TOLERANCE_UNITS        (30000)
 #define ECU_STEER_RETURN_ZERO_STABLE_SAMPLES                  (3U)
-/* Field steering zero-search parameters, CAN analyzer verified 2026-07-10.
+/* Field steering zero-search parameters, CAN analyzer reference v4.
  *
- * The installed steering mechanism does not always build high current at the
- * mechanical end stop.  Waiting for 7.5 A/15 A either times out on some axes or
- * pushes the drive too close to protection.  The stable method is:
- * 1) velocity-mode search in three stages: fast -> medium -> slow;
- * 2) stop immediately if current reaches 9 A;
- * 3) otherwise accept the end stop only after minimum travel and zero-speed
- *    dwell are both true;
- * 4) retreat all axes to the inner safe band before changing direction;
- * 5) return to midpoint with velocity closed-loop, not profile-position mode;
- * 6) only then write 0 to 0x6064 in the explicit maintenance/calibration flow.
+ * The calibration workflow is intentionally velocity-mode only.  Limit search
+ * uses two stages: fast, then a 30% slower approach near the expected end stop.
+ * Return-to-zero uses three stages: fast, medium, and slow only when the axis is
+ * already close to the calculated midpoint.  The CAN2 motion task owns the whole
+ * sequence; normal remote steering and drive PDOs are blocked until complete.
  */
-#define ECU_STEER_ZERO_SEARCH_FAST_VELOCITY_UNITS             (800000)
-#define ECU_STEER_ZERO_SEARCH_MEDIUM_VELOCITY_UNITS           (250000)
-#define ECU_STEER_ZERO_SEARCH_SLOW_VELOCITY_UNITS             (60000)
-#define ECU_STEER_ZERO_SEARCH_SLOWDOWN1_ABS_COUNTS            (1200000)
-#define ECU_STEER_ZERO_SEARCH_SLOWDOWN2_ABS_COUNTS            (1650000)
-#define ECU_STEER_ZERO_SEARCH_PROFILE_VELOCITY_COUNTS_PER_SEC (800000)
-#define ECU_STEER_ZERO_SEARCH_PROFILE_ACCEL_COUNTS_PER_SEC2   (500000)
+#define ECU_STEER_ZERO_SEARCH_FAST_VELOCITY_UNITS             (1600000)
+#define ECU_STEER_ZERO_SEARCH_SLOW_VELOCITY_UNITS             (1120000)
+#define ECU_STEER_ZERO_SEARCH_SLOWDOWN_ABS_COUNTS             (2400000)
+#define ECU_STEER_ZERO_SEARCH_PROFILE_VELOCITY_COUNTS_PER_SEC (2000000)
+#define ECU_STEER_ZERO_SEARCH_PROFILE_ACCEL_COUNTS_PER_SEC2   (1000000)
+#define ECU_STEER_ZERO_STALL_CURRENT_10MA                     (750)
 #define ECU_STEER_ZERO_PROTECTION_CURRENT_10MA                (900)
-#define ECU_STEER_ZERO_SPEED_STOP_WINDOW_UNITS                (30000)
-#define ECU_STEER_ZERO_SPEED_STOP_DWELL_MS                    (300U)
-#define ECU_STEER_ZERO_MIN_TRAVEL_COUNTS                      (1500000)
-#define ECU_STEER_ZERO_INNER_SAFE_ABS_COUNTS                  (300000)
-#define ECU_STEER_ZERO_MID_RETURN_FAST_VELOCITY_UNITS         (500000)
-#define ECU_STEER_ZERO_MID_RETURN_MEDIUM_VELOCITY_UNITS       (240000)
-#define ECU_STEER_ZERO_MID_RETURN_SLOW_VELOCITY_UNITS         (30000)
-#define ECU_STEER_ZERO_MID_RETURN_MEDIUM_ERROR_COUNTS         (300000)
-#define ECU_STEER_ZERO_MID_RETURN_SLOW_ERROR_COUNTS           (30000)
-#define ECU_STEER_ZERO_MIDPOINT_TOLERANCE_COUNTS              (2000)
-#define ECU_STEER_ZERO_MIDPOINT_STABLE_SAMPLES                (5U)
-#define ECU_STEER_ZERO_STALL_ARM_DELAY_MS                     (800U)
-#define ECU_STEER_ZERO_MAX_TRAVEL_COUNTS                      (3700000)
+#define ECU_STEER_ZERO_STALL_DWELL_MS                         (150U)
+#define ECU_STEER_ZERO_STALL_ARM_DELAY_MS                     (400U)
+#define ECU_STEER_ZERO_MAX_TRAVEL_COUNTS                      (4000000)
+#define ECU_STEER_ZERO_MID_RETURN_FAST_VELOCITY_UNITS         (1600000)
+#define ECU_STEER_ZERO_MID_RETURN_MEDIUM_VELOCITY_UNITS       (700000)
+#define ECU_STEER_ZERO_MID_RETURN_SLOW_VELOCITY_UNITS         (180000)
+#define ECU_STEER_ZERO_MID_RETURN_MEDIUM_ERROR_COUNTS         (500000)
+#define ECU_STEER_ZERO_MID_RETURN_SLOW_ERROR_COUNTS           (50000)
+#define ECU_STEER_ZERO_MIDPOINT_TOLERANCE_COUNTS              (10000)
+#define ECU_STEER_ZERO_MIDPOINT_STABLE_SAMPLES                (2U)
+/* Physical-left search direction for Node5..8 in vehicle leg order. */
+#define ECU_STEER_ZERO_LEG1_LEFT_SIGN                         (1)
+#define ECU_STEER_ZERO_LEG2_LEFT_SIGN                         (-1)
+#define ECU_STEER_ZERO_LEG3_LEFT_SIGN                         (1)
+#define ECU_STEER_ZERO_LEG4_LEFT_SIGN                         (-1)
 #define ECU_REMOTE_B1_ZERO_CALIBRATION_PRESS_COUNT            (3U)
 #define ECU_REMOTE_B1_ZERO_CALIBRATION_WINDOW_MS              (2000U)
 #define ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS        (600U)
-#define ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS                 (50U)
-#define ECU_STEER_ZERO_SETUP_TIMEOUT_MS                       (20000U)
-#define ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (30000U)
-#define ECU_STEER_ZERO_RETREAT_TIMEOUT_MS                     (10000U)
-#define ECU_STEER_ZERO_RETURN_TIMEOUT_MS                      (20000U)
+#define ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS                 (20U)
+#define ECU_STEER_ZERO_SETUP_TIMEOUT_MS                       (30000U)
+#define ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (60000U)
+#define ECU_STEER_ZERO_RETURN_TIMEOUT_MS                      (35000U)
 #define ECU_STEER_ZERO_SDO_TIMEOUT_MS                         (1000U)
 /* Node6 and Node8 were measured to arrive late when changing from spin to crab
  * because they can travel roughly twice the steering distance of the other two
@@ -526,6 +551,16 @@
 #define ECU_CANOPEN_OBJ_MODES_OF_OPERATION (0x6060U)
 #define ECU_CANOPEN_OBJ_MODES_OF_OPERATION_DISPLAY (0x6061U)
 #define ECU_CANOPEN_OBJ_PROFILE_VELOCITY (0x6081U)
+#define ECU_CANOPEN_OBJ_PROFILE_ACCELERATION (0x6083U)
+#define ECU_CANOPEN_OBJ_PROFILE_DECELERATION (0x6084U)
+#define ECU_CANOPEN_OBJ_FOLLOWING_ERROR_WINDOW (0x2120U)
+/* BC/BC2 vendor interpolation option used by the CAN-analyzer lift script.
+ * Field test showed this write is part of the stable 10..490 mm setup
+ * sequence. Keep the object/value centralized until the vendor manual naming
+ * is confirmed in project documentation.
+ */
+#define ECU_CANOPEN_OBJ_BC_INTERPOLATION_OPTION (0x2300U)
+#define ECU_CANOPEN_BC_INTERPOLATION_OPTION_VALUE (0x001EU)
 #define ECU_CANOPEN_OBJ_COMMAND_CURRENT_RAMP (0x2113U)
 #define ECU_CANOPEN_OBJ_COMMAND_CURRENT  (0x2340U)
 #define ECU_CANOPEN_OBJ_TARGET_POSITION  (0x607AU)
@@ -630,12 +665,64 @@ typedef enum {
 #error ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
 #endif
 #define ECU_LIFT_POSITION_SPEED_UNITS                ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
+/* CAN3 lift calibration is separate from the BC drive/steering 10000-count
+ * motor units.  Field measurement on the installed ground-clearance actuator:
+ * 131072 count/motor-rev and 12 motor rev per 10 mm linear travel.
+ */
+#define ECU_LIFT_ENCODER_COUNTS_PER_REV              (131072.0f)
+#define ECU_LIFT_MOTOR_REVS_PER_MM                   (1.2f)
+#define ECU_LIFT_MM_TO_COUNTS \
+    (ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_LIFT_MOTOR_REVS_PER_MM)
+#define ECU_LIFT_PROFILE_VELOCITY_UNITS_PER_MM_S \
+    (ECU_LIFT_MM_TO_COUNTS * ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC)
+#define ECU_LIFT_PROFILE_ACCEL_UNITS_PER_RPS2 \
+    ((ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC) / 100.0f)
 #define ECU_LIFT_SHORTEST_POSITION_COUNTS            (-10000)
-#define ECU_LIFT_LONGEST_POSITION_COUNTS             (-8000000)
-#define ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC  (100000)
-#define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS    (50000)
-#define ECU_LIFT_SYNC_RECOVERY_TOLERANCE_COUNTS      (10000)
-#define ECU_LIFT_SYNC_RECOVERY_MAX_EXTRA_COUNTS      (5000)
+#define ECU_LIFT_LONGEST_POSITION_COUNTS \
+    ((int32_t)(-(ECU_LIFT_MM_TO_COUNTS * 490.0f)))
+#define ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 5.0f))
+#define ECU_LIFT_INTERPOLATION_ACCEL_COUNTS_PER_SEC2 \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 8.0f))
+/* Analyzer-verified full-stroke lift parameters, 2026-07-11:
+ * 5.0 mm/s stream, 8.0 mm/s^2 stream ramp, 75000-count target lead,
+ * 24,000,000 profile velocity units and 500,000 profile acceleration units.
+ * The tested sequence first levels the four lift axes, then runs 10->490->10 mm
+ * without EMCY. 20 mm/s and 7.5 mm/s full-stroke attempts tripped Node9 0x7390.
+ * ECU realtime scheduling keeps the drive's interpolation FIFO ahead by
+ * preloading 10 stationary points.  This preserves continuous 20 ms drive-side
+ * interpolation when FreeRTOS/CAN TX completion occasionally stretches one ECU
+ * producer interval beyond 20 ms.
+ */
+#define ECU_LIFT_PROFILE_VELOCITY_UNITS             (24000000)
+#define ECU_LIFT_PROFILE_ACCEL_UNITS                (500000)
+#define ECU_LIFT_FOLLOWING_ERROR_WINDOW_COUNTS \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
+#define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS \
+    (75000)
+#define ECU_LIFT_TARGET_REACHED_TOLERANCE_COUNTS \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
+/* Analyzer-proven lift contract:
+ * - 20 ms interpolation period;
+ * - ten preloaded points on ECU, three minimum on analyzer script;
+ * - an initial same-direction leveling move before the main stroke;
+ * - one coherent absolute-position target stream per four-axis cycle;
+ * - 75000-count maximum command lead over measured feedback;
+ * - final acceptance only after all axes are within 3 mm.
+ */
+#define ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
+/* Normal remote-center confirmation while lift interpolation is already
+ * running. This filters SBUS threshold chatter only; safety-source stops,
+ * high-voltage loss, CAN faults and non-remote commands still stop immediately.
+ */
+#define ECU_LIFT_REMOTE_NEUTRAL_STOP_CONFIRM_MS     (150U)
+#define ECU_LIFT_STALL_PROGRESS_COUNTS \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 0.05f))
+#define ECU_LIFT_STALL_TIMEOUT_MS                   (5000U)
+#define ECU_LIFT_RECOVERY_BACKOFF_MS                (1000U)
+#define ECU_LIFT_RECOVERY_COOLDOWN_MS               (10000U)
+#define ECU_LIFT_RECOVERY_FAST_ATTEMPTS             (3U)
 #define ECU_HYDRAULIC_PUMP_WORK_RPM                  (1500.0f)
 #define ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)
 #define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM        (800.0f)
@@ -681,7 +768,6 @@ typedef enum {
  * per steering output revolution.  Positive target is left, negative is right. */
 #define ECU_STEER_DEG_TO_COUNTS \
     (ECU_STEER_COUNTS_PER_OUTPUT_REV / 360.0f)
-#define ECU_LIFT_MM_TO_COUNTS                 (100.0f)
 
 /* Local digital outputs stay limited to board-level loads.  Servo brakes are
  * controlled by the drive internal brake controller, not by PCB DIO and not by
@@ -803,8 +889,8 @@ typedef enum {
 #define ECU_VEHICLE_MIN_TURN_RADIUS_MM    (1500.0f)
 #define ECU_MOTION_SPIN_STEER_DEG         (45.0f)
 #define ECU_MOTION_CRAB_STEER_DEG         (90.0f)
-#define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (0.0f)
-#define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (400.0f)
+#define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (10.0f)
+#define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (490.0f)
 #define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
 #define ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN     (778)
 #define ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX   (-778)

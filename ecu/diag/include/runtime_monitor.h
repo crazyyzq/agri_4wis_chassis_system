@@ -112,6 +112,8 @@ typedef struct {
     bool high_voltage_feedback_ready;
     bool high_voltage_relay_latched;
     bool commissioning_power_debug_active;
+    int32_t target_height_milli_mm;
+    int32_t height_rate_milli_mm_s;
     bool hydraulic_enable;
     uint32_t hydraulic_valve_mask;
     uint32_t hydraulic_requested_valve_mask;
@@ -127,7 +129,13 @@ typedef struct {
     int8_t lift_active_direction;
     uint8_t lift_feedback_fresh_mask;
     uint8_t lift_preload_points_completed;
+    uint32_t lift_interpolation_queued_count;
+    uint32_t lift_interpolation_reject_count;
     uint32_t lift_interpolation_failure_count;
+    uint32_t lift_interpolation_recovery_count;
+    int32_t lift_stream_planned_delta_counts;
+    int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
     bool steer_normal_pdo_allowed;
     bool steer_safety_inhibited;
     uint8_t steer_inhibit_reason;

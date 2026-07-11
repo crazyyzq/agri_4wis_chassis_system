@@ -293,7 +293,7 @@ def test_v9_commit_b_sync_is_gated_and_has_inflight_completion(root: pathlib.Pat
     )[1].split("static void wait_briefly_for_pdo_tx_complete", 1)[0]
     for token in [
         "arm PDOs -> SYNC -> trigger PDOs -> SYNC",
-        "send_sync_frame(service, now_ms, false)",
+        "send_sync_frame(service, now_ms, true)",
         "active_pdo_arm_sync_sent = true",
         "active_pdo_trigger_sync_sent = true",
     ]:
@@ -541,9 +541,10 @@ def test_v10_steering_tpdo_observer_limits_hardware_filters_without_hal_fallback
     assert "ECU_CANOPEN_TPDO_EXACT_MASK" in canopen_c
     assert "Register TPDO0" in observer_fn
     assert "TPDO1 is registered as exact per-node filters" in observer_fn
-    assert observer_fn.count("CO_CANrxBufferInit") == 2
+    assert observer_fn.count("CO_CANrxBufferInit") == 3
     assert "ECU_CANOPEN_TPDO1_BASE" in observer_fn
     assert "ECU_CANOPEN_TPDO2_BASE + node" in observer_fn
+    assert "CANOPEN_MASTER_HEARTBEAT_BASE" in observer_fn
     assert "bus_tpdo_node_range(service->snapshot.bus" in observer_fn
     assert "first_node" in observer_fn
     assert "last_node" in observer_fn
@@ -559,13 +560,13 @@ def test_v10_node8_tpdo1_acceptance_workaround_is_profile_scoped_and_position_ga
         "static void refresh_tpdo_freshness", 1
     )[0]
     assert "ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND" in workaround_fn
-    refresh_fn = canopen_c.split("static void refresh_tpdo_freshness", 1)[1].split(
-        "bool canopen_master_service_init", 1
+    feedback_fn = canopen_c.split("bool canopen_master_service_get_node_feedback", 1)[1].split(
+        "bool canopen_master_service_steer_tpdo_observers_ready", 1
     )[0]
-    assert "node == ECU_CANOPEN_STEER_RR_NODE_ID" in refresh_fn
-    assert "tpdo0_fresh" in refresh_fn
-    assert "feedback->tpdo1_valid" in refresh_fn
-    assert "feedback->last_tpdo1_ms = feedback->last_tpdo0_ms" in refresh_fn
+    assert "node_id == ECU_CANOPEN_STEER_RR_NODE_ID" in feedback_fn
+    assert "out->feedback_fresh" in feedback_fn
+    assert "out->tpdo1_fresh = true" in feedback_fn
+    assert "out->tpdo1_rx_count == 0U" in feedback_fn
 
 
 def test_v10_center_before_active_and_post_command_tpdo_uses_sync_trigger_not_local_timestamp_order(root: pathlib.Path) -> None:

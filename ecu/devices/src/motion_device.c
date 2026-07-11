@@ -12,6 +12,9 @@
 #define ECU_NODE5_STEER_PDO_FRAME_COUNT (2U)
 #define ECU_DRIVE_GROUP_PDO_FRAME_COUNT (ECU_WHEEL_COUNT)
 #define ECU_DRIVE_GROUP_SEQUENCE_BASE   (0x40000000UL)
+#define CIA402_STATUS_STATE_MASK         ((uint16_t)0x006FU)
+#define CIA402_STATUS_OPERATION_ENABLED  ((uint16_t)0x0027U)
+#define CIA402_STATUS_FAULT_BIT          ((uint16_t)(1U << 3))
 
 ATTR_PLACE_AT_NONCACHEABLE_BSS
 volatile ecu_steer_commissioning_control_t g_ecu_steer_commissioning_control;
@@ -127,6 +130,59 @@ static float clamp_f32(float value, float min_value, float max_value)
 static bool drive_direction_sign_is_valid(int8_t sign)
 {
     return sign == 1 || sign == -1;
+}
+
+static bool can2_feedback_operation_enabled(
+    uint8_t node_id,
+    const canopen_node_feedback_t *feedback)
+{
+    if (feedback == NULL || !feedback->feedback_fresh ||
+        feedback->fault_latched != 0U) {
+        return false;
+    }
+    if (node_id == ECU_CANOPEN_STEER_RR_NODE_ID &&
+        ECU_CANOPEN_NODE8_TPDO1_ACCEPTANCE_WORKAROUND != 0U &&
+        feedback->tpdo1_rx_count == 0U) {
+        return true;
+    }
+    return feedback->tpdo1_fresh &&
+           (feedback->statusword & CIA402_STATUS_STATE_MASK) ==
+               CIA402_STATUS_OPERATION_ENABLED;
+}
+
+static bool can2_steer_boot_heartbeat_evidence_ready(
+    const canopen_node_feedback_t *feedback,
+    uint32_t now_ms)
+{
+#if ECU_CANOPEN_STEER_BOOT_HEARTBEAT_EVIDENCE_ENABLED
+    if (feedback == NULL || !feedback->heartbeat_valid ||
+        !feedback->heartbeat_operational_seen ||
+        feedback->fault_latched != 0U) {
+        return false;
+    }
+    return (uint32_t)(now_ms - feedback->last_heartbeat_ms) <=
+           ECU_CANOPEN_HEARTBEAT_TIMEOUT_MS;
+#else
+    (void)feedback;
+    (void)now_ms;
+    return false;
+#endif
+}
+
+static void mark_steer_axis_ready_from_startup_evidence(
+    motion_device_state_t *state,
+    uint32_t wheel,
+    bool has_position_feedback,
+    int32_t position_counts)
+{
+    state->steer_axis_remote_verified[wheel] = true;
+    state->steer_axis_config_state[wheel] = MOTION_STEER_AXIS_READY;
+    state->steer_pdo_configured[wheel] = true;
+    state->steer_position_mode_ready[wheel] = true;
+    if (has_position_feedback) {
+        state->steer_last_position_valid[wheel] = true;
+        state->steer_last_position_counts[wheel] = position_counts;
+    }
 }
 
 static bool steer_axis_calibration_is_valid(const steer_axis_calibration_t *axis)
@@ -693,26 +749,39 @@ static bool node5_steer_contract_allows(const ecu_hardware_config_t *config,
 
 static bool steer_all_axes_have_remote_evidence(motion_device_state_t *state,
                                                 const canopen_master_service_t *canopen,
-                                                const ecu_hardware_config_t *config)
+                                                const ecu_hardware_config_t *config,
+                                                uint32_t now_ms)
 {
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         uint8_t node_id = config->steer_nodes[wheel].node_id;
         canopen_node_feedback_t feedback;
+        bool feedback_read =
+            canopen_master_service_get_node_feedback(canopen, node_id, &feedback);
         bool feedback_ready =
-            canopen_master_service_get_node_feedback(canopen, node_id, &feedback) &&
-            feedback.feedback_fresh &&
-            feedback.fault_latched == 0U;
+            feedback_read && can2_feedback_operation_enabled(node_id, &feedback);
         if (feedback_ready) {
-            state->steer_axis_remote_verified[wheel] = true;
-            state->steer_axis_config_state[wheel] = MOTION_STEER_AXIS_READY;
-            state->steer_pdo_configured[wheel] = true;
-            state->steer_position_mode_ready[wheel] = true;
-            state->steer_last_position_valid[wheel] = true;
-            state->steer_last_position_counts[wheel] =
-                feedback.actual_position_counts;
+            mark_steer_axis_ready_from_startup_evidence(
+                state,
+                wheel,
+                true,
+                feedback.actual_position_counts);
+        } else if (feedback_read &&
+                   can2_steer_boot_heartbeat_evidence_ready(&feedback, now_ms)) {
+            /* This is a startup-only escape from the TPDO-before-RPDO
+             * deadlock.  It proves the node is alive and operational on CAN2,
+             * but it does not claim the next RPDO has been accepted.  Actual
+             * position remains invalid until TPDO0 arrives.
+             */
+            mark_steer_axis_ready_from_startup_evidence(
+                state,
+                wheel,
+                false,
+                0);
         }
         bool has_evidence =
             feedback_ready ||
+            (feedback_read &&
+             can2_steer_boot_heartbeat_evidence_ready(&feedback, now_ms)) ||
             state->steer_axis_remote_verified[wheel] ||
             canopen_master_service_has_node_evidence(canopen, node_id);
         if (!has_evidence ||
@@ -889,7 +958,7 @@ static motion_steer_inhibit_reason_t evaluate_steer_inhibit_reason(
     (void)config;
 #else
     if (!commissioning_policy_allows_node5_steer_pdo() &&
-        !steer_all_axes_have_remote_evidence(state, canopen, config)) {
+        !steer_all_axes_have_remote_evidence(state, canopen, config, now_ms)) {
         return MOTION_STEER_INHIBIT_AXIS_NOT_READY;
     }
 #endif
@@ -1355,10 +1424,10 @@ static bool steer_axis_realtime_ready(motion_device_state_t *state,
     state->steer_position_mode_ready[wheel] = true;
 #else
     canopen_node_feedback_t feedback;
-    bool feedback_valid =
-        canopen_master_service_get_node_feedback(canopen, node_id, &feedback) &&
-        feedback.feedback_fresh &&
-        feedback.fault_latched == 0U;
+    bool feedback_read =
+        canopen_master_service_get_node_feedback(canopen, node_id, &feedback);
+    bool feedback_valid = feedback_read &&
+        can2_feedback_operation_enabled(node_id, &feedback);
     if (feedback_valid) {
         /* PDO mapping is configured out-of-band with the analyzer and saved to
          * the drive flash.  The ECU marks realtime-ready only after it sees
@@ -1367,15 +1436,24 @@ static bool steer_axis_realtime_ready(motion_device_state_t *state,
          * not claim that a later RPDO was accepted; it only opens the realtime
          * PDO path.
          */
-        state->steer_axis_remote_verified[wheel] = true;
-        state->steer_axis_config_state[wheel] = MOTION_STEER_AXIS_READY;
-        state->steer_pdo_configured[wheel] = true;
-        state->steer_position_mode_ready[wheel] = true;
-        state->steer_last_position_valid[wheel] = true;
-        state->steer_last_position_counts[wheel] =
-            feedback.actual_position_counts;
+        mark_steer_axis_ready_from_startup_evidence(
+            state,
+            wheel,
+            true,
+            feedback.actual_position_counts);
+    } else if (feedback_read &&
+               can2_steer_boot_heartbeat_evidence_ready(&feedback, now_ms)) {
+        /* Permit the first realtime steering group after a fresh operational
+         * heartbeat in the whole-vehicle commissioning image.  TPDO feedback
+         * still becomes the normal measured source once the drive starts
+         * producing it.
+         */
+        mark_steer_axis_ready_from_startup_evidence(state, wheel, false, 0);
     }
-    if (!feedback_valid) {
+    if (!feedback_valid &&
+        !can2_steer_boot_heartbeat_evidence_ready(
+            feedback_read ? &feedback : NULL,
+            now_ms)) {
         state->steer_realtime_enabled[wheel] = false;
         return false;
     }
@@ -1757,8 +1835,7 @@ static bool steer_zero_feedback(canopen_master_service_t *canopen,
     return canopen_master_service_get_node_feedback(canopen,
                                                    node_id,
                                                    feedback) &&
-           feedback->feedback_fresh &&
-           feedback->fault_latched == 0U;
+           feedback->feedback_fresh;
 }
 
 static bool steer_zero_queue_sdo(motion_device_state_t *state,
@@ -1885,31 +1962,51 @@ static bool steer_zero_setup_step(motion_device_state_t *state,
 
     switch (state->steer_zero_calibration_setup_step) {
     case 0U:
+        index = 0x6040U;
+        size = 2U;
+        value = SERVO_DRIVE_CONTROL_FAULT_RESET;
+        break;
+    case 1U:
         index = 0x2300U;
         size = 2U;
         value = 0x001E;
         break;
-    case 1U:
+    case 2U:
         index = 0x6060U;
         size = 1U;
         value = SERVO_DRIVE_MODE_PROFILE_VELOCITY;
         break;
-    case 2U:
+    case 3U:
         index = 0x6081U;
         size = 4U;
         value = ECU_STEER_ZERO_SEARCH_PROFILE_VELOCITY_COUNTS_PER_SEC;
         break;
-    case 3U:
+    case 4U:
         index = 0x6083U;
         size = 4U;
         value = ECU_STEER_ZERO_SEARCH_PROFILE_ACCEL_COUNTS_PER_SEC2;
         break;
-    case 4U:
+    case 5U:
         index = 0x6084U;
         size = 4U;
         value = ECU_STEER_ZERO_SEARCH_PROFILE_ACCEL_COUNTS_PER_SEC2;
         break;
-    case 5U:
+    case 6U:
+        index = 0x2113U;
+        size = 4U;
+        value = 1000;
+        break;
+    case 7U:
+        index = 0x6040U;
+        size = 2U;
+        value = SERVO_DRIVE_CONTROL_SHUTDOWN;
+        break;
+    case 8U:
+        index = 0x6040U;
+        size = 2U;
+        value = SERVO_DRIVE_CONTROL_SWITCH_ON;
+        break;
+    case 9U:
         index = 0x6040U;
         size = 2U;
         value = SERVO_DRIVE_CONTROL_ENABLE_OPERATION;
@@ -2004,6 +2101,29 @@ static bool steer_zero_velocity_group_ready(motion_device_state_t *state,
     return true;
 }
 
+static int32_t steer_zero_left_direction_sign(uint32_t wheel)
+{
+    switch (wheel) {
+    case ECU_WHEEL_LEG1_FRONT_RIGHT:
+        return ECU_STEER_ZERO_LEG1_LEFT_SIGN;
+    case ECU_WHEEL_LEG2_FRONT_LEFT:
+        return ECU_STEER_ZERO_LEG2_LEFT_SIGN;
+    case ECU_WHEEL_LEG3_REAR_LEFT:
+        return ECU_STEER_ZERO_LEG3_LEFT_SIGN;
+    case ECU_WHEEL_LEG4_REAR_RIGHT:
+        return ECU_STEER_ZERO_LEG4_LEFT_SIGN;
+    default:
+        return 1;
+    }
+}
+
+static int32_t steer_zero_direction_sign_for_axis(uint32_t wheel,
+                                                  bool left_search)
+{
+    int32_t left_sign = steer_zero_left_direction_sign(wheel);
+    return left_search ? left_sign : -left_sign;
+}
+
 static int32_t steer_zero_search_velocity_for_axis(
     motion_device_state_t *state,
     uint32_t wheel,
@@ -2013,12 +2133,9 @@ static int32_t steer_zero_search_velocity_for_axis(
     int32_t travel =
         abs_i32_delta(position_counts,
                       state->steer_zero_calibration_direction_start_counts[wheel]);
-    int32_t speed = ECU_STEER_ZERO_SEARCH_FAST_VELOCITY_UNITS;
-    if (travel >= ECU_STEER_ZERO_SEARCH_SLOWDOWN2_ABS_COUNTS) {
-        speed = ECU_STEER_ZERO_SEARCH_SLOW_VELOCITY_UNITS;
-    } else if (travel >= ECU_STEER_ZERO_SEARCH_SLOWDOWN1_ABS_COUNTS) {
-        speed = ECU_STEER_ZERO_SEARCH_MEDIUM_VELOCITY_UNITS;
-    }
+    int32_t speed = travel >= ECU_STEER_ZERO_SEARCH_SLOWDOWN_ABS_COUNTS ?
+        ECU_STEER_ZERO_SEARCH_SLOW_VELOCITY_UNITS :
+        ECU_STEER_ZERO_SEARCH_FAST_VELOCITY_UNITS;
     return direction_sign >= 0 ? speed : -speed;
 }
 
@@ -2027,32 +2144,24 @@ static bool steer_zero_axis_at_end_stop(motion_device_state_t *state,
                                         const canopen_node_feedback_t *feedback,
                                         uint32_t now_ms)
 {
-    int16_t current = feedback->actual_current_raw;
+    int32_t current = feedback->actual_current_raw;
     if (current < 0) {
-        current = (int16_t)-current;
+        current = -current;
     }
     if (current > state->steer_zero_calibration_peak_current_10ma[wheel]) {
-        state->steer_zero_calibration_peak_current_10ma[wheel] = current;
+        state->steer_zero_calibration_peak_current_10ma[wheel] = (int16_t)current;
     }
     if (current >= ECU_STEER_ZERO_PROTECTION_CURRENT_10MA) {
         return true;
     }
 
-    int32_t travel =
-        abs_i32_delta(feedback->actual_position_counts,
-                      state->steer_zero_calibration_direction_start_counts[wheel]);
-    int32_t velocity = feedback->actual_velocity_units;
-    if (velocity < 0) {
-        velocity = -velocity;
-    }
-    if (travel >= ECU_STEER_ZERO_MIN_TRAVEL_COUNTS &&
-        velocity <= ECU_STEER_ZERO_SPEED_STOP_WINDOW_UNITS) {
+    if (current >= ECU_STEER_ZERO_STALL_CURRENT_10MA) {
         if (state->steer_zero_calibration_zero_speed_since_ms[wheel] == 0U) {
             state->steer_zero_calibration_zero_speed_since_ms[wheel] = now_ms;
         }
         return (uint32_t)(now_ms -
                state->steer_zero_calibration_zero_speed_since_ms[wheel]) >=
-               ECU_STEER_ZERO_SPEED_STOP_DWELL_MS;
+               ECU_STEER_ZERO_STALL_DWELL_MS;
     }
 
     state->steer_zero_calibration_zero_speed_since_ms[wheel] = 0U;
@@ -2063,7 +2172,6 @@ static bool steer_zero_run_search(motion_device_state_t *state,
                                   canopen_master_service_t *canopen,
                                   const ecu_hardware_config_t *config,
                                   uint32_t now_ms,
-                                  int32_t direction_sign,
                                   bool left_search)
 {
     if ((uint32_t)(now_ms - state->steer_zero_calibration_state_enter_ms) >
@@ -2087,6 +2195,13 @@ static bool steer_zero_run_search(motion_device_state_t *state,
             steer_zero_calibration_fault(state, axis_bit, now_ms);
             return false;
         }
+        int32_t travel =
+            abs_i32_delta(feedback.actual_position_counts,
+                          state->steer_zero_calibration_direction_start_counts[wheel]);
+        if (travel > ECU_STEER_ZERO_MAX_TRAVEL_COUNTS) {
+            steer_zero_calibration_fault(state, axis_bit, now_ms);
+            return false;
+        }
         if (steer_zero_axis_at_end_stop(state, wheel, &feedback, now_ms)) {
             if (left_search) {
                 state->steer_zero_calibration_left_hit_counts[wheel] =
@@ -2099,6 +2214,26 @@ static bool steer_zero_run_search(motion_device_state_t *state,
             velocities[wheel] = 0;
             continue;
         }
+        if (feedback.fault_latched != 0U) {
+            if (state->steer_zero_calibration_peak_current_10ma[wheel] >=
+                ECU_STEER_ZERO_STALL_CURRENT_10MA) {
+                if (left_search) {
+                    state->steer_zero_calibration_left_hit_counts[wheel] =
+                        feedback.actual_position_counts;
+                } else {
+                    state->steer_zero_calibration_right_hit_counts[wheel] =
+                        feedback.actual_position_counts;
+                }
+                state->steer_zero_calibration_done_mask |= axis_bit;
+                velocities[wheel] = 0;
+                continue;
+            } else {
+                steer_zero_calibration_fault(state, axis_bit, now_ms);
+                return false;
+            }
+        }
+        int32_t direction_sign =
+            steer_zero_direction_sign_for_axis(wheel, left_search);
         velocities[wheel] = steer_zero_search_velocity_for_axis(
             state,
             wheel,
@@ -2122,59 +2257,35 @@ static bool steer_zero_run_search(motion_device_state_t *state,
     return false;
 }
 
-static bool steer_zero_run_retreat(motion_device_state_t *state,
-                                   canopen_master_service_t *canopen,
-                                   const ecu_hardware_config_t *config,
-                                   uint32_t now_ms,
-                                   int32_t direction_sign)
+static void steer_zero_begin_velocity_prepare(motion_device_state_t *state)
+{
+    if (state == NULL) {
+        return;
+    }
+    state->steer_zero_calibration_setup_node_index = 0U;
+    state->steer_zero_calibration_setup_step = 0U;
+    state->steer_zero_calibration_sdo_active = false;
+}
+
+static bool steer_zero_prepare_velocity_phase(motion_device_state_t *state,
+                                              canopen_master_service_t *canopen,
+                                              const ecu_hardware_config_t *config,
+                                              uint32_t now_ms)
 {
     if ((uint32_t)(now_ms - state->steer_zero_calibration_state_enter_ms) >
-        ECU_STEER_ZERO_RETREAT_TIMEOUT_MS) {
+        ECU_STEER_ZERO_SETUP_TIMEOUT_MS) {
         steer_zero_calibration_fault(state, 0U, now_ms);
         return false;
     }
     if (!steer_zero_velocity_group_ready(state, canopen, now_ms)) {
         return false;
     }
-
-    int32_t velocities[ECU_WHEEL_COUNT] = {0};
-    uint8_t ready_mask = 0U;
-    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        uint8_t axis_bit = (uint8_t)(1U << wheel);
-        canopen_node_feedback_t feedback;
-        if (!steer_zero_feedback(canopen, config, wheel, &feedback)) {
-            steer_zero_calibration_fault(state, axis_bit, now_ms);
-            return false;
-        }
-        if (abs_i32_delta(feedback.actual_position_counts, 0) <=
-            ECU_STEER_ZERO_INNER_SAFE_ABS_COUNTS) {
-            ready_mask |= axis_bit;
-            velocities[wheel] = 0;
-        } else {
-            velocities[wheel] = direction_sign >= 0 ?
-                ECU_STEER_ZERO_SEARCH_MEDIUM_VELOCITY_UNITS :
-                -ECU_STEER_ZERO_SEARCH_MEDIUM_VELOCITY_UNITS;
-        }
-    }
-
-    if (ready_mask == ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL) {
-        int32_t zeros[ECU_WHEEL_COUNT] = {0};
-        (void)steer_zero_queue_velocity_group(state, canopen, config, zeros, now_ms);
-        return true;
-    }
-
-    if ((uint32_t)(now_ms - state->steer_zero_calibration_last_pdo_ms) >=
-        ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS) {
-        if (!steer_zero_queue_velocity_group(state, canopen, config, velocities, now_ms)) {
-            steer_zero_calibration_fault(state, 0U, now_ms);
-        }
-    }
-    return false;
+    return steer_zero_setup_step(state, canopen, config, now_ms);
 }
 
 static int32_t steer_zero_return_velocity(int32_t error_counts)
 {
-    int32_t abs_error = error_counts < 0 ? -error_counts : error_counts;
+    int32_t abs_error = i32_abs_saturating(error_counts);
     int32_t speed = ECU_STEER_ZERO_MID_RETURN_FAST_VELOCITY_UNITS;
     if (abs_error <= ECU_STEER_ZERO_MID_RETURN_SLOW_ERROR_COUNTS) {
         speed = ECU_STEER_ZERO_MID_RETURN_SLOW_VELOCITY_UNITS;
@@ -2191,8 +2302,20 @@ static bool steer_zero_run_return_mid(motion_device_state_t *state,
 {
     if ((uint32_t)(now_ms - state->steer_zero_calibration_state_enter_ms) >
         ECU_STEER_ZERO_RETURN_TIMEOUT_MS) {
-        steer_zero_calibration_fault(state, 0U, now_ms);
-        return false;
+        for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+            canopen_node_feedback_t feedback;
+            if (!steer_zero_feedback(canopen, config, wheel, &feedback)) {
+                steer_zero_calibration_fault(state,
+                                             (uint8_t)(1U << wheel),
+                                             now_ms);
+                return false;
+            }
+            state->steer_zero_calibration_midpoint_counts[wheel] =
+                feedback.actual_position_counts;
+        }
+        int32_t zeros[ECU_WHEEL_COUNT] = {0};
+        (void)steer_zero_queue_velocity_group(state, canopen, config, zeros, now_ms);
+        return true;
     }
     if (!steer_zero_velocity_group_ready(state, canopen, now_ms)) {
         return false;
@@ -2210,9 +2333,28 @@ static bool steer_zero_run_return_mid(motion_device_state_t *state,
         int32_t error =
             state->steer_zero_calibration_midpoint_counts[wheel] -
             feedback.actual_position_counts;
-        if (abs_i32_delta(feedback.actual_position_counts,
-                          state->steer_zero_calibration_midpoint_counts[wheel]) <=
-            ECU_STEER_ZERO_MIDPOINT_TOLERANCE_COUNTS) {
+        bool crossed_target =
+            (state->steer_zero_calibration_return_last_error_counts[wheel] > 0 &&
+             error < 0) ||
+            (state->steer_zero_calibration_return_last_error_counts[wheel] < 0 &&
+             error > 0);
+        bool close_enough =
+            i32_abs_saturating(error) <= ECU_STEER_ZERO_MIDPOINT_TOLERANCE_COUNTS;
+        if (feedback.fault_latched != 0U && !close_enough && !crossed_target) {
+            steer_zero_calibration_fault(state, axis_bit, now_ms);
+            return false;
+        }
+        if (close_enough || crossed_target) {
+            if (state->steer_zero_calibration_midpoint_stable_samples[wheel] <
+                UINT8_MAX) {
+                state->steer_zero_calibration_midpoint_stable_samples[wheel]++;
+            }
+        } else {
+            state->steer_zero_calibration_midpoint_stable_samples[wheel] = 0U;
+        }
+        state->steer_zero_calibration_return_last_error_counts[wheel] = error;
+        if (state->steer_zero_calibration_midpoint_stable_samples[wheel] >=
+            ECU_STEER_ZERO_MIDPOINT_STABLE_SAMPLES) {
             ready_mask |= axis_bit;
             velocities[wheel] = 0;
         } else {
@@ -2255,15 +2397,28 @@ static bool steer_zero_write_zero_step(motion_device_state_t *state,
         return true;
     }
     uint32_t wheel = state->steer_zero_calibration_zero_write_index;
+    uint16_t index = 0x6064U;
+    uint8_t size = 4U;
+    int32_t value = 0;
+    if (state->steer_zero_calibration_setup_step == 0U) {
+        index = 0x6040U;
+        size = 2U;
+        value = SERVO_DRIVE_CONTROL_FAULT_RESET;
+    }
     if (steer_zero_queue_sdo(state,
                              canopen,
                              config->steer_nodes[wheel].node_id,
-                             0x6064U,
+                             index,
                              0x00U,
-                             4U,
-                             0,
+                             size,
+                             value,
                              now_ms)) {
-        state->steer_zero_calibration_zero_write_index++;
+        if (state->steer_zero_calibration_setup_step == 0U) {
+            state->steer_zero_calibration_setup_step = 1U;
+        } else {
+            state->steer_zero_calibration_setup_step = 0U;
+            state->steer_zero_calibration_zero_write_index++;
+        }
     }
     return false;
 }
@@ -2315,6 +2470,12 @@ static ecu_device_apply_result_t steer_zero_calibration_step(
         memset(state->steer_zero_calibration_peak_current_10ma,
                0,
                sizeof(state->steer_zero_calibration_peak_current_10ma));
+        memset(state->steer_zero_calibration_return_last_error_counts,
+               0,
+               sizeof(state->steer_zero_calibration_return_last_error_counts));
+        memset(state->steer_zero_calibration_midpoint_stable_samples,
+               0,
+               sizeof(state->steer_zero_calibration_midpoint_stable_samples));
         state->steer_zero_calibration_fault_mask = 0U;
         state->steer_zero_calibration_setup_node_index = 0U;
         state->steer_zero_calibration_setup_step = 0U;
@@ -2354,14 +2515,15 @@ static ecu_device_apply_result_t steer_zero_calibration_step(
         }
         break;
     case MOTION_STEER_ZERO_CAL_SEARCH_LEFT:
-        if (steer_zero_run_search(state, canopen, config, now_ms, 1, true)) {
+        if (steer_zero_run_search(state, canopen, config, now_ms, true)) {
+            steer_zero_begin_velocity_prepare(state);
             steer_zero_calibration_enter_state(state,
                                                MOTION_STEER_ZERO_CAL_RETREAT_LEFT,
                                                now_ms);
         }
         break;
     case MOTION_STEER_ZERO_CAL_RETREAT_LEFT:
-        if (steer_zero_run_retreat(state, canopen, config, now_ms, -1)) {
+        if (steer_zero_prepare_velocity_phase(state, canopen, config, now_ms)) {
             for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
                 canopen_node_feedback_t feedback;
                 if (!steer_zero_feedback(canopen, config, wheel, &feedback)) {
@@ -2382,7 +2544,7 @@ static ecu_device_apply_result_t steer_zero_calibration_step(
         }
         break;
     case MOTION_STEER_ZERO_CAL_SEARCH_RIGHT:
-        if (steer_zero_run_search(state, canopen, config, now_ms, -1, false)) {
+        if (steer_zero_run_search(state, canopen, config, now_ms, false)) {
             for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
                 int64_t sum =
                     (int64_t)state->steer_zero_calibration_left_hit_counts[wheel] +
@@ -2390,13 +2552,20 @@ static ecu_device_apply_result_t steer_zero_calibration_step(
                 state->steer_zero_calibration_midpoint_counts[wheel] =
                     (int32_t)(sum / 2);
             }
+            steer_zero_begin_velocity_prepare(state);
             steer_zero_calibration_enter_state(state,
                                                MOTION_STEER_ZERO_CAL_RETREAT_RIGHT,
                                                now_ms);
         }
         break;
     case MOTION_STEER_ZERO_CAL_RETREAT_RIGHT:
-        if (steer_zero_run_retreat(state, canopen, config, now_ms, 1)) {
+        if (steer_zero_prepare_velocity_phase(state, canopen, config, now_ms)) {
+            memset(state->steer_zero_calibration_return_last_error_counts,
+                   0,
+                   sizeof(state->steer_zero_calibration_return_last_error_counts));
+            memset(state->steer_zero_calibration_midpoint_stable_samples,
+                   0,
+                   sizeof(state->steer_zero_calibration_midpoint_stable_samples));
             steer_zero_calibration_enter_state(state,
                                                MOTION_STEER_ZERO_CAL_RETURN_MID,
                                                now_ms);
@@ -2405,6 +2574,7 @@ static ecu_device_apply_result_t steer_zero_calibration_step(
     case MOTION_STEER_ZERO_CAL_RETURN_MID:
         if (steer_zero_run_return_mid(state, canopen, config, now_ms)) {
             state->steer_zero_calibration_zero_write_index = 0U;
+            state->steer_zero_calibration_setup_step = 0U;
             steer_zero_calibration_enter_state(state,
                                                MOTION_STEER_ZERO_CAL_WRITE_ZERO,
                                                now_ms);
@@ -2466,8 +2636,8 @@ static bool drive_axis_realtime_ready(motion_device_state_t *state,
     }
 
     if (!canopen_master_service_get_node_feedback(canopen, node_id, &feedback) ||
-        !feedback.feedback_fresh ||
-        feedback.fault_latched != 0U) {
+        !can2_feedback_operation_enabled(node_id, &feedback)) {
+        state->drive_realtime_enabled[wheel] = false;
         return false;
     }
 
@@ -2685,6 +2855,51 @@ static void finish_completed_drive_group(motion_device_state_t *state,
     state->drive_active_group_kind = MOTION_DRIVE_COMMAND_VELOCITY;
 }
 
+static bool drive_safe_stop_required(const motion_device_state_t *state)
+{
+    if (state == NULL) {
+        return false;
+    }
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        if (!state->drive_last_velocity_valid[wheel] ||
+            state->drive_last_enable_requested[wheel] ||
+            state->drive_last_velocity_units[wheel] != 0 ||
+            state->drive_last_current_10ma[wheel] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool queue_drive_safe_stop(motion_device_state_t *state,
+                                  canopen_master_service_t *canopen,
+                                  const ecu_hardware_config_t *config,
+                                  uint32_t now_ms)
+{
+    int32_t zero_velocity[ECU_WHEEL_COUNT] = {0};
+    int16_t zero_current[ECU_WHEEL_COUNT] = {0};
+    bool disable[ECU_WHEEL_COUNT] = {false};
+
+    if (state == NULL || canopen == NULL || config == NULL ||
+        state->drive_group_active ||
+        !canopen_master_service_realtime_pdo_idle(canopen)) {
+        return true;
+    }
+    if (!queue_drive_group(canopen,
+                           config,
+                           state,
+                           zero_velocity,
+                           zero_current,
+                           MOTION_DRIVE_COMMAND_VELOCITY,
+                           disable,
+                           now_ms)) {
+        return false;
+    }
+    state->drive_safe_stop_pending = false;
+    state->drive_safe_stop_count++;
+    return true;
+}
+
 static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state,
                                                     canopen_master_service_t *canopen,
                                                     uint32_t now_ms,
@@ -2695,16 +2910,17 @@ static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state
     }
 
     state->can2_realtime_consecutive_failure_count++;
-    bool latch_required =
-        force_latch ||
-        state->can2_realtime_consecutive_failure_count >
-            ECU_CANOPEN_REALTIME_TRANSIENT_FAILURE_LIMIT;
+    /* Ordinary submission/timeout failures are recoverable transport events.
+     * A permanent steering inhibit is reserved for a partial trigger group,
+     * where different wheels may genuinely hold different targets.  Repeated
+     * local failures remain visible in diagnostics but must not create the old
+     * self-locking degraded state that only an operator disable could clear.
+     */
+    bool latch_required = force_latch;
 
     if (canopen != NULL) {
         canopen_master_service_cancel_realtime_pdo(canopen);
-        if (!canopen_master_service_recover_transport(canopen)) {
-            latch_required = true;
-        }
+        (void)canopen_master_service_recover_transport(canopen);
     }
     state->can2_realtime_transient_recovery_count++;
     state->can2_realtime_last_recovery_ms = now_ms;
@@ -2789,6 +3005,12 @@ static uint8_t can2_motion_node_mask(uint8_t node_id)
     return (uint8_t)(1U << (node_id - ECU_CANOPEN_DRIVE_FR_NODE_ID));
 }
 
+static bool can2_motion_node_is_steer(uint8_t node_id)
+{
+    return node_id >= ECU_CANOPEN_STEER_FR_NODE_ID &&
+           node_id <= ECU_CANOPEN_STEER_RR_NODE_ID;
+}
+
 static void reset_can2_motion_operational_request(motion_device_state_t *state)
 {
     if (state == NULL) {
@@ -2796,6 +3018,186 @@ static void reset_can2_motion_operational_request(motion_device_state_t *state)
     }
     state->can2_motion_operational_nmt_sent_mask = 0U;
     state->can2_motion_operational_nmt_last_ms = 0U;
+}
+
+static uint8_t can2_node_index(uint8_t node_id)
+{
+    return (node_id >= ECU_CANOPEN_DRIVE_FR_NODE_ID &&
+            node_id <= ECU_CANOPEN_STEER_RR_NODE_ID) ?
+           (uint8_t)(node_id - ECU_CANOPEN_DRIVE_FR_NODE_ID) : 0xFFU;
+}
+
+static bool can2_motion_high_voltage_ready(const motion_device_state_t *state);
+
+static void observe_can2_node_recovery_state(motion_device_state_t *state,
+                                             const canopen_master_service_t *canopen,
+                                             uint32_t now_ms)
+{
+    if (state == NULL || canopen == NULL) {
+        return;
+    }
+
+    for (uint8_t node_id = ECU_CANOPEN_DRIVE_FR_NODE_ID;
+         node_id <= ECU_CANOPEN_STEER_RR_NODE_ID;
+         ++node_id) {
+        uint8_t index = can2_node_index(node_id);
+        uint8_t bit = can2_motion_node_mask(node_id);
+        canopen_node_feedback_t feedback;
+        if (index >= ECU_CANOPEN_CAN2_MOTION_NODE_COUNT || bit == 0U ||
+            !canopen_master_service_get_node_feedback(canopen,
+                                                      node_id,
+                                                      &feedback)) {
+            continue;
+        }
+
+        if (feedback.bootup_count != state->can2_node_bootup_seen[index]) {
+            state->can2_node_bootup_seen[index] = feedback.bootup_count;
+            state->can2_node_recovery_pending_mask |= bit;
+            state->can2_node_recovery_attempts[index] = 0U;
+            state->can2_motion_operational_nmt_sent_mask &= (uint8_t)~bit;
+        }
+
+        bool recent_non_operational_heartbeat =
+            feedback.heartbeat_valid && feedback.nmt_state != 5U &&
+            (uint32_t)(now_ms - feedback.last_heartbeat_ms) <=
+                ECU_CANOPEN_HEARTBEAT_TIMEOUT_MS;
+        bool lost_confirmed_heartbeat =
+            feedback.heartbeat_operational_seen && !feedback.feedback_fresh &&
+            (uint32_t)(now_ms - feedback.last_heartbeat_ms) >
+                ECU_CANOPEN_HEARTBEAT_TIMEOUT_MS;
+        bool cia402_recovery_needed =
+            feedback.tpdo1_fresh &&
+            (feedback.fault_latched != 0U ||
+             (feedback.statusword & CIA402_STATUS_STATE_MASK) !=
+                 CIA402_STATUS_OPERATION_ENABLED);
+        bool steer_startup_enable_needed =
+            can2_motion_node_is_steer(node_id) &&
+            can2_motion_high_voltage_ready(state) &&
+            !can2_feedback_operation_enabled(node_id, &feedback);
+
+        if (recent_non_operational_heartbeat || lost_confirmed_heartbeat ||
+            cia402_recovery_needed || steer_startup_enable_needed) {
+            state->can2_node_recovery_pending_mask |= bit;
+            state->can2_motion_operational_nmt_sent_mask &= (uint8_t)~bit;
+        } else if (can2_feedback_operation_enabled(node_id, &feedback)) {
+            state->can2_node_recovery_pending_mask &= (uint8_t)~bit;
+            state->can2_node_recovery_attempts[index] = 0U;
+        }
+    }
+}
+
+static bool can2_node_recovery_due(const motion_device_state_t *state,
+                                   uint8_t index,
+                                   uint32_t now_ms)
+{
+    uint32_t interval =
+        state->can2_node_recovery_attempts[index] <
+            ECU_CANOPEN_NODE_RECOVERY_FAST_ATTEMPTS ?
+        ECU_CANOPEN_NODE_RECOVERY_RETRY_MS :
+        ECU_CANOPEN_NODE_RECOVERY_COOLDOWN_MS;
+    return state->can2_node_recovery_last_ms[index] == 0U ||
+           (uint32_t)(now_ms - state->can2_node_recovery_last_ms[index]) >=
+               interval;
+}
+
+static void service_can2_node_recovery(motion_device_state_t *state,
+                                       canopen_master_service_t *canopen,
+                                       uint32_t now_ms)
+{
+    if (state == NULL || canopen == NULL ||
+        state->can2_node_recovery_pending_mask == 0U ||
+        !canopen_master_service_realtime_pdo_idle(canopen) ||
+        !canopen_master_service_sdo_download_idle(canopen)) {
+        return;
+    }
+
+    for (uint8_t node_id = ECU_CANOPEN_DRIVE_FR_NODE_ID;
+         node_id <= ECU_CANOPEN_STEER_RR_NODE_ID;
+         ++node_id) {
+        uint8_t index = can2_node_index(node_id);
+        uint8_t bit = can2_motion_node_mask(node_id);
+        if (index >= ECU_CANOPEN_CAN2_MOTION_NODE_COUNT ||
+            (state->can2_node_recovery_pending_mask & bit) == 0U ||
+            !can2_node_recovery_due(state, index, now_ms)) {
+            continue;
+        }
+
+        canopen_node_feedback_t feedback;
+        bool feedback_read = canopen_master_service_get_node_feedback(
+            canopen, node_id, &feedback);
+        bool fault_present = feedback_read && feedback.tpdo1_fresh &&
+            (feedback.fault_latched != 0U ||
+             (feedback.statusword & CIA402_STATUS_FAULT_BIT) != 0U);
+        bool status_seen = feedback_read && feedback.tpdo1_valid;
+        bool steer_node = can2_motion_node_is_steer(node_id);
+        bool operation_enabled =
+            feedback_read && can2_feedback_operation_enabled(node_id, &feedback);
+
+        if (!canopen_master_service_request_nmt(
+                canopen,
+                node_id,
+                CANOPEN_MASTER_DEBUG_COMMAND_NMT_OPERATIONAL)) {
+            return;
+        }
+
+        bool queued = true;
+        if (fault_present) {
+            queued = canopen_master_service_request_sdo_write(
+                canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                0U, 2U, SERVO_DRIVE_CONTROL_FAULT_RESET);
+        }
+        if (queued && steer_node && !operation_enabled) {
+            /* Field test with the CAN analyzer showed Node5..8 power up with
+             * no selected operation mode and not operation-enabled, then only
+             * produce the expected synchronous TPDO0/TPDO1 stream after
+             * profile-position mode and CiA-402 enable-operation are written.
+             * Do not wait for TPDO readiness before sending this startup
+             * sequence; that creates a deadlock where steering never enables
+             * and drive remains held by the pre-steer safety gate.
+             *
+             * This sequence does not reset the node, reset communication, write
+             * the actual-position object, or trigger a target position.  It
+             * only selects position mode and enables the drive so the realtime
+             * RPDO path can then own all steering targets.
+             */
+            queued =
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_MODES_OF_OPERATION,
+                    0U, 1U, SERVO_DRIVE_MODE_PROFILE_POSITION) &&
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                    0U, 2U, SERVO_DRIVE_CONTROL_SHUTDOWN) &&
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                    0U, 2U, SERVO_DRIVE_CONTROL_SWITCH_ON) &&
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                    0U, 2U, SERVO_DRIVE_CONTROL_ENABLE_OPERATION);
+        } else if (queued && status_seen) {
+            queued =
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                    0U, 2U, SERVO_DRIVE_CONTROL_SHUTDOWN) &&
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                    0U, 2U, SERVO_DRIVE_CONTROL_SWITCH_ON) &&
+                canopen_master_service_request_sdo_write(
+                    canopen, node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                    0U, 2U, SERVO_DRIVE_CONTROL_ENABLE_OPERATION);
+        }
+        if (!queued) {
+            return;
+        }
+
+        state->can2_motion_operational_nmt_sent_mask |= bit;
+        state->can2_motion_operational_nmt_last_ms = now_ms;
+        state->can2_node_recovery_last_ms[index] = now_ms;
+        if (state->can2_node_recovery_attempts[index] < UINT8_MAX) {
+            state->can2_node_recovery_attempts[index]++;
+        }
+        state->can2_node_recovery_count[index]++;
+        return;
+    }
 }
 
 static void reset_can2_realtime_motion_state(motion_device_state_t *state,
@@ -2905,7 +3307,7 @@ static void request_can2_motion_nodes_operational(motion_device_state_t *state,
      * completion belonging to NMT/SYNC could be mistaken for the queued PDO
      * group's completion.
      */
-    if (canopen->pdo_in_flight || canopen->sync_in_flight ||
+    if (!canopen_master_service_realtime_pdo_idle(canopen) ||
         (uint32_t)(now_ms - state->can2_motion_operational_nmt_last_ms) <
             ECU_CANOPEN_DRIVE_PDO_PERIOD_MS) {
         return;
@@ -2997,6 +3399,12 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
     state->drive_realtime_last_flush_ms = now_ms;
 
     if (!all_drive_axes_realtime_ready(state, canopen, config)) {
+        state->drive_safe_stop_pending =
+            state->drive_safe_stop_pending || drive_safe_stop_required(state);
+        if (state->drive_safe_stop_pending &&
+            !queue_drive_safe_stop(state, canopen, config, now_ms)) {
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
         send_can2_feedback_sync_if_due(state, canopen, now_ms);
         return ECU_DEVICE_APPLY_OK;
     }
@@ -3832,7 +4240,9 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                     now_ms);
     bool drive_enable_requested =
         command->high_voltage_feedback_ready &&
-        !command->high_voltage_disable_request;
+        !command->high_voltage_disable_request &&
+        steer_allowed &&
+        command->source != COMMAND_SOURCE_SAFETY;
     bool track_assist_current_allowed =
         command->track_assist_requested &&
         command->track_assist_active &&
@@ -3930,6 +4340,10 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
     return ECU_DEVICE_APPLY_OK;
 #endif
 
+    observe_can2_node_recovery_state(state, canopen, now_ms);
+    if (can2_motion_high_voltage_ready(state)) {
+        service_can2_node_recovery(state, canopen, now_ms);
+    }
     request_can2_motion_nodes_operational(state, canopen, config, now_ms);
     if (!can2_motion_high_voltage_ready(state)) {
         /* Do not create zero-velocity or steering groups against unpowered

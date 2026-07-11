@@ -120,6 +120,8 @@ typedef struct {
     int32_t steer_zero_calibration_midpoint_counts[ECU_WHEEL_COUNT];
     int16_t steer_zero_calibration_peak_current_10ma[ECU_WHEEL_COUNT];
     uint32_t steer_zero_calibration_zero_speed_since_ms[ECU_WHEEL_COUNT];
+    int32_t steer_zero_calibration_return_last_error_counts[ECU_WHEEL_COUNT];
+    uint8_t steer_zero_calibration_midpoint_stable_samples[ECU_WHEEL_COUNT];
     uint32_t can2_realtime_transient_recovery_count;
     uint32_t can2_realtime_consecutive_failure_count;
     uint32_t can2_realtime_last_recovery_ms;
@@ -157,6 +159,13 @@ typedef struct {
     bool drive_last_enable_requested[ECU_WHEEL_COUNT];
     uint8_t can2_motion_operational_nmt_sent_mask;
     uint32_t can2_motion_operational_nmt_last_ms;
+    uint8_t can2_node_recovery_pending_mask;
+    uint32_t can2_node_bootup_seen[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
+    uint32_t can2_node_recovery_last_ms[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
+    uint32_t can2_node_recovery_count[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
+    uint8_t can2_node_recovery_attempts[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
+    bool drive_safe_stop_pending;
+    uint32_t drive_safe_stop_count;
     uint32_t can2_feedback_last_sync_ms;
     uint32_t drive_realtime_last_flush_ms;
     uint32_t drive_group_sequence_counter;

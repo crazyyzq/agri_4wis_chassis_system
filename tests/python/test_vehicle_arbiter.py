@@ -140,7 +140,8 @@ def test_home_center_hydraulic_adjust_keeps_drive_parked_and_uses_valve_intent(r
         "suspension_valve_mask_from_remote",
         "remote->requested_gear == ECU_GEAR_REQUEST_D",
         "remote->requested_gear == ECU_GEAR_REQUEST_R",
-        "out->hydraulic_enable = true",
+        "out->hydraulic_enable = hydraulic_valve_mask != 0U",
+        "Ground-clearance lift is electric CAN3 servo motion",
         "remote->adjust_state",
         "inhibit_can2_motion_in_adjust_domain",
     ]:

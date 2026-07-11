@@ -76,6 +76,7 @@ typedef struct {
 #define CANOPEN_MASTER_PDO_TX_BURST_LIMIT (8U)
 #define CANOPEN_MASTER_PDO_TX_MAX_RETRIES (8U)
 #define CANOPEN_MASTER_PDO_TX_TIMEOUT_MS (20U)
+#define CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY (4U)
 
 typedef enum {
     CANOPEN_MASTER_PDO_PHASE_NONE = 0,
@@ -120,8 +121,17 @@ typedef struct {
     uint32_t group_sequence;
     canopen_master_pdo_phase_t phase;
     uint8_t retry_count;
+    uint32_t last_attempt_ms;
     uint8_t data[8];
 } canopen_master_pdo_request_t;
+
+typedef enum {
+    CANOPEN_MASTER_PDO_GROUP_RESULT_UNKNOWN = 0,
+    CANOPEN_MASTER_PDO_GROUP_RESULT_PENDING,
+    CANOPEN_MASTER_PDO_GROUP_RESULT_COMPLETE,
+    CANOPEN_MASTER_PDO_GROUP_RESULT_FAILED,
+    CANOPEN_MASTER_PDO_GROUP_RESULT_CANCELLED
+} canopen_master_pdo_group_result_t;
 
 typedef struct {
     uint8_t expected_frames;
@@ -137,6 +147,7 @@ typedef struct {
     uint32_t feedback_sequence;     /* Even when stable; odd while ISR writes this node snapshot. */
     bool tpdo0_valid;
     bool tpdo1_valid;
+    bool tpdo1_fresh;
     bool feedback_fresh;
     uint32_t last_tpdo0_ms;
     uint32_t last_tpdo1_ms;
@@ -149,6 +160,12 @@ typedef struct {
     uint32_t fault_latched;         /* Vendor latched-fault word. */
     uint16_t statusword;            /* CiA-402 stateword. */
     int16_t actual_current_raw;     /* Vendor raw current feedback. */
+    bool heartbeat_valid;
+    bool heartbeat_operational_seen;
+    uint8_t nmt_state;
+    uint32_t last_heartbeat_ms;
+    uint32_t heartbeat_rx_count;
+    uint32_t bootup_count;
 } canopen_node_feedback_t;
 
 #define CANOPEN_MASTER_NODE_FEEDBACK_SLOTS (14U)
@@ -199,6 +216,8 @@ typedef struct {
     uint32_t last_pdo_tx_complete_ms;
     uint32_t last_pdo_tx_timeout_ms;
     uint32_t last_pdo_tx_group_sequence;
+    uint32_t last_pdo_terminal_group_sequence;
+    uint8_t last_pdo_terminal_group_state;
     uint32_t last_pdo_failed_group_sequence;
     uint32_t last_pdo_failed_group_id;
     uint16_t last_pdo_tx_cob_id;
@@ -216,6 +235,7 @@ typedef struct {
     uint32_t pdo_group_conflict_drop_count;
     uint32_t pdo_safety_inhibit_count;
     uint32_t pdo_same_target_coalesce_count;
+    uint32_t pdo_tx_busy_defer_count;
     uint32_t command_error_count;
     uint32_t queued_command_count;
     uint32_t dropped_command_count;
@@ -234,6 +254,16 @@ typedef struct {
     uint32_t sync_in_flight_submit_ms;
     int32_t last_sync_error;
     bool sync_in_flight;
+    uint32_t transport_recovery_count;
+    uint32_t transport_recovery_failure_count;
+    uint32_t primary_tx_stall_count;
+    uint32_t last_primary_tx_stall_ms;
+    uint32_t bus_off_count;
+    uint32_t last_transport_recovery_ms;
+    uint16_t can_tx_error_count;
+    uint16_t can_rx_error_count;
+    uint8_t can_state;
+    bool heartbeat_observer_registered;
     uint8_t tpdo0_observer_registered_mask;
     uint8_t tpdo1_observer_registered_mask;
     uint8_t steer_tpdo_observer_error_mask;
@@ -277,11 +307,21 @@ typedef struct {
     canopen_master_pdo_request_t pdo_in_flight_request;
     bool pdo_in_flight;
     uint32_t pdo_in_flight_submit_ms;
+    uint32_t pdo_in_flight_tx_complete_baseline;
     bool sync_in_flight;
     uint32_t sync_in_flight_submit_ms;
+    uint32_t sync_in_flight_tx_complete_baseline;
+    uint32_t primary_tx_busy_since_ms;
     uint32_t observed_pdo_tx_complete_count;
+    volatile uint32_t callback_now_ms;
+    uint32_t next_transport_recovery_ms;
+    bool periodic_sdo_enabled;
+    bool bus_off_active;
     uint32_t active_pdo_group_sequence;
     canopen_master_pdo_group_state_t active_pdo_group_state;
+    uint32_t pdo_result_history_sequence[CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY];
+    uint8_t pdo_result_history_state[CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY];
+    uint8_t pdo_result_history_next;
     uint8_t active_pdo_expected_frames;
     uint8_t active_pdo_submitted_frames;
     uint8_t active_pdo_tx_complete_frames;
@@ -402,6 +442,9 @@ bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *ser
                                              uint32_t group_sequence);
 bool canopen_master_service_pdo_group_cancelled(const canopen_master_service_t *service,
                                                 uint32_t group_sequence);
+canopen_master_pdo_group_result_t canopen_master_service_pdo_group_result(
+    const canopen_master_service_t *service,
+    uint32_t group_sequence);
 bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
                                              uint32_t group_sequence);
 void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *service);
@@ -418,6 +461,8 @@ bool canopen_master_service_has_node_evidence(const canopen_master_service_t *se
                                               uint8_t node_id);
 bool canopen_master_service_diagnostic_scan_allowed(const canopen_master_service_t *service,
                                                     uint32_t now_ms);
+void canopen_master_service_set_periodic_sdo_enabled(canopen_master_service_t *service,
+                                                     bool enabled);
 
 void canopen_master_service_can2_isr(void);
 void canopen_master_service_can3_isr(void);

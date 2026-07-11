@@ -22,6 +22,7 @@
 #define SERVO_DRIVE_CONTROL_SHUTDOWN          (0x0006U)
 #define SERVO_DRIVE_CONTROL_SWITCH_ON         (0x0007U)
 #define SERVO_DRIVE_CONTROL_ENABLE_OPERATION  (0x000FU)
+#define SERVO_DRIVE_CONTROL_FAULT_RESET        (0x0080U)
 #define SERVO_DRIVE_CONTROL_TRIGGER_ABSOLUTE_POSITION (0x001FU)
 /* Continuous absolute-position following uses the BC/BC2 immediate-update
  * sequence verified with the CAN analyzer: keep bit4 low with 0x002F, then

@@ -25,6 +25,8 @@ uint16_t CO_CANrxMsg_readIdent(CO_CANrxMsg_t *rxMsg);
 #define CANOPEN_MASTER_NMT_CONTROL (CO_NMT_ERR_ON_ERR_REG | CO_ERR_REG_GENERIC_ERR | CO_ERR_REG_COMMUNICATION)
 #define CANOPEN_MASTER_PDO_TX_COMPLETE_POLL_US (300U)
 #define CANOPEN_MASTER_SYNC_COB_ID (0x080U)
+#define CANOPEN_MASTER_HEARTBEAT_BASE (0x700U)
+#define CANOPEN_MASTER_HEARTBEAT_RANGE_MASK (0x7F0U)
 #define ECU_CANOPEN_TPDO0_RANGE_MASK (0x7F0U)
 #define ECU_CANOPEN_TPDO_EXACT_MASK (0x7FFU)
 /* The minimal DS301 OD intentionally keeps local CANopen objects small, but
@@ -34,6 +36,7 @@ uint16_t CO_CANrxMsg_readIdent(CO_CANrxMsg_t *rxMsg);
  * CAN fallback.
  */
 #define CANOPEN_MASTER_RX_OBSERVER_CAPACITY (16U)
+#define CANOPEN_MASTER_OD_ENTRY_CAPACITY (48U)
 
 typedef struct {
     uint16_t index;
@@ -54,6 +57,7 @@ static const canopen_master_sdo_query_t s_sdo_queries[] = {
 static bool debug_command_to_nmt(canopen_master_debug_command_t command,
                                  CO_NMT_command_t *out);
 static void steer_tpdo_rx_callback(void *object, void *message);
+static void heartbeat_rx_callback(void *object, void *message);
 static void complete_in_flight_sync(canopen_master_service_t *service,
                                     uint32_t now_ms);
 
@@ -67,12 +71,36 @@ static SemaphoreHandle_t s_canopen_lock;
 static struct canopen_context s_canopen_context[CANOPEN_MASTER_BUS_COUNT];
 static CO_CANrx_t s_canopen_rx_observer_storage[CANOPEN_MASTER_BUS_COUNT]
                                                [CANOPEN_MASTER_RX_OBSERVER_CAPACITY];
+/* CO_new() allocates one independent CANopenNode instance per bus, but the
+ * generated global OD contains mutable extension pointers.  Clone the OD entry
+ * table before either stack is initialized so CAN2 and CAN3 cannot overwrite
+ * each other's NMT/SDO/SYNC extensions.  Application data objects remain
+ * shared and read-only in normal master operation; only extension ownership is
+ * bus-specific here.
+ */
+static OD_entry_t s_bus_od_entries[CANOPEN_MASTER_BUS_COUNT]
+                                      [CANOPEN_MASTER_OD_ENTRY_CAPACITY];
+static OD_t s_bus_od[CANOPEN_MASTER_BUS_COUNT];
+static bool s_bus_od_prepared;
 hpm_can_config_t hpm_canopen_config[MAX_CANOPEN_DEVICE] = {0};
 hpm_can_data_t hpm_canopen_data[MAX_CANOPEN_DEVICE] = {0};
 struct device hpm_canopen_dev[MAX_CANOPEN_DEVICE] = {0};
 volatile hpm_master_receive_buf_t canopen_rx_buf = {0};
 ATTR_PLACE_AT_NONCACHEABLE_BSS
 volatile canopen_master_debug_control_t g_canopen_master_debug_control;
+
+static uint32_t canopen_isr_now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCountFromISR() * portTICK_PERIOD_MS);
+}
+
+static uint32_t canopen_reader_now_ms(const canopen_master_service_t *service)
+{
+    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {
+        return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    }
+    return service != NULL ? service->callback_now_ms : 0U;
+}
 
 static can_info_t s_can_info[CANOPEN_MASTER_BUS_COUNT] = {
     {
@@ -237,7 +265,43 @@ static bool canopen_master_lock(void)
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
         return true;
     }
-    return xSemaphoreTake(s_canopen_lock, portMAX_DELAY) == pdTRUE;
+    /* CAN2/CAN3 are high-priority periodic owners.  Background SDO/NMT work is
+     * retryable, so a busy peer bus must defer this cycle rather than block a
+     * realtime task indefinitely.
+     */
+    return xSemaphoreTake(s_canopen_lock, 0U) == pdTRUE;
+}
+
+static bool prepare_bus_object_dictionaries(void)
+{
+    if (s_bus_od_prepared) {
+        return true;
+    }
+    if (OD == NULL || OD->list == NULL ||
+        OD->size > CANOPEN_MASTER_OD_ENTRY_CAPACITY) {
+        return false;
+    }
+
+    for (uint8_t bus = 0U; bus < CANOPEN_MASTER_BUS_COUNT; ++bus) {
+        memcpy(s_bus_od_entries[bus],
+               OD->list,
+               (size_t)OD->size * sizeof(OD_entry_t));
+        for (uint16_t index = 0U; index < OD->size; ++index) {
+            s_bus_od_entries[bus][index].extension = NULL;
+        }
+        s_bus_od[bus].size = OD->size;
+        s_bus_od[bus].list = &s_bus_od_entries[bus][0];
+    }
+    s_bus_od_prepared = true;
+    return true;
+}
+
+static bool primary_tx_idle(const canopen_master_service_t *service)
+{
+    return service != NULL &&
+           service->can_index < CANOPEN_MASTER_BUS_COUNT &&
+           !can_is_primary_transmit_buffer_full(
+               s_can_info[service->can_index].can_base);
 }
 
 static void canopen_master_unlock(void)
@@ -346,10 +410,14 @@ static bool canopen_master_sdo_write_allowed(uint16_t index)
      */
     return index == ECU_CANOPEN_OBJ_CONTROLWORD ||
            index == ECU_CANOPEN_OBJ_MODES_OF_OPERATION ||
+           index == ECU_CANOPEN_OBJ_BC_INTERPOLATION_OPTION ||
            index == ECU_CANOPEN_OBJ_INTERPOLATION_TIME_PERIOD ||
            index == ECU_CANOPEN_OBJ_INTERPOLATION_MODE ||
            index == ECU_CANOPEN_OBJ_INTERPOLATION_BUFFER_CLEAR ||
-           index == ECU_CANOPEN_OBJ_PROFILE_VELOCITY;
+           index == ECU_CANOPEN_OBJ_PROFILE_VELOCITY ||
+           index == ECU_CANOPEN_OBJ_PROFILE_ACCELERATION ||
+           index == ECU_CANOPEN_OBJ_PROFILE_DECELERATION ||
+           index == ECU_CANOPEN_OBJ_FOLLOWING_ERROR_WINDOW;
 #endif
 }
 
@@ -408,6 +476,42 @@ static bool debug_command_to_nmt(canopen_master_debug_command_t command,
     }
 }
 
+static bool pdo_group_state_is_terminal(canopen_master_pdo_group_state_t state)
+{
+    return state == CANOPEN_MASTER_PDO_GROUP_STATE_COMPLETE ||
+           state == CANOPEN_MASTER_PDO_GROUP_STATE_FAILED ||
+           state == CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED;
+}
+
+static void record_pdo_group_result(canopen_master_service_t *service,
+                                    uint32_t group_sequence,
+                                    canopen_master_pdo_group_state_t state)
+{
+    if (service == NULL || group_sequence == 0U ||
+        !pdo_group_state_is_terminal(state)) {
+        return;
+    }
+
+    for (uint8_t i = 0U;
+         i < CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY;
+         ++i) {
+        if (service->pdo_result_history_sequence[i] == group_sequence) {
+            service->pdo_result_history_state[i] = (uint8_t)state;
+            service->snapshot.last_pdo_terminal_group_sequence = group_sequence;
+            service->snapshot.last_pdo_terminal_group_state = (uint8_t)state;
+            return;
+        }
+    }
+
+    uint8_t slot = service->pdo_result_history_next;
+    service->pdo_result_history_sequence[slot] = group_sequence;
+    service->pdo_result_history_state[slot] = (uint8_t)state;
+    service->pdo_result_history_next = (uint8_t)(
+        (slot + 1U) % CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY);
+    service->snapshot.last_pdo_terminal_group_sequence = group_sequence;
+    service->snapshot.last_pdo_terminal_group_state = (uint8_t)state;
+}
+
 static void sync_pdo_group_snapshot(canopen_master_service_t *service)
 {
     if (service == NULL) {
@@ -431,6 +535,9 @@ static void sync_pdo_group_snapshot(canopen_master_service_t *service)
         service->active_pdo_group_descriptor.axis_mask;
     service->snapshot.pdo_position_group =
         service->active_pdo_group_descriptor.position_group;
+    record_pdo_group_result(service,
+                            service->active_pdo_group_sequence,
+                            service->active_pdo_group_state);
 }
 
 static bool pdo_group_is_active(const canopen_master_service_t *service)
@@ -490,6 +597,7 @@ static bool pdo_phase_is_arm(canopen_master_pdo_phase_t phase)
            phase == CANOPEN_MASTER_PDO_PHASE_DRIVE_VELOCITY ||
            phase == CANOPEN_MASTER_PDO_PHASE_DRIVE_CURRENT ||
            phase == CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_POINT ||
+           phase == CANOPEN_MASTER_PDO_PHASE_LIFT_INTERPOLATION_TRIGGER ||
            phase == CANOPEN_MASTER_PDO_PHASE_HYDRAULIC_PUMP_VELOCITY;
 }
 
@@ -740,7 +848,9 @@ bool canopen_master_service_request_nmt(canopen_master_service_t *service,
                                         canopen_master_debug_command_t command)
 {
     if (service == NULL || !service->snapshot.initialized ||
-        node_id == 0U) {
+        node_id == 0U ||
+        !canopen_master_service_realtime_pdo_idle(service) ||
+        !primary_tx_idle(service)) {
         return false;
     }
 
@@ -977,16 +1087,87 @@ bool canopen_master_service_pdo_group_pending(const canopen_master_service_t *se
 bool canopen_master_service_pdo_group_failed(const canopen_master_service_t *service,
                                              uint32_t group_sequence)
 {
-    return service != NULL && group_sequence != 0U &&
-           service->snapshot.last_pdo_failed_group_sequence == group_sequence;
+    if (service == NULL || group_sequence == 0U) {
+        return false;
+    }
+    if (service->snapshot.last_pdo_failed_group_sequence == group_sequence) {
+        return true;
+    }
+    for (uint8_t i = 0U;
+         i < CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY;
+         ++i) {
+        if (service->pdo_result_history_sequence[i] == group_sequence &&
+            service->pdo_result_history_state[i] ==
+                (uint8_t)CANOPEN_MASTER_PDO_GROUP_STATE_FAILED) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool canopen_master_service_pdo_group_cancelled(const canopen_master_service_t *service,
                                                 uint32_t group_sequence)
 {
-    return service != NULL && group_sequence != 0U &&
-           service->active_pdo_group_sequence == group_sequence &&
-           service->active_pdo_group_state == CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED;
+    if (service == NULL || group_sequence == 0U) {
+        return false;
+    }
+    if (service->active_pdo_group_sequence == group_sequence &&
+        service->active_pdo_group_state ==
+            CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED) {
+        return true;
+    }
+    for (uint8_t i = 0U;
+         i < CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY;
+         ++i) {
+        if (service->pdo_result_history_sequence[i] == group_sequence &&
+            service->pdo_result_history_state[i] ==
+                (uint8_t)CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED) {
+            return true;
+        }
+    }
+    return false;
+}
+
+canopen_master_pdo_group_result_t canopen_master_service_pdo_group_result(
+    const canopen_master_service_t *service,
+    uint32_t group_sequence)
+{
+    if (service == NULL || group_sequence == 0U) {
+        return CANOPEN_MASTER_PDO_GROUP_RESULT_UNKNOWN;
+    }
+    if (canopen_master_service_pdo_group_pending(service, group_sequence)) {
+        return CANOPEN_MASTER_PDO_GROUP_RESULT_PENDING;
+    }
+    if (canopen_master_service_pdo_group_failed(service, group_sequence)) {
+        return CANOPEN_MASTER_PDO_GROUP_RESULT_FAILED;
+    }
+    if (canopen_master_service_pdo_group_cancelled(service, group_sequence)) {
+        return CANOPEN_MASTER_PDO_GROUP_RESULT_CANCELLED;
+    }
+    if (service->active_pdo_group_sequence == group_sequence &&
+        service->active_pdo_group_state ==
+            CANOPEN_MASTER_PDO_GROUP_STATE_COMPLETE) {
+        return CANOPEN_MASTER_PDO_GROUP_RESULT_COMPLETE;
+    }
+    for (uint8_t i = 0U;
+         i < CANOPEN_MASTER_PDO_RESULT_HISTORY_CAPACITY;
+         ++i) {
+        if (service->pdo_result_history_sequence[i] != group_sequence) {
+            continue;
+        }
+        switch ((canopen_master_pdo_group_state_t)
+                    service->pdo_result_history_state[i]) {
+        case CANOPEN_MASTER_PDO_GROUP_STATE_COMPLETE:
+            return CANOPEN_MASTER_PDO_GROUP_RESULT_COMPLETE;
+        case CANOPEN_MASTER_PDO_GROUP_STATE_FAILED:
+            return CANOPEN_MASTER_PDO_GROUP_RESULT_FAILED;
+        case CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED:
+            return CANOPEN_MASTER_PDO_GROUP_RESULT_CANCELLED;
+        default:
+            break;
+        }
+    }
+    return CANOPEN_MASTER_PDO_GROUP_RESULT_UNKNOWN;
 }
 
 bool canopen_master_service_cancel_pdo_group(canopen_master_service_t *service,
@@ -1028,6 +1209,11 @@ void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *servic
     }
 
     taskENTER_CRITICAL();
+    if (pdo_group_is_active(service)) {
+        record_pdo_group_result(service,
+                                service->active_pdo_group_sequence,
+                                CANOPEN_MASTER_PDO_GROUP_STATE_CANCELLED);
+    }
     service->pdo_queue_head = 0U;
     service->pdo_queue_tail = 0U;
     service->pdo_queue_count = 0U;
@@ -1035,8 +1221,11 @@ void canopen_master_service_cancel_realtime_pdo(canopen_master_service_t *servic
 
     service->pdo_in_flight = false;
     service->pdo_in_flight_submit_ms = 0U;
+    service->pdo_in_flight_tx_complete_baseline = 0U;
     service->sync_in_flight = false;
     service->sync_in_flight_submit_ms = 0U;
+    service->sync_in_flight_tx_complete_baseline = 0U;
+    service->primary_tx_busy_since_ms = 0U;
     service->active_pdo_cancel_requested = false;
     service->active_pdo_cancel_after_inflight = false;
     service->active_pdo_trigger_started = false;
@@ -1080,22 +1269,33 @@ bool canopen_master_service_recover_transport(canopen_master_service_t *service)
     service->observed_pdo_tx_complete_count = 0U;
     service->pdo_in_flight = false;
     service->pdo_in_flight_submit_ms = 0U;
+    service->pdo_in_flight_tx_complete_baseline = 0U;
     service->sync_in_flight = false;
     service->sync_in_flight_submit_ms = 0U;
+    service->sync_in_flight_tx_complete_baseline = 0U;
+    service->primary_tx_busy_since_ms = 0U;
     service->snapshot.sync_in_flight = false;
     taskEXIT_CRITICAL();
 
     intc_m_enable_irq_with_priority(s_can_info[service->can_index].irq_num,
                                     s_can_info[service->can_index].priority);
 
+    service->snapshot.last_transport_recovery_ms = service->callback_now_ms;
+    service->next_transport_recovery_ms =
+        service->callback_now_ms + ECU_CANOPEN_TRANSPORT_RECOVERY_BACKOFF_MS;
     if (status != status_success) {
         service->snapshot.can_normal = false;
+        service->snapshot.transport_recovery_failure_count++;
         note_error(service, -EIO);
         return false;
     }
 
     service->snapshot.can_normal = true;
+    service->snapshot.state = CANOPEN_MASTER_STATE_RUNNING;
+    service->snapshot.transport_recovery_count++;
     service->snapshot.last_pdo_current_error = 0;
+    service->snapshot.last_error = 0;
+    service->bus_off_active = false;
     return true;
 }
 
@@ -1133,11 +1333,20 @@ bool canopen_master_service_has_node_evidence(const canopen_master_service_t *se
 bool canopen_master_service_diagnostic_scan_allowed(const canopen_master_service_t *service,
                                                     uint32_t now_ms)
 {
-    if (service == NULL || service->pdo_in_flight || service->pdo_queue_count > 0U ||
+    if (service == NULL || !service->periodic_sdo_enabled ||
+        service->pdo_in_flight || service->pdo_queue_count > 0U ||
         pdo_group_is_active(service)) {
         return false;
     }
     return now_ms >= service->sdo_next_retry_ms;
+}
+
+void canopen_master_service_set_periodic_sdo_enabled(canopen_master_service_t *service,
+                                                     bool enabled)
+{
+    if (service != NULL) {
+        service->periodic_sdo_enabled = enabled;
+    }
 }
 
 static void drop_current_pdo_queue_item(canopen_master_service_t *service)
@@ -1265,6 +1474,7 @@ static void fail_active_pdo_group(canopen_master_service_t *service,
 
     taskENTER_CRITICAL();
     service->pdo_in_flight = false;
+    service->pdo_in_flight_tx_complete_baseline = 0U;
     cancel_queued_pdo_group(service, group_sequence);
     taskEXIT_CRITICAL();
 
@@ -1297,7 +1507,9 @@ static void fail_active_pdo_group_without_request(
     taskEXIT_CRITICAL();
 
     service->pdo_in_flight = false;
+    service->pdo_in_flight_tx_complete_baseline = 0U;
     service->sync_in_flight = false;
+    service->sync_in_flight_tx_complete_baseline = 0U;
     service->snapshot.sync_in_flight = false;
     service->active_pdo_group_sequence = group_sequence;
     service->active_pdo_group_state = CANOPEN_MASTER_PDO_GROUP_STATE_FAILED;
@@ -1406,12 +1618,16 @@ static bool send_sync_frame(canopen_master_service_t *service,
      */
     harvest_polled_primary_tx_complete(service);
 
+    uint32_t tx_complete_baseline =
+        s_canopen_pdo_tx_complete_count[service->can_index];
     int result = hpm_can_send((struct device *)&hpm_canopen_dev[service->can_index],
                               &frame);
     if (result == 0) {
         if (track_tx_completion) {
             service->sync_in_flight = true;
             service->sync_in_flight_submit_ms = now_ms;
+            service->sync_in_flight_tx_complete_baseline =
+                tx_complete_baseline;
             service->snapshot.sync_in_flight = true;
             service->snapshot.sync_in_flight_submit_ms = now_ms;
         }
@@ -1421,9 +1637,13 @@ static bool send_sync_frame(canopen_master_service_t *service,
         return true;
     }
 
-    service->snapshot.sync_tx_error_count++;
     service->snapshot.last_sync_error = result;
-    service->snapshot.last_error = result;
+    if (result == -EBUSY) {
+        service->snapshot.pdo_tx_busy_defer_count++;
+    } else {
+        service->snapshot.sync_tx_error_count++;
+        service->snapshot.last_error = result;
+    }
     return false;
 }
 
@@ -1433,32 +1653,36 @@ static bool start_required_pdo_group_sync(canopen_master_service_t *service,
     if (pdo_group_ready_for_arm_sync(service)) {
         /* Realtime RPDO groups must preserve the order:
          * arm PDOs -> SYNC -> trigger PDOs -> SYNC.  The actuator PDO frames
-         * are still removed only after controller TX-complete.  SYNC itself is
-         * a zero-DLC timing edge; on the HPM CAN path its TX-complete flag has
-         * been observed to arrive seconds late even though analyzer/TPDO
-         * evidence shows the frame reached the bus.  Do not let that unreliable
-         * local completion flag stall the realtime steering group.
+         * and both ordering SYNC edges are removed only after the designated
+         * primary-buffer TX-complete event.  A missing event is bounded by the
+         * same timeout/recovery path as an actuator PDO; otherwise one stuck
+         * SYNC can leave the bus permanently busy while software incorrectly
+         * declares the group complete.
          */
-        if (send_sync_frame(service, now_ms, false)) {
+        if (send_sync_frame(service, now_ms, true)) {
             service->active_pdo_arm_sync_sent = true;
             return true;
         }
-        fail_active_pdo_group_without_request(service,
-                                              service->snapshot.last_sync_error,
-                                              CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR,
-                                              now_ms);
+        if (service->snapshot.last_sync_error != -EBUSY) {
+            fail_active_pdo_group_without_request(service,
+                                                  service->snapshot.last_sync_error,
+                                                  CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR,
+                                                  now_ms);
+        }
         return false;
     }
 
     if (pdo_group_ready_for_trigger_sync(service)) {
-        if (send_sync_frame(service, now_ms, false)) {
+        if (send_sync_frame(service, now_ms, true)) {
             service->active_pdo_trigger_sync_sent = true;
             return true;
         }
-        fail_active_pdo_group_without_request(service,
-                                              service->snapshot.last_sync_error,
-                                              CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR,
-                                              now_ms);
+        if (service->snapshot.last_sync_error != -EBUSY) {
+            fail_active_pdo_group_without_request(service,
+                                                  service->snapshot.last_sync_error,
+                                                  CANOPEN_MASTER_PDO_FAIL_SUBMIT_ERROR,
+                                                  now_ms);
+        }
         return false;
     }
 
@@ -1490,6 +1714,7 @@ static void complete_in_flight_pdo(canopen_master_service_t *service,
     }
 
     service->pdo_in_flight = false;
+    service->pdo_in_flight_tx_complete_baseline = 0U;
     service->active_pdo_in_flight_frames = 0U;
     service->active_pdo_tx_complete_frames++;
     if (pdo_phase_is_arm(request.phase)) {
@@ -1545,6 +1770,7 @@ static void complete_in_flight_sync(canopen_master_service_t *service,
 
     service->sync_in_flight = false;
     service->sync_in_flight_submit_ms = 0U;
+    service->sync_in_flight_tx_complete_baseline = 0U;
     service->snapshot.sync_in_flight = false;
     service->snapshot.sync_tx_complete_count++;
     service->snapshot.last_sync_tx_complete_ms = now_ms;
@@ -1574,12 +1800,22 @@ static void process_pdo_tx_complete_events(canopen_master_service_t *service,
 
     harvest_polled_primary_tx_complete(service);
 
-    uint32_t complete_count = s_canopen_pdo_tx_complete_count[service->can_index];
-    while (service->observed_pdo_tx_complete_count != complete_count) {
-        service->observed_pdo_tx_complete_count++;
-        if (service->sync_in_flight) {
+    /* TX interrupt flags are controller-wide: background NMT/SDO and untracked
+     * feedback/group SYNC frames use the same primary-buffer event as realtime
+     * PDO.  Never infer ownership from the raw event count.  The TPE bit is the
+     * hardware source of truth for the currently serialized primary-buffer
+     * transaction; it clears only after that frame leaves the controller.
+     */
+    uint32_t complete_count =
+        s_canopen_pdo_tx_complete_count[service->can_index];
+    service->observed_pdo_tx_complete_count = complete_count;
+    if (primary_tx_idle(service)) {
+        if (service->sync_in_flight &&
+            complete_count != service->sync_in_flight_tx_complete_baseline) {
             complete_in_flight_sync(service, now_ms);
-        } else if (service->pdo_in_flight) {
+        } else if (service->pdo_in_flight &&
+                   complete_count !=
+                       service->pdo_in_flight_tx_complete_baseline) {
             complete_in_flight_pdo(service, now_ms);
         }
     }
@@ -1620,6 +1856,12 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
     request = service->pdo_queue[service->pdo_queue_tail];
     taskEXIT_CRITICAL();
 
+    if (request.last_attempt_ms == now_ms &&
+        (request.retry_count != 0U ||
+         service->snapshot.last_pdo_current_error == -EBUSY)) {
+        return false;
+    }
+
     if (!pdo_group_is_active(service)) {
         begin_pdo_group(service, request.group_sequence, 1U, NULL);
     }
@@ -1650,12 +1892,16 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
 
     harvest_polled_primary_tx_complete(service);
 
+    uint32_t tx_complete_baseline =
+        s_canopen_pdo_tx_complete_count[service->can_index];
     int result = hpm_can_send((struct device *)&hpm_canopen_dev[service->can_index],
                               &frame);
     if (result == 0) {
         service->pdo_in_flight_request = request;
         service->pdo_in_flight = true;
         service->pdo_in_flight_submit_ms = now_ms;
+        service->pdo_in_flight_tx_complete_baseline =
+            tx_complete_baseline;
         service->active_pdo_submitted_frames++;
         service->active_pdo_in_flight_frames = 1U;
         service->active_pdo_group_state =
@@ -1674,10 +1920,19 @@ static bool start_next_pdo_frame(canopen_master_service_t *service,
 
     taskENTER_CRITICAL();
     if (pdo_tail_matches(service, &request)) {
-        service->pdo_queue[service->pdo_queue_tail].retry_count++;
-        request.retry_count = service->pdo_queue[service->pdo_queue_tail].retry_count;
+        service->pdo_queue[service->pdo_queue_tail].last_attempt_ms = now_ms;
+        if (result != -EBUSY) {
+            service->pdo_queue[service->pdo_queue_tail].retry_count++;
+        }
+        request = service->pdo_queue[service->pdo_queue_tail];
     }
     taskEXIT_CRITICAL();
+
+    if (result == -EBUSY) {
+        service->snapshot.pdo_tx_busy_defer_count++;
+        service->snapshot.last_pdo_current_error = result;
+        return false;
+    }
 
     if (request.retry_count >= CANOPEN_MASTER_PDO_TX_MAX_RETRIES) {
         fail_active_pdo_group(service, &request, result, now_ms);
@@ -1710,6 +1965,7 @@ static void process_pdo_tx_queue(canopen_master_service_t *service,
 
     if (sync_in_flight_timed_out(service, now_ms)) {
         service->sync_in_flight = false;
+        service->sync_in_flight_tx_complete_baseline = 0U;
         service->snapshot.sync_in_flight = false;
         service->snapshot.sync_tx_timeout_count++;
         service->snapshot.sync_tx_error_count++;
@@ -2131,18 +2387,70 @@ static void steer_tpdo_rx_callback(void *object, void *message)
     if (!is_tpdo1) {
         feedback->actual_position_counts = canopen_read_le_i32(&data[0]);
         feedback->actual_velocity_units = canopen_read_le_i32(&data[4]);
-        feedback->last_tpdo0_ms = service->last_process_ms;
+        feedback->last_tpdo0_ms = canopen_isr_now_ms();
         feedback->tpdo0_rx_count++;
         feedback->tpdo0_valid = true;
     } else {
         feedback->fault_latched = canopen_read_le_u32_exact(&data[0]);
         feedback->statusword = canopen_read_le_u16(&data[4]);
         feedback->actual_current_raw = canopen_read_le_i16(&data[6]);
-        feedback->last_tpdo1_ms = service->last_process_ms;
+        feedback->last_tpdo1_ms = canopen_isr_now_ms();
         feedback->tpdo1_rx_count++;
         feedback->tpdo1_valid = true;
     }
     end_feedback_write(feedback);
+}
+
+static void heartbeat_rx_callback(void *object, void *message)
+{
+    canopen_master_service_t *service = (canopen_master_service_t *)object;
+    CO_CANrxMsg_t *rx_msg = (CO_CANrxMsg_t *)message;
+    uint8_t first_node = 0U;
+    uint8_t last_node = 0U;
+    uint8_t required_mask = 0U;
+
+    if (service == NULL || rx_msg == NULL ||
+        !bus_tpdo_node_range(service->snapshot.bus,
+                             &first_node,
+                             &last_node,
+                             &required_mask)) {
+        return;
+    }
+    (void)required_mask;
+
+    uint16_t cob_id = CO_CANrxMsg_readIdent(rx_msg);
+    uint8_t dlc = CO_CANrxMsg_readDLC(rx_msg);
+    uint8_t *data = CO_CANrxMsg_readData(rx_msg);
+    if (cob_id < (uint16_t)(CANOPEN_MASTER_HEARTBEAT_BASE + first_node) ||
+        cob_id > (uint16_t)(CANOPEN_MASTER_HEARTBEAT_BASE + last_node) ||
+        dlc != 1U || data == NULL) {
+        return;
+    }
+
+    uint8_t node_id = (uint8_t)(cob_id - CANOPEN_MASTER_HEARTBEAT_BASE);
+    if (node_id >= CANOPEN_MASTER_NODE_FEEDBACK_SLOTS) {
+        return;
+    }
+    canopen_node_feedback_t *feedback = &service->snapshot.node_feedback[node_id];
+    begin_feedback_write(feedback);
+    feedback->heartbeat_valid = true;
+    feedback->nmt_state = data[0];
+    feedback->last_heartbeat_ms = canopen_isr_now_ms();
+    feedback->heartbeat_rx_count++;
+    if (data[0] == 0U) {
+        feedback->bootup_count++;
+        feedback->tpdo0_valid = false;
+        feedback->tpdo1_valid = false;
+        feedback->feedback_fresh = false;
+        feedback->tpdo1_fresh = false;
+    } else if (data[0] == 5U) {
+        feedback->heartbeat_operational_seen = true;
+    }
+    end_feedback_write(feedback);
+
+    service->snapshot.heartbeat_count++;
+    service->snapshot.last_heartbeat_state = data[0];
+    service->snapshot.last_heartbeat_ms = canopen_isr_now_ms();
 }
 
 static uint16_t find_free_canopen_rx_slot(CO_CANmodule_t *module, uint16_t start_index)
@@ -2241,6 +2549,23 @@ static void register_bus_tpdo_observers(canopen_master_service_t *service)
         (service->snapshot.tpdo1_observer_registered_mask & required_mask) ==
             required_mask &&
         service->snapshot.steer_tpdo_observer_error_mask == 0U;
+
+    slot = find_free_canopen_rx_slot(co->CANmodule, (uint16_t)(slot + 1U));
+    if (slot != 0xFFFFU) {
+        CO_ReturnError_t heartbeat_result = CO_CANrxBufferInit(
+            co->CANmodule,
+            slot,
+            (uint16_t)CANOPEN_MASTER_HEARTBEAT_BASE,
+            CANOPEN_MASTER_HEARTBEAT_RANGE_MASK,
+            false,
+            service,
+            heartbeat_rx_callback);
+        service->snapshot.heartbeat_observer_registered =
+            heartbeat_result == CO_ERROR_NO;
+        if (heartbeat_result != CO_ERROR_NO) {
+            service->snapshot.tpdo_observer_registration_error_count++;
+        }
+    }
 }
 
 static bool node8_tpdo1_acceptance_workaround_enabled(void)
@@ -2251,63 +2576,12 @@ static bool node8_tpdo1_acceptance_workaround_enabled(void)
 static void refresh_tpdo_freshness(canopen_master_service_t *service,
                                    uint32_t now_ms)
 {
-    uint8_t first_node = 0U;
-    uint8_t last_node = 0U;
-    uint8_t required_mask = 0U;
-
-    if (service == NULL) {
-        return;
-    }
-    if (!bus_tpdo_node_range(service->snapshot.bus,
-                             &first_node,
-                             &last_node,
-                             &required_mask)) {
-        return;
-    }
-    (void)required_mask;
-
-    for (uint8_t node = first_node;
-         node <= last_node &&
-         node < CANOPEN_MASTER_NODE_FEEDBACK_SLOTS;
-         ++node) {
-        canopen_node_feedback_t *feedback = &service->snapshot.node_feedback[node];
-        bool tpdo0_fresh =
-            feedback->tpdo0_valid &&
-            (uint32_t)(now_ms - feedback->last_tpdo0_ms) <=
-                ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS;
-        bool tpdo1_fresh =
-            feedback->tpdo1_valid &&
-            (uint32_t)(now_ms - feedback->last_tpdo1_ms) <=
-                ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS;
-        bool synthesize_node8_tpdo1 =
-            node == ECU_CANOPEN_STEER_RR_NODE_ID &&
-            node8_tpdo1_acceptance_workaround_enabled() &&
-            tpdo0_fresh &&
-            !tpdo1_fresh;
-        begin_feedback_write(feedback);
-        if (synthesize_node8_tpdo1) {
-            /* Hardware evidence on the current ECU shows Node8 TPDO0 is
-             * received and 0x288 is present on the external analyzer, but the
-             * HPM classic CAN acceptance path does not deliver 0x288 to
-             * CANopenNode.  For the steering-only V10 field image, keep Node8
-             * position feedback mandatory and synthesize the TPDO1 timestamp so
-             * commissioning can proceed.  Do not clear a latched fault here; if
-             * a real TPDO1 fault was ever received, motion stays blocked by the
-             * fault_latched check in the motion device layer.
-             */
-            feedback->tpdo1_valid = true;
-            feedback->last_tpdo1_ms = feedback->last_tpdo0_ms;
-            tpdo1_fresh = true;
-        }
-        /* Realtime motion only needs fresh TPDO0 position/velocity feedback.
-         * TPDO1 carries lower-rate fault/status/current information; a latched
-         * fault received on TPDO1 is still honored by device layers, but TPDO1
-         * freshness must not make healthy position feedback stale or increase
-         * the required feedback traffic rate.
-         */
-        feedback->feedback_fresh = tpdo0_fresh;
-        end_feedback_write(feedback);
-    }
+    /* ISR callbacks are the sole writers of node feedback.  Freshness is
+     * derived on the reader's local copy in get_node_feedback(), avoiding a
+     * task/ISR multi-writer seqlock race.
+     */
+    (void)service;
+    (void)now_ms;
 }
 
 bool canopen_master_service_init(canopen_master_service_t *service,
@@ -2332,9 +2606,15 @@ bool canopen_master_service_init(canopen_master_service_t *service,
     service->last_debug_sequence = g_canopen_master_debug_control.command_sequence;
     service->last_process_ms = now_ms;
     service->next_sdo_ms = now_ms + ECU_CANOPEN_SDO_PERIOD_MS;
+    service->periodic_sdo_enabled = true;
     service->sdo_retry_backoff_ms = ECU_OFFLINE_BACKOFF_MIN_MS;
     service->sdo_next_retry_ms = now_ms + ECU_CANOPEN_SDO_PERIOD_MS;
     service->sdo_offline_since_ms = 0U;
+
+    if (!prepare_bus_object_dictionaries()) {
+        note_error(service, -ENOMEM);
+        return false;
+    }
 
     uint32_t heap_memory_used = 0U;
     s_canopen[service->can_index] = CO_new(NULL, &heap_memory_used);
@@ -2376,7 +2656,7 @@ bool canopen_master_service_init(canopen_master_service_t *service,
     result = CO_CANopenInit(co,
                             NULL,
                             NULL,
-                            OD,
+                            &s_bus_od[service->can_index],
                             NULL,
                             CANOPEN_MASTER_NMT_CONTROL,
                             CANOPEN_MASTER_FIRST_HB_TIME_MS,
@@ -2403,6 +2683,95 @@ bool canopen_master_service_init(canopen_master_service_t *service,
     return true;
 }
 
+static void poll_transport_health(canopen_master_service_t *service,
+                                  uint32_t now_ms)
+{
+    enum can_state state = CAN_STATE_STOPPED;
+    struct can_bus_err_cnt error_count = {0};
+
+    if (service == NULL || service->can_index >= CANOPEN_MASTER_BUS_COUNT) {
+        return;
+    }
+    if (hpm_can_get_state(
+            (const struct device *)&hpm_canopen_dev[service->can_index],
+            &state,
+            &error_count) != 0) {
+        return;
+    }
+
+    service->snapshot.can_state = (uint8_t)state;
+    service->snapshot.can_tx_error_count = error_count.tx_err_cnt;
+    service->snapshot.can_rx_error_count = error_count.rx_err_cnt;
+
+    /* Every CANopen transmit path (realtime PDO, group/feedback SYNC, NMT and
+     * SDO) shares the HPM primary TX buffer.  A missing ACK can leave that
+     * buffer occupied without immediately reporting BUS_OFF.  Bound this state
+     * independently of the current software owner so one untracked background
+     * frame cannot make all later RPDO submissions defer forever.
+     */
+    if (primary_tx_idle(service)) {
+        service->primary_tx_busy_since_ms = 0U;
+    } else if (service->primary_tx_busy_since_ms == 0U) {
+        service->primary_tx_busy_since_ms = now_ms != 0U ? now_ms : 1U;
+    } else if ((uint32_t)(now_ms - service->primary_tx_busy_since_ms) >=
+                   CANOPEN_MASTER_PDO_TX_TIMEOUT_MS) {
+        service->snapshot.primary_tx_stall_count++;
+        service->snapshot.last_primary_tx_stall_ms = now_ms;
+        if (service->pdo_in_flight) {
+            fail_active_pdo_group(service,
+                                  &service->pdo_in_flight_request,
+                                  -ETIMEDOUT,
+                                  now_ms);
+        } else if (pdo_group_is_active(service)) {
+            fail_active_pdo_group_without_request(
+                service,
+                -ETIMEDOUT,
+                CANOPEN_MASTER_PDO_FAIL_TX_TIMEOUT,
+                now_ms);
+        }
+        service->snapshot.can_normal = false;
+        service->snapshot.state = CANOPEN_MASTER_STATE_ERROR;
+        service->snapshot.last_error = -ETIMEDOUT;
+    }
+
+    if (state == CAN_STATE_BUS_OFF) {
+        if (!service->bus_off_active) {
+            service->snapshot.bus_off_count++;
+            service->bus_off_active = true;
+        }
+        if (service->pdo_in_flight) {
+            fail_active_pdo_group(service,
+                                  &service->pdo_in_flight_request,
+                                  -ENETUNREACH,
+                                  now_ms);
+        } else if (pdo_group_is_active(service)) {
+            fail_active_pdo_group_without_request(
+                service,
+                -ENETUNREACH,
+                CANOPEN_MASTER_PDO_FAIL_TX_ERROR_EVENT,
+                now_ms);
+        }
+        service->snapshot.can_normal = false;
+        service->snapshot.state = CANOPEN_MASTER_STATE_ERROR;
+        service->snapshot.last_error = -ENETUNREACH;
+    } else if (state == CAN_STATE_ERROR_ACTIVE ||
+               state == CAN_STATE_ERROR_WARNING ||
+               state == CAN_STATE_ERROR_PASSIVE) {
+        service->bus_off_active = false;
+    }
+
+    /* Never erase an active group's failure evidence.  Once the device layer
+     * has observed/cancelled it, an idle bus owner may rebuild only the local
+     * controller.  Failed rebuilds stay retryable with a bounded backoff.
+     */
+    if (!service->snapshot.can_normal &&
+        canopen_master_service_realtime_pdo_idle(service) &&
+        (int32_t)(now_ms - service->next_transport_recovery_ms) >= 0) {
+        canopen_master_service_cancel_realtime_pdo(service);
+        (void)canopen_master_service_recover_transport(service);
+    }
+}
+
 void canopen_master_service_process(canopen_master_service_t *service,
                                     uint32_t now_ms)
 {
@@ -2415,6 +2784,15 @@ void canopen_master_service_process_realtime_pdo(canopen_master_service_t *servi
 {
     if (service == NULL || !service->snapshot.initialized ||
         service->can_index >= CANOPEN_MASTER_BUS_COUNT) {
+        return;
+    }
+
+    service->callback_now_ms = now_ms;
+    poll_transport_health(service, now_ms);
+    if (!service->snapshot.can_normal) {
+        if (!canopen_master_service_realtime_pdo_idle(service)) {
+            process_pdo_tx_queue(service, now_ms);
+        }
         return;
     }
 
@@ -2438,10 +2816,12 @@ void canopen_master_service_process_background(canopen_master_service_t *service
         return;
     }
 
+    service->callback_now_ms = now_ms;
     if (service->pdo_in_flight ||
         service->sync_in_flight ||
         service->pdo_queue_count != 0U ||
-        pdo_group_is_active(service)) {
+        pdo_group_is_active(service) ||
+        !primary_tx_idle(service)) {
         return;
     }
 
@@ -2465,9 +2845,6 @@ void canopen_master_service_process_background(canopen_master_service_t *service
     }
 
     uint32_t elapsed_us = elapsed_us_since(now_ms, &service->last_process_ms);
-    uint32_t timer_next_us = 1000U;
-    (void)CO_process(co, false, elapsed_us, &timer_next_us);
-    service->snapshot.process_count++;
 
     /* Debug commands are sequence-gated and may be issued from a debugger while
      * the periodic diagnostic upload state machine is active.  Check them
@@ -2490,7 +2867,8 @@ void canopen_master_service_process_background(canopen_master_service_t *service
                                    read_request.node_id,
                                    read_request.index,
                                    read_request.subindex);
-        } else if (now_ms >= service->next_sdo_ms &&
+        } else if (service->periodic_sdo_enabled &&
+                   now_ms >= service->next_sdo_ms &&
                    now_ms >= service->sdo_next_retry_ms) {
             const canopen_master_sdo_query_t *query = &s_sdo_queries[service->next_query];
             service->next_sdo_ms = now_ms + ECU_CANOPEN_SDO_PERIOD_MS;
@@ -2504,6 +2882,10 @@ void canopen_master_service_process_background(canopen_master_service_t *service
             }
         }
     }
+
+    uint32_t timer_next_us = 1000U;
+    (void)CO_process(co, false, elapsed_us, &timer_next_us);
+    service->snapshot.process_count++;
     canopen_master_unlock();
 }
 
@@ -2566,6 +2948,25 @@ bool canopen_master_service_get_node_feedback(const canopen_master_service_t *se
             __atomic_load_n(&src->feedback_sequence, __ATOMIC_ACQUIRE);
         if (sequence_before == sequence_after &&
             (sequence_before & 1U) == 0U) {
+            uint32_t now_ms = canopen_reader_now_ms(service);
+            out->feedback_fresh =
+                out->tpdo0_valid &&
+                (uint32_t)(now_ms - out->last_tpdo0_ms) <=
+                    ECU_STEER_REMOTE_COMMISSION_FEEDBACK_TIMEOUT_MS;
+            out->tpdo1_fresh =
+                out->tpdo1_valid &&
+                (uint32_t)(now_ms - out->last_tpdo1_ms) <=
+                    ECU_CANOPEN_TPDO1_STATUS_TIMEOUT_MS;
+            if (node_id == ECU_CANOPEN_STEER_RR_NODE_ID &&
+                node8_tpdo1_acceptance_workaround_enabled() &&
+                out->feedback_fresh && !out->tpdo1_fresh &&
+                out->tpdo1_rx_count == 0U) {
+                /* Commissioning-only compatibility for the known Node8 filter
+                 * limitation.  This does not fabricate status/fault values and
+                 * is accepted only until a real TPDO1 has ever been observed.
+                 */
+                out->tpdo1_fresh = true;
+            }
             return true;
         }
     }

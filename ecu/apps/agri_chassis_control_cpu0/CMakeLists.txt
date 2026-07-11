@@ -54,6 +54,7 @@ sdk_compile_definitions("-DCO_CONFIG_FIFO=(CO_CONFIG_FIFO_ENABLE)")
 sdk_compile_definitions("-DCO_CONFIG_NMT=0x3002")
 sdk_compile_definitions("-DCO_CONFIG_SDO_CLI=(CO_CONFIG_SDO_CLI_ENABLE|CO_CONFIG_SDO_CLI_SEGMENTED)")
 sdk_ld_options("-Wl,--wrap=hpm_can_send")
+sdk_ld_options("-Wl,--wrap=CO_CANsend")
 sdk_ld_options("-lm")
 
 if(ECU_COMMISSIONING_PROFILE STREQUAL "steer4_remote")

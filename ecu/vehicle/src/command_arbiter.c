@@ -351,16 +351,23 @@ static void apply_remote_adjust_command(const remote_control_request_t *remote,
     }
 
     if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
-        remote->clearance_per_mille >= ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN) {
+        remote->clearance_per_mille <= ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX) {
         /* Ground-clearance adjustment is an electric four-leg CAN3 servo
-         * function, not a hydraulic-valve function.  The right stick is used as
-         * a three-state command: >1850 ppm extends at fixed speed, <1150 ppm
-         * retracts at fixed speed, and the middle band holds position.
+         * function, not a hydraulic-valve function.
+         *
+         * Field verification on the installed receiver shows the right-stick
+         * vertical channel is inverted after SBUS-to-per-mille normalization:
+         * physical stick up is negative, and physical stick down is positive.
+         * The operator-facing rule is therefore:
+         *
+         *   right stick up   -> extend legs toward 490 mm
+         *   right stick down -> retract legs toward 10 mm
+         *   middle band      -> stop and let the drives hold/brake
          */
         height_rate = ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
         out->target_height_mm = ECU_REMOTE_MAX_HEIGHT_TARGET_MM;
     } else if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
-               remote->clearance_per_mille <= ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX) {
+               remote->clearance_per_mille >= ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN) {
         height_rate = -ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
         out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
     }
@@ -383,12 +390,15 @@ static void apply_remote_adjust_command(const remote_control_request_t *remote,
     out->height_rate_mm_s = height_rate;
     out->track_rate_mm_s = track_rate;
     out->hydraulic_valve_mask |= hydraulic_valve_mask;
-    /* HOME-center adjustment owns the hydraulic station.  Keep Node13 running
-     * throughout the adjustment domain so pressure is already available when a
-     * valve request appears; valve_mask only selects which hydraulic circuit is
-     * allowed to open.
+    /* HOME-center adjustment owns both electric lift and hydraulic functions,
+     * but the pump is required only when a valve is actually requested.
+     * Ground-clearance lift is electric CAN3 servo motion; starting Node13
+     * during lift-only motion consumes the same CAN3 setup/realtime lane and
+     * can delay the four-axis interpolation stream.  Track-width and
+     * suspension requests still set a nonzero valve mask, which starts the pump
+     * before the valve-open interlock can pass.
      */
-    out->hydraulic_enable = true;
+    out->hydraulic_enable = hydraulic_valve_mask != 0U;
 }
 
 /* HOME-center adjustment is an actuator domain boundary.

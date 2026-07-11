@@ -18,6 +18,8 @@ typedef struct {
     warning_light_device_state_t warning_light;
     vehicle_motion_command_mailbox_t motion_mailbox;
     vehicle_can3_command_mailbox_t can3_mailbox;
+    volatile uint32_t local_output_intent_mask;
+    volatile uint32_t hydraulic_output_intent_mask;
     uint32_t track_gate_requested_valve_mask;
     uint32_t track_gate_request_timestamp_ms;
 } vehicle_executor_runtime_t;
@@ -36,14 +38,18 @@ static void publish_motion_command_snapshot(vehicle_motion_command_mailbox_t *ma
      * only accept the snapshot when the sequence is even and unchanged across
      * the copy.
      */
-    mailbox->publish_sequence++;
-    if ((mailbox->publish_sequence & 1U) == 0U) {
-        mailbox->publish_sequence++;
+    uint32_t sequence = __atomic_load_n(&mailbox->publish_sequence,
+                                        __ATOMIC_RELAXED) + 1U;
+    if ((sequence & 1U) == 0U) {
+        sequence++;
     }
+    __atomic_store_n(&mailbox->publish_sequence, sequence, __ATOMIC_RELEASE);
     mailbox->command = *command;
     mailbox->timestamp_ms = now_ms;
     mailbox->valid = true;
-    mailbox->publish_sequence++;
+    __atomic_store_n(&mailbox->publish_sequence,
+                     sequence + 1U,
+                     __ATOMIC_RELEASE);
 }
 
 static bool read_motion_command_snapshot(const vehicle_motion_command_mailbox_t *mailbox,
@@ -58,13 +64,15 @@ static bool read_motion_command_snapshot(const vehicle_motion_command_mailbox_t 
         return false;
     }
 
-    read_sequence_before = mailbox->publish_sequence;
+    read_sequence_before = __atomic_load_n(&mailbox->publish_sequence,
+                                            __ATOMIC_ACQUIRE);
     if ((read_sequence_before & 1U) != 0U || !mailbox->valid) {
         return false;
     }
     *command = mailbox->command;
     *timestamp_ms = mailbox->timestamp_ms;
-    read_sequence_after = mailbox->publish_sequence;
+    read_sequence_after = __atomic_load_n(&mailbox->publish_sequence,
+                                           __ATOMIC_ACQUIRE);
 
     if (read_sequence_before != read_sequence_after ||
         (read_sequence_after & 1U) != 0U) {
@@ -224,8 +232,22 @@ static void update_executor_lift_hydraulic_diagnostics(vehicle_executor_state_t 
         (uint8_t)s_runtime.lift_hydraulic.lift_feedback_fresh_mask;
     executor->lift_preload_points_completed =
         s_runtime.lift_hydraulic.lift_preload_points_completed;
+    executor->lift_interpolation_queued_count =
+        s_runtime.lift_hydraulic.lift_interpolation_queued_count;
+    executor->lift_interpolation_reject_count =
+        s_runtime.lift_hydraulic.lift_interpolation_reject_count;
     executor->lift_interpolation_failure_count =
         s_runtime.lift_hydraulic.lift_interpolation_failure_count;
+    executor->lift_interpolation_recovery_count =
+        s_runtime.lift_hydraulic.lift_interpolation_recovery_count;
+    executor->lift_stream_planned_delta_counts =
+        s_runtime.lift_hydraulic.lift_stream_planned_delta_counts;
+    memcpy(executor->lift_actual_position_counts,
+           s_runtime.lift_hydraulic.lift_actual_position_counts,
+           sizeof(executor->lift_actual_position_counts));
+    memcpy(executor->lift_target_position_counts,
+           s_runtime.lift_hydraulic.lift_target_position_counts,
+           sizeof(executor->lift_target_position_counts));
 }
 
 static uint32_t track_valve_mask(void)
@@ -307,14 +329,12 @@ static void gate_track_assist_current_until_valve_open(vehicle_actuator_command_
 
 static bool apply_can3_safe_default(vehicle_executor_state_t *executor,
                                     canopen_master_service_t *can3_lift_hydraulic_canopen,
-                                    dio_service_t *dio,
                                     const ecu_hardware_config_t *config,
                                     uint32_t now_ms)
 {
     vehicle_actuator_command_t safe_command;
 
-    if (executor == 0 || can3_lift_hydraulic_canopen == 0 ||
-        dio == 0 || config == 0) {
+    if (executor == 0 || can3_lift_hydraulic_canopen == 0 || config == 0) {
         return false;
     }
 
@@ -323,11 +343,13 @@ static bool apply_can3_safe_default(vehicle_executor_state_t *executor,
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
                                     can3_lift_hydraulic_canopen,
-                                    dio,
                                     config,
                                     &safe_command,
                                     now_ms);
     update_executor_lift_hydraulic_diagnostics(executor);
+    __atomic_store_n(&s_runtime.hydraulic_output_intent_mask,
+                     0U,
+                     __ATOMIC_RELEASE);
     return executor->lift_hydraulic_result == ECU_DEVICE_APPLY_OK;
 }
 
@@ -369,9 +391,11 @@ bool vehicle_command_executor_apply(vehicle_executor_state_t *executor,
     executor->motion_result = ECU_DEVICE_APPLY_OK;
     executor->lift_hydraulic_result = ECU_DEVICE_APPLY_OK;
     executor->local_io_result = local_io_device_apply(&s_runtime.local_io,
-                                                      io->dio,
                                                       config,
                                                       command);
+    __atomic_store_n(&s_runtime.local_output_intent_mask,
+                     s_runtime.local_io.last_output_mask,
+                     __ATOMIC_RELEASE);
     executor->high_voltage_relay_latched =
         s_runtime.local_io.high_voltage_relay_latched;
     executor->warning_light_result =
@@ -411,7 +435,23 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
         executor->motion_result = ECU_DEVICE_APPLY_OK;
         return true;
     }
-    (void)command_timestamp_ms;
+    if ((uint32_t)(now_ms - command_timestamp_ms) >
+        ECU_CAN2_COMMAND_STALE_TIMEOUT_MS) {
+        vehicle_actuator_command_t stale_safe_command;
+        vehicle_actuator_command_safe_default(&stale_safe_command);
+        stale_safe_command.source = COMMAND_SOURCE_SAFETY;
+        /* Preserve the measured HV window only long enough for CAN2 to submit
+         * an explicit zero/disable group.  The power/safety layers remain the
+         * authority that subsequently removes high voltage.
+         */
+        stale_safe_command.high_voltage_enable = command.high_voltage_enable;
+        stale_safe_command.high_voltage_feedback_ready =
+            command.high_voltage_feedback_ready;
+        stale_safe_command.high_voltage_disable_request = false;
+        command = stale_safe_command;
+        executor->can2_command_stale_count++;
+        executor->can2_last_command_stale_ms = now_ms;
+    }
     gate_track_assist_current_until_valve_open(&command);
 
     executor->motion_result = motion_device_apply(&s_runtime.motion,
@@ -436,7 +476,6 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
 bool vehicle_command_executor_flush_can3_lift_hydraulic(
     vehicle_executor_state_t *executor,
     canopen_master_service_t *can3_lift_hydraulic_canopen,
-    dio_service_t *dio,
     uint32_t now_ms)
 {
     const ecu_hardware_config_t *config = ecu_hardware_config_default();
@@ -444,7 +483,7 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
     uint32_t command_sequence;
     uint32_t command_timestamp_ms;
 
-    if (executor == 0 || can3_lift_hydraulic_canopen == 0 || dio == 0) {
+    if (executor == 0 || can3_lift_hydraulic_canopen == 0) {
         return false;
     }
 
@@ -455,7 +494,6 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
                                     &command_timestamp_ms)) {
         return apply_can3_safe_default(executor,
                                        can3_lift_hydraulic_canopen,
-                                       dio,
                                        config,
                                        now_ms);
     }
@@ -463,7 +501,6 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
         ECU_CAN3_COMMAND_STALE_TIMEOUT_MS) {
         return apply_can3_safe_default(executor,
                                        can3_lift_hydraulic_canopen,
-                                       dio,
                                        config,
                                        now_ms);
     }
@@ -473,12 +510,58 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
     executor->lift_hydraulic_result =
         lift_hydraulic_device_apply(&s_runtime.lift_hydraulic,
                                     can3_lift_hydraulic_canopen,
-                                    dio,
                                     config,
                                     &command,
                                     now_ms);
     update_executor_lift_hydraulic_diagnostics(executor);
+    uint32_t hydraulic_mask = s_runtime.lift_hydraulic.last_valve_mask;
+    if (hydraulic_mask != 0U) {
+        hydraulic_mask |= config->dio_hydraulic_enable_mask;
+    }
+    __atomic_store_n(&s_runtime.hydraulic_output_intent_mask,
+                     hydraulic_mask,
+                     __ATOMIC_RELEASE);
     return executor->lift_hydraulic_result == ECU_DEVICE_APPLY_OK;
+}
+
+static uint32_t clear_conflicting_output_pair(uint32_t output_mask,
+                                              uint32_t pair_mask)
+{
+    return pair_mask != 0U && (output_mask & pair_mask) == pair_mask ?
+           (output_mask & ~pair_mask) : output_mask;
+}
+
+bool vehicle_command_executor_flush_local_io(vehicle_executor_state_t *executor,
+                                             dio_service_t *dio)
+{
+    const ecu_hardware_config_t *config = ecu_hardware_config_default();
+
+    if (executor == 0 || dio == 0 || config == 0) {
+        return false;
+    }
+
+    uint32_t local_mask = __atomic_load_n(
+        &s_runtime.local_output_intent_mask,
+        __ATOMIC_ACQUIRE);
+    uint32_t hydraulic_mask = __atomic_load_n(
+        &s_runtime.hydraulic_output_intent_mask,
+        __ATOMIC_ACQUIRE);
+    uint32_t output_mask = local_mask | hydraulic_mask;
+
+    /* Final defense at the sole hardware-output owner.  Even a corrupted or
+     * torn upstream valve request cannot energize both directions of one
+     * hydraulic circuit.
+     */
+    output_mask = clear_conflicting_output_pair(
+        output_mask, config->hydraulic_valve_interlock_pair12_mask);
+    output_mask = clear_conflicting_output_pair(
+        output_mask, config->hydraulic_valve_interlock_pair34_mask);
+    output_mask = clear_conflicting_output_pair(
+        output_mask, config->hydraulic_valve_interlock_pair56_mask);
+    dio_service_write_output_mask(dio, output_mask);
+    executor->local_io_result = dio->last_apply_ok ?
+        ECU_DEVICE_APPLY_OK : ECU_DEVICE_APPLY_REJECTED;
+    return executor->local_io_result == ECU_DEVICE_APPLY_OK;
 }
 
 void vehicle_command_executor_get_state(const vehicle_executor_state_t *executor,

@@ -38,8 +38,9 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
 bool vehicle_command_executor_flush_can3_lift_hydraulic(
     vehicle_executor_state_t *executor,
     canopen_master_service_t *can3_lift_hydraulic_canopen,
-    dio_service_t *dio,
     uint32_t now_ms);
+bool vehicle_command_executor_flush_local_io(vehicle_executor_state_t *executor,
+                                             dio_service_t *dio);
 void vehicle_command_executor_get_state(const vehicle_executor_state_t *executor,
                                         vehicle_executor_state_t *out);
 
