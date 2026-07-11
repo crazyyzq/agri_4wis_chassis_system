@@ -284,7 +284,7 @@
 #define ECU_CANOPEN_LIFT_INTERPOLATION_REFRESH_MS (20U)
 #define ECU_CANOPEN_LIFT_FEEDBACK_TIMEOUT_MS      (200U)
 #define ECU_CANOPEN_LIFT_SETUP_TIMEOUT_MS         (5000U)
-#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (10U)
+#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (3U)
 #define ECU_CANOPEN_LIFT_INTERPOLATION_MODE       (0)
 #define ECU_CANOPEN_LIFT_ENABLE_SETTLE_MS         (1500U)
 #define ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS      (1000U)
@@ -299,6 +299,8 @@
 #define ECU_CANOPEN_NODE_RECOVERY_RETRY_MS            (500U)
 #define ECU_CANOPEN_NODE_RECOVERY_COOLDOWN_MS         (5000U)
 #define ECU_CANOPEN_NODE_RECOVERY_FAST_ATTEMPTS       (3U)
+#define ECU_CANOPEN_MOTION_FEEDBACK_STALE_RECOVERY_MS (500U)
+#define ECU_CANOPEN_PARTIAL_GROUP_RECOVERY_STABLE_MS  (200U)
 #define ECU_CANOPEN_HEARTBEAT_TIMEOUT_MS              (1500U)
 #define ECU_CANOPEN_TPDO1_STATUS_TIMEOUT_MS           (750U)
 
@@ -423,6 +425,7 @@
 #define ECU_STEER_ZERO_SETUP_TIMEOUT_MS                       (30000U)
 #define ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (60000U)
 #define ECU_STEER_ZERO_RETURN_TIMEOUT_MS                      (35000U)
+#define ECU_STEER_ZERO_VERIFY_TIMEOUT_MS                      (2000U)
 #define ECU_STEER_ZERO_SDO_TIMEOUT_MS                         (1000U)
 /* Node6 and Node8 were measured to arrive late when changing from spin to crab
  * because they can travel roughly twice the steering distance of the other two
@@ -594,6 +597,8 @@
 #define ECU_CANOPEN_PDO_MAP_TARGET_POSITION_32   (0x607A0020UL)
 #define ECU_CANOPEN_PDO_MAP_TARGET_VELOCITY_32   (0x60FF0020UL)
 #define ECU_CANOPEN_PDO_MAP_ACTUAL_POSITION_32   (0x60640020UL)
+#define ECU_CANOPEN_OBJ_ACTUAL_POSITION          (0x6064U)
+#define ECU_CANOPEN_OBJ_FAULT_LATCHED            (0x2183U)
 #define ECU_CANOPEN_PDO_MAP_ACTUAL_VELOCITY_32   (0x606C0020UL)
 #define ECU_CANOPEN_PDO_MAP_FAULT_LATCHED_32     (0x21830020UL)
 #define ECU_CANOPEN_PDO_MAP_STATUSWORD_16        (0x60410010UL)
@@ -684,15 +689,16 @@ typedef enum {
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 5.0f))
 #define ECU_LIFT_INTERPOLATION_ACCEL_COUNTS_PER_SEC2 \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 8.0f))
-/* Analyzer-verified full-stroke lift parameters, 2026-07-11:
- * 5.0 mm/s stream, 8.0 mm/s^2 stream ramp, 75000-count target lead,
+/* Analyzer-derived full-stroke lift parameters, 2026-07-11:
+ * 5.0 mm/s stream, 8.0 mm/s^2 stream ramp, 75000-count nominal target lead,
  * 24,000,000 profile velocity units and 500,000 profile acceleration units.
- * The tested sequence first levels the four lift axes, then runs 10->490->10 mm
- * without EMCY. 20 mm/s and 7.5 mm/s full-stroke attempts tripped Node9 0x7390.
- * ECU realtime scheduling keeps the drive's interpolation FIFO ahead by
- * preloading 10 stationary points.  This preserves continuous 20 ms drive-side
- * interpolation when FreeRTOS/CAN TX completion occasionally stretches one ECU
- * producer interval beyond 20 ms.
+ * The successful analyzer sequence starts all four trajectories from measured
+ * positions and runs 10->490->10 mm without EMCY. 20 mm/s and 7.5 mm/s
+ * full-stroke attempts tripped Node9 0x7390.
+ * ECU uses the script's minimum proven preload of three stationary points.
+ * Every running point uses a per-axis final displacement, monotonic lead clamp
+ * and bounded 0.25 feedback correction; the four-axis batch is followed by one
+ * common SYNC.
  */
 #define ECU_LIFT_PROFILE_VELOCITY_UNITS             (24000000)
 #define ECU_LIFT_PROFILE_ACCEL_UNITS                (500000)
@@ -700,12 +706,15 @@ typedef enum {
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
 #define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS \
     (75000)
+#define ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR   (1)
+#define ECU_LIFT_SYNC_CORRECTION_GAIN_DENOMINATOR (4)
+#define ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS       (50000)
 #define ECU_LIFT_TARGET_REACHED_TOLERANCE_COUNTS \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
 /* Analyzer-proven lift contract:
  * - 20 ms interpolation period;
- * - ten preloaded points on ECU, three minimum on analyzer script;
- * - an initial same-direction leveling move before the main stroke;
+ * - three preloaded stationary points;
+ * - no impossible pre-trigger leveling stage;
  * - one coherent absolute-position target stream per four-axis cycle;
  * - 75000-count maximum command lead over measured feedback;
  * - final acceptance only after all axes are within 3 mm.

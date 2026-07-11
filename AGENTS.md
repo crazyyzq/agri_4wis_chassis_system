@@ -168,8 +168,10 @@ documented reason:
 - A partial steering trigger group is a motion safety fault. If one or more
   trigger PDOs may already have reached drives while the rest failed, block
   fresh steering groups, command drive speed to zero through the approved
-  safety path, issue the configured steering safe-stop policy, and require a
-  defined recovery/reinitialization path.
+  safety path, and enter the defined automatic recovery path. Recovery may not
+  replay a cached nonzero drive command: it must re-establish eight-node
+  feedback, send one coherent four-steering-axis resynchronization group, and
+  only then permit a newly published traction command.
 - A watchdog, timeout, fault, or bus-off path must be observable through
   diagnostics and must have deterministic recovery behavior.
 - Do not claim a remote device accepted a command only because it was inserted
@@ -194,13 +196,38 @@ documented reason:
   not proof that a remote application accepted the PDO. Remote acceptance
   requires appropriate TPDO/stateword/SDO/readback or hardware evidence.
 
-### CAN2 steering realtime PDO
+### Current field PDO baseline
 
-The current steering direction uses a six-byte RPDO payload conceptually
-containing:
+The saved Node1–13 profile is `current7 + sync1` and is the only normal ECU
+runtime contract unless a new analyzer capture, readback, focused test and
+configuration change are supplied together:
 
 ```text
-0x6040 controlword (16-bit) + 0x607A target position (32-bit)
+RPDO0  0x200 + node: 6040 + 6060 + 60FF, 7 bytes, type 1
+RPDO1  0x300 + node: 6040 + 6060 + 607A, 7 bytes, type 1
+RPDO2  0x400 + node: 60C1:01,             4 bytes, type 1
+RPDO3  0x500 + node: 6040 + 6060 + 2340, 5 bytes, type 1
+TPDO0  0x180 + node: 6064 + 606C,         8 bytes, type 1
+TPDO1  0x280 + node: 2183 + 6041 + 221C, 8 bytes, configured type 10
+```
+
+- `6060` remains inside RPDO0/RPDO1/RPDO3. Do not revive the historical
+  `compact6` production proposal without a complete remap and validation.
+- The tested BC/BC2 drives retain `0x1801:02 = 10`, but may still emit TPDO1
+  on every SYNC. Do not infer an actual TPDO1 bandwidth reduction merely from
+  an SDO readback; use an analyzer capture.
+- PDO mapping and flash save belong only to the offline maintenance tool while
+  the ECU is disconnected. Normal ECU firmware must not write mapping or save
+  objects at boot/runtime.
+
+### CAN2 steering realtime PDO
+
+The current steering direction uses the saved seven-byte `current7` RPDO1
+payload:
+
+```text
+0x6040 controlword (16-bit) + 0x6060 mode=1 (8-bit) +
+0x607A target position (32-bit)
 ```
 
 The exact COB-IDs, mapping, and controlword constants are configuration/vendor
@@ -223,11 +250,13 @@ For a four-wheel arm/trigger group:
 - Keep diagnostics for group sequence, expected/submitted/completed/failed
   frames, phase, in-flight state, timestamps, and last failure.
 
-Expected asynchronous analyzer pattern for one steering target update:
+Expected analyzer pattern for one synchronous steering target update:
 
 ```text
 Node5 arm, Node6 arm, Node7 arm, Node8 arm,
+SYNC,
 Node5 trigger, Node6 trigger, Node7 trigger, Node8 trigger
+SYNC
 ```
 
 The analyzer must not show a later group inserted between those frames.
@@ -259,17 +288,17 @@ readback must be tracked per node.
 
 ### SYNC / synchronous PDO
 
-The vendor material demonstrates SYNC and synchronous TPDO behavior, but
-synchronous RPDO execution must not be enabled by assumption.
+The current saved field profile uses synchronous RPDO type 1. This is validated
+for the exact BC/BC2 network and must be preserved as an ordered transport:
 
-- Keep the default steering transport asynchronous until a single-axis hardware
-  test proves synchronous RPDO behavior for this exact drive configuration.
-- Do not add SYNC to production motion merely because `0x080` exists.
-- Any future SYNC-RPDO implementation must have a dedicated configuration flag,
-  a single-axis validation procedure, analyzer evidence, and tests.
-- For profile-position edge-trigger controlwords, do not send arm and trigger
-  states before one same SYNC unless hardware behavior has been proven. Use
-  separate preparation and trigger sync cycles where required.
+- Steering position: all four arm PDOs -> SYNC -> all four trigger PDOs ->
+  SYNC. Do not interleave a later group or a drive group into that sequence.
+- Lift interpolation: four RPDO2 points -> one SYNC every 20 ms, after the
+  explicit disable/clear-buffer/preload/enable/start sequence.
+- A partial trigger, TPDO0/required TPDO1 feedback loss, boot-up, CiA-402 fault
+  or heartbeat loss must be observable and recoverable without NMT node reset.
+- A successful `0x1801:02 = 10` write is configuration evidence only; it is not
+  permission to relax feedback supervision or assume a ten-SYNC TPDO cadence.
 
 ### Bench tests without drives attached
 
@@ -416,6 +445,17 @@ For steering:
 - Document physical units at each API boundary.
 - Update existing project documents only when the change affects architecture,
   wiring, safety behavior, configuration, or test procedure.
+- Keep production documentation and historical analyzer evidence distinct. The
+  current PDO mapping source is `doc/CANOPEN_PDO_MAPPING_RECORD_V1.md`; remote
+  operation is `doc/ECU/遥控操作逻辑说明书.md`; current field outcomes are in
+  `doc/ECU/整车调试记录_2026-07-07.md`. Any older debug record that recommends a
+  superseded mapping, rate, mode, or safety path must carry an explicit archive
+  notice and a link to the current source. Do not silently retain an obsolete
+  “current/recommended/default” claim.
+- Do not delete raw analyzer logs merely because they are old when a project
+  document cites them as test evidence. Generated `out/` and `tmp/` contents
+  remain untracked; remove them only with a user-requested cleanup scope and
+  after preserving any specifically referenced evidence.
 - Do not create large review documents unless the user requested a document.
 - Chinese task/review documents intended for Windows users should be written as
   UTF-8 with BOM unless the repository explicitly requires otherwise. Source

@@ -417,7 +417,8 @@ static bool canopen_master_sdo_write_allowed(uint16_t index)
            index == ECU_CANOPEN_OBJ_PROFILE_VELOCITY ||
            index == ECU_CANOPEN_OBJ_PROFILE_ACCELERATION ||
            index == ECU_CANOPEN_OBJ_PROFILE_DECELERATION ||
-           index == ECU_CANOPEN_OBJ_FOLLOWING_ERROR_WINDOW;
+           index == ECU_CANOPEN_OBJ_FOLLOWING_ERROR_WINDOW ||
+           index == ECU_CANOPEN_OBJ_FAULT_LATCHED;
 #endif
 }
 
@@ -730,12 +731,13 @@ static bool pop_queued_sdo_read(canopen_master_service_t *service,
     return ok;
 }
 
-bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
-                                              uint8_t node_id,
-                                              uint16_t index,
-                                              uint8_t subindex,
-                                              uint8_t size,
-                                              int32_t value)
+static bool request_sdo_write_impl(canopen_master_service_t *service,
+                                   uint8_t node_id,
+                                   uint16_t index,
+                                   uint8_t subindex,
+                                   uint8_t size,
+                                   int32_t value,
+                                   bool calibration_position_zero_allowed)
 {
     canopen_master_sdo_write_request_t request;
 
@@ -743,7 +745,10 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
         node_id == 0U || index == 0U || !valid_sdo_size(size)) {
         return false;
     }
-    if (!canopen_master_sdo_write_allowed(index)) {
+    if (!canopen_master_sdo_write_allowed(index) &&
+        !(calibration_position_zero_allowed &&
+          index == ECU_CANOPEN_OBJ_ACTUAL_POSITION &&
+          subindex == 0U && size == 4U && value == 0)) {
         service->snapshot.dropped_command_count++;
         service->snapshot.command_error_count++;
         service->snapshot.last_download_index = index;
@@ -797,6 +802,35 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
     service->snapshot.queued_command_count = service->command_queue_count;
     taskEXIT_CRITICAL();
     return true;
+}
+
+bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
+                                              uint8_t node_id,
+                                              uint16_t index,
+                                              uint8_t subindex,
+                                              uint8_t size,
+                                              int32_t value)
+{
+    return request_sdo_write_impl(service,
+                                  node_id,
+                                  index,
+                                  subindex,
+                                  size,
+                                  value,
+                                  false);
+}
+
+bool canopen_master_service_request_calibration_position_zero(
+    canopen_master_service_t *service,
+    uint8_t node_id)
+{
+    return request_sdo_write_impl(service,
+                                  node_id,
+                                  ECU_CANOPEN_OBJ_ACTUAL_POSITION,
+                                  0U,
+                                  4U,
+                                  0,
+                                  true);
 }
 
 bool canopen_master_service_request_sdo_read(canopen_master_service_t *service,

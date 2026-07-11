@@ -398,7 +398,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "fresh[d=0x%02x s=0x%02x] hb[d=0x%02x s=0x%02x] fault[d=0x%02x s=0x%02x] "
            "steer_gate[allow=%s inh=%u/%s] "
            "presteer[hold=%s ready=%s track_ready=%s miss=0x%02x] "
-           "recover=%lu consec_fail=%lu last_recover_ms=%lu\r\n",
+           "recover=%lu consec_fail=%lu last_recover_ms=%lu "
+           "node_recover=0x%02x stale=0x%02x partial=%s steer_resync=%s partial_ok=%lu\r\n",
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_dropped_count,
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_tx_count,
@@ -428,7 +429,12 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned int)snapshot->presteer_missing_axis_mask,
            (unsigned long)snapshot->can2_realtime_transient_recovery_count,
            (unsigned long)snapshot->can2_realtime_consecutive_failure_count,
-           (unsigned long)snapshot->can2_realtime_last_recovery_ms);
+           (unsigned long)snapshot->can2_realtime_last_recovery_ms,
+           (unsigned int)snapshot->can2_node_recovery_pending_mask,
+           (unsigned int)snapshot->can2_stale_feedback_mask,
+           bool_text(snapshot->can2_partial_group_recovery_active),
+           bool_text(snapshot->can2_recovery_steer_sync_pending),
+           (unsigned long)snapshot->can2_partial_group_recovery_count);
 
     /* Keep hydraulic commissioning observable without enabling the full verbose
      * monitor.  The full verbose block is intentionally heavy and can disturb

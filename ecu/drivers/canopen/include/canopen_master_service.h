@@ -377,6 +377,13 @@ bool canopen_master_service_request_sdo_write(canopen_master_service_t *service,
                                               uint8_t size,
                                               int32_t value);
 
+/* Calibration-only write path.  The generic production SDO API intentionally
+ * rejects actual-position writes; steering homing uses this narrow API after
+ * mechanical-center verification. */
+bool canopen_master_service_request_calibration_position_zero(
+    canopen_master_service_t *service,
+    uint8_t node_id);
+
 /* Queue one SDO upload through CANopenNode.
  *
  * The latest completed upload is exposed in canopen_master_snapshot_t. Callers

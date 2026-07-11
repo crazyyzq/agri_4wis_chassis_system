@@ -222,7 +222,6 @@ def test_canopen_and_modbus_protocols_are_library_backed(root: pathlib.Path) -> 
     ignored_prefixes = (
         "ecu/sdk_env_v1.11.0/",
         "ecu/apps/agri_chassis_control_cpu0/build/",
-        "docs/superpowers/",
     )
     forbidden_patterns = [
         re.compile("can" + "open_frame"),
@@ -530,6 +529,7 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
     ]:
         assert token in steer_zero_py, token
     assert "--reset-at-midpoint-to-zero" not in steer_zero_py
+    assert 'default="fail"' in steer_zero_py
     assert "NMT_COMMAND_RESET_NODE" not in steer_zero_py
     assert "write_home_offsets_607c" not in steer_zero_py
     assert "--write-home-offset-607c" not in steer_zero_py
@@ -610,23 +610,31 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
         "MOTION_STEER_ZERO_CAL_SEARCH_RIGHT",
         "MOTION_STEER_ZERO_CAL_RETURN_MID",
         "MOTION_STEER_ZERO_CAL_WRITE_ZERO",
+        "MOTION_STEER_ZERO_CAL_VERIFY_ZERO",
         "MOTION_STEER_ZERO_CAL_FAULT",
     ]:
         assert token in motion_h, token
     for token in [
         "steer_zero_calibration_step",
-        "0x6064",
+        "ECU_CANOPEN_OBJ_ACTUAL_POSITION",
         "canopen_master_service_request_sdo_write",
         "build_steer_zero_velocity_rpdo_request",
         "ECU_STEER_ZERO_PROTECTION_CURRENT_10MA",
         "ECU_STEER_ZERO_STALL_DWELL_MS",
+        "ECU_CANOPEN_OBJ_FAULT_LATCHED",
         "steer_zero_left_direction_sign",
         "steer_zero_prepare_velocity_phase",
         "steer_zero_calibration_return_last_error_counts",
+        "steer_zero_verify_zero",
     ]:
         assert token in motion_c, token
     assert "NMT_COMMAND_RESET_NODE" not in motion_c
     assert "0x607C" not in motion_c
+    return_mid = motion_c.split("static bool steer_zero_run_return_mid", 1)[1].split(
+        "static bool steer_zero_write_zero_step", 1
+    )[0]
+    assert "Never redefine an arbitrary timeout position" in return_mid
+    assert "steer_zero_calibration_midpoint_counts[wheel] =" not in return_mid
 
 
 def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path) -> None:
@@ -809,7 +817,7 @@ def test_can2_realtime_transient_pdo_failure_recovers_without_latching(root: pat
     assert "canopen_master_service_cancel_realtime_pdo(canopen)" in recover_fn
     assert "canopen_master_service_recover_transport(canopen)" in recover_fn
     assert "state->steer_pending_target[wheel] = true" in recover_fn
-    assert "state->drive_pending_velocity[wheel] = true" in recover_fn
+    assert "force_can2_drive_safe_stop_intent(state)" in recover_fn
     assert "state->steer_group_degraded = latch_required" in recover_fn
 
     fail_steer_fn = motion_c.split("static bool fail_active_steer_group", 1)[1].split(
@@ -820,6 +828,77 @@ def test_can2_realtime_transient_pdo_failure_recovers_without_latching(root: pat
     assert "recover_or_latch_can2_transient_failure" in fail_steer_fn
     monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
     assert "recover=%lu consec_fail=%lu last_recover_ms=%lu" in monitor_c
+
+
+def test_can2_node_feedback_loss_and_partial_group_failure_self_recover_safely(
+    root: pathlib.Path,
+) -> None:
+    """CAN2 recovery must clear faults without replaying stale traction intent."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    service_c = read(root, "ecu/drivers/canopen/src/canopen_master_service.c")
+
+    assert "ECU_CANOPEN_MOTION_FEEDBACK_STALE_RECOVERY_MS" in config_h
+    assert "ECU_CANOPEN_PARTIAL_GROUP_RECOVERY_STABLE_MS" in config_h
+    for token in [
+        "can2_node_recovery_pending_mask",
+        "can2_node_recovery_entry_mask",
+        "can2_stale_feedback_mask",
+        "can2_partial_group_recovery_active",
+        "can2_recovery_steer_sync_pending",
+        "can2_recovery_steer_group_sequence",
+    ]:
+        assert token in motion_h, token
+
+    observe = motion_c.split("static void observe_can2_node_recovery_state", 1)[1].split(
+        "static bool can2_all_motion_nodes_operation_enabled_fresh", 1
+    )[0]
+    assert "feedback.last_tpdo0_ms" in observe
+    assert "feedback.last_tpdo1_ms" in observe
+    assert "operational_heartbeat_recent" in observe
+    assert "state->can2_node_recovery_pending_mask |= bit" in observe
+    assert "state->can2_node_recovery_entry_mask |= bit" in observe
+
+    flush = motion_c.split("ecu_device_apply_result_t motion_device_flush_realtime", 1)[1]
+    recovery_branch = flush.split(
+        "if (state->can2_node_recovery_pending_mask != 0U)", 1
+    )[1].split("if (state->can2_partial_group_recovery_active)", 1)[0]
+    assert "state->can2_node_recovery_entry_mask != 0U" in recovery_branch
+    assert "state->can2_node_recovery_entry_mask = 0U" in recovery_branch
+    assert "state->drive_group_active || state->steer_group_active" not in recovery_branch
+
+    recovery = motion_c.split("static void service_can2_node_recovery", 1)[1].split(
+        "static void service_can2_partial_group_recovery", 1
+    )[0]
+    assert "ECU_CANOPEN_OBJ_FAULT_LATCHED" in recovery
+    assert "SERVO_DRIVE_CONTROL_FAULT_RESET" in recovery
+    assert "SERVO_DRIVE_MODE_PROFILE_VELOCITY" in recovery
+    assert "SERVO_DRIVE_MODE_PROFILE_POSITION" in recovery
+    assert "CANOPEN_MASTER_DEBUG_COMMAND_NMT_RESET" not in recovery
+
+    partial = motion_c.split("static void service_can2_partial_group_recovery", 1)[1].split(
+        "static void reset_can2_realtime_motion_state", 1
+    )[0]
+    assert "drive_safe_stop_required(state)" in partial
+    assert "can2_all_motion_nodes_operation_enabled_fresh(canopen)" in partial
+    assert "state->steer_group_degraded = false" in partial
+    assert "state->can2_recovery_steer_sync_pending = true" in partial
+
+    apply_fn = motion_c.split("ecu_device_apply_result_t motion_device_apply", 1)[1].split(
+        "ecu_device_apply_result_t motion_device_flush_realtime", 1
+    )[0]
+    assert "can2_recovery_allows_drive" in apply_fn
+    assert "!state->can2_recovery_steer_sync_pending" in apply_fn
+
+    finish = motion_c.split("static void finish_completed_steer_group", 1)[1].split(
+        "static void clean_cancel_active_steer_group", 1
+    )[0]
+    assert "completed_group_sequence" in finish
+    assert "state->can2_recovery_steer_sync_pending = false" in finish
+
+    assert "ECU_CANOPEN_OBJ_FAULT_LATCHED" in service_c
 
 
 def test_can2_steering_startup_enables_position_mode_before_tpdo_gate(root: pathlib.Path) -> None:
@@ -2260,7 +2339,6 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
 
     for token in [
         "LIFT_INTERPOLATION_STATE_CONFIGURING",
-        "LIFT_INTERPOLATION_STATE_LEVELING",
         "LIFT_INTERPOLATION_STATE_PRELOADING",
         "LIFT_INTERPOLATION_STATE_TRIGGERING",
         "LIFT_INTERPOLATION_STATE_RUNNING",
@@ -2325,7 +2403,7 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
     assert "ECU_LIFT_STALL_TIMEOUT_MS" in config_h
     assert "canopen_master_service_sdo_download_idle" in lift_c
 
-    assert "#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (10U)" in config_h
+    assert "#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (3U)" in config_h
     assert "#define ECU_CANOPEN_LIFT_ENABLE_SETTLE_MS         (1500U)" in config_h
     assert "lift_enable_settle_until_ms" in lift_h
     assert "ECU_CANOPEN_LIFT_ENABLE_SETTLE_MS" in lift_c
@@ -2363,14 +2441,11 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
     assert "ECU_LIFT_SYNC_RUNNING_TOLERANCE_COUNTS" not in running_sync
     assert "ECU_LIFT_SYNC_RECOVERY_TOLERANCE_COUNTS" not in running_sync
     assert "ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS" in final_sync
-    assert "lift_level_target_for_direction" in lift_c
-    assert "lift_level_target_position_counts" in lift_h
-    assert "LIFT_INTERPOLATION_STATE_LEVELING" in lift_c
-    assert (
-        lift_c.count(
-            "lift_interpolation_delta_counts(state, direction, now_ms)"
-        ) == 1
-    )
+    assert "lift_level_target_for_direction" not in lift_c
+    assert "lift_level_target_position_counts" not in lift_h
+    assert "LIFT_INTERPOLATION_STATE_LEVELING" not in lift_c
+    assert "lift_stream_total_distance" in lift_c
+    assert "remaining_counts" in lift_c
     assert "#define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (10.0f)" in config_h
     assert "#define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (490.0f)" in config_h
 
@@ -2458,11 +2533,36 @@ def test_can3_lift_progress_stall_soft_recovers_without_axis_disable(
     assert "visible jerk" in stall_block
     assert "same absolute-position stream" in stall_block
     assert "state->lift_interpolation_reject_count++" in stall_block
-    assert "lift_stream_reset_trajectory(state, now_ms)" in stall_block
-    assert "state->lift_progress_initialized = false" in stall_block
+    assert "lift_progress_watchdog_rebaseline(state, now_ms)" in stall_block
+    assert "lift_stream_reset_trajectory(state, now_ms)" not in stall_block
     assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" not in stall_block
     assert "LIFT_INTERPOLATION_STATE_STOPPING" not in stall_block
     assert "state->lift_recovery_not_before_ms" not in stall_block
+
+
+def test_can3_lift_uses_script_equivalent_per_axis_trajectory_without_pretrigger_leveling(
+    root: pathlib.Path,
+) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (3U)" in config_h
+    assert "(75000)" in config_h.split(
+        "#define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS", 1
+    )[1].split("#define ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR", 1)[0]
+    assert "ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR" in config_h
+    assert "ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS" in config_h
+    assert "LIFT_INTERPOLATION_STATE_LEVELING" not in lift_h
+    assert "lift_stream_total_distance_counts" in lift_h
+    assert "const int32_t final_delta = command_target_position_counts - origin" in lift_c
+    assert "((int64_t)final_delta *" in lift_c
+    assert "ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR" in lift_c
+    settling = lift_c.split(
+        "LIFT_INTERPOLATION_STATE_SETTLING", 2
+    )[2].split("if (state->lift_interpolation_state == LIFT_INTERPOLATION_STATE_STOPPED)", 1)[0]
+    assert "LIFT_INTERPOLATION_STATE_PRELOADING" in settling
+    assert "LIFT_INTERPOLATION_STATE_LEVELING" not in settling
 
 
 def test_can3_lift_neutral_during_setup_runs_disable_setup_before_stopped(
@@ -3075,14 +3175,7 @@ def test_no_transitional_language_in_active_engineering_files(root: pathlib.Path
         "not " + "implemented",
     ]
     scanned_roots = [root / "ecu", root / "tests", root / "docs"]
-    ignored = {
-        "docs/superpowers/plans/2026-06-23-ecu-board-functional-test-implementation.md",
-        "docs/superpowers/plans/2026-06-27-ecu-main-control-framework.md",
-        "docs/superpowers/plans/2026-06-28-ecu-device-control-middleware.md",
-        "docs/superpowers/plans/2026-06-28-modbus-virtual-adc-canopen-command-debug.md",
-        "docs/superpowers/specs/2026-06-28-ecu-device-control-middleware-design.md",
-        "docs/superpowers/specs/2026-06-28-modbus-virtual-adc-canopen-command-debug-design.md",
-    }
+    ignored = set()
     for folder in scanned_roots:
         for path in folder.rglob("*"):
             if not path.is_file():

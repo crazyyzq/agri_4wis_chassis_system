@@ -1,5 +1,9 @@
 # 2026-06-30 Whole Vehicle Communication Test Log
 
+> Historical communication-only evidence. It predates the current PDO profile,
+> CAN2/CAN3 real-time control and recovery logic; it must not be used as an
+> acceptance record for motion, hydraulic or high-voltage behavior.
+
 Test time: 2026-06-30 20:22:13 +08:00
 
 ## Test boundary

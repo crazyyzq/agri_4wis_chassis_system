@@ -1,5 +1,10 @@
 # CANopen Node5 RPDO2 Interpolation Debug Record
 
+> Archive only, updated 2026-07-12. This is a Node5 feasibility experiment;
+> it is not the production steering path. Production steering uses current7
+> RPDO1 position groups, while RPDO2 is reserved for CAN3 synchronized lift
+> interpolation.
+
 Date: 2026-07-06
 
 Scope:
@@ -274,4 +279,3 @@ out/node5_rpdo2_debug_rpdo2-short_20260706_194346
 out/node5_try_2010_sub1_mapping
 out/node5_restore_rpdo2_after_2010_abort
 ```
-

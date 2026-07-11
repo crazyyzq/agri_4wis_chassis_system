@@ -59,7 +59,7 @@ DRIVE_GEAR_REDUCTION = 86.6
 STEER_GEAR_REDUCTION = 490.0
 DRIVE_WHEEL_DIAMETER_M = 0.580
 DRIVE_WHEEL_CIRCUMFERENCE_M = math.pi * DRIVE_WHEEL_DIAMETER_M
-SERVO_COMMISSIONING_MAX_RPM = 2400.0
+SERVO_COMMISSIONING_MAX_RPM = 3000.0
 DRIVE_MOTOR_MAX_RPM = SERVO_COMMISSIONING_MAX_RPM
 SERVO_COMMISSIONING_MAX_ACCEL_RPS2 = 50.0
 SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 = 500_000
@@ -77,7 +77,7 @@ DRIVE_MAX_SPEED_MPS = (
 )
 STEER_DEG_TO_COUNTS = ENCODER_COUNTS_PER_MOTOR_REV * STEER_GEAR_REDUCTION / 360.0
 STEER_MAX_COUNTS = int(round(90.0 * STEER_DEG_TO_COUNTS))
-SERVO_MAX_VELOCITY_UNITS_FROM_RPM = 4_000_000
+SERVO_MAX_VELOCITY_UNITS_FROM_RPM = 5_000_000
 DEFAULT_STEER_PROFILE_VELOCITY = 3_000_000
 DEFAULT_PRESTEER_TOLERANCE_COUNTS = 35_000
 DEFAULT_PRESTEER_TIMEOUT_SEC = 8.0
@@ -1088,13 +1088,13 @@ def main() -> int:
     if max_requested_speed > DRIVE_MAX_SPEED_MPS:
         print(
             f"FAILED: requested {max_requested_speed:.3f} m/s exceeds mechanical max "
-            f"{DRIVE_MAX_SPEED_MPS:.3f} m/s from 2400 rpm, 86.6:1 and 580 mm wheel",
+            f"{DRIVE_MAX_SPEED_MPS:.3f} m/s from 3000 rpm, 86.6:1 and 580 mm wheel",
             file=sys.stderr,
         )
         return 1
     if args.profile_velocity > SERVO_MAX_VELOCITY_UNITS_FROM_RPM:
         print(
-            f"FAILED: profile velocity {args.profile_velocity} exceeds 2400 rpm limit "
+            f"FAILED: profile velocity {args.profile_velocity} exceeds 3000 rpm limit "
             f"{SERVO_MAX_VELOCITY_UNITS_FROM_RPM}",
             file=sys.stderr,
         )

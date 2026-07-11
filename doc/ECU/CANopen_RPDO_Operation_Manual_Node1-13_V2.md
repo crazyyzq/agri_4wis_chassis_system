@@ -1,5 +1,9 @@
 # CANopen RPDO Operation Manual for Node1-13 V4 Current7 Sync1
 
+> Current operational reference, updated 2026-07-12. The mapping source is
+> `doc/CANOPEN_PDO_MAPPING_RECORD_V1.md` and `tools/canopen_pdo_config`.
+> Historic Node5-only/compact6 experiments are not production configuration.
+
 This document records the current PDO profile configured on the BC/BC2 drives by
 `tools/canopen_pdo_config/configure_all_nodes.py` and gives byte-level commands
 for bench commissioning. It does not replace the vendor CANopen manual or ECU
@@ -39,7 +43,7 @@ All node IDs use the same PDO layout. `N` means node ID.
 | RPDO2 interpolation point | `0x400 + N` | 1 | 4 | `60C1:01` i32 |
 | RPDO3 torque/current command | `0x500 + N` | 1 | 5 | `6040:00` u16 + `6060:00` i8 + `2340:00` i16 |
 | TPDO0 feedback | `0x180 + N` | 1 | 8 | `6064:00` i32 + `606C:00` i32 |
-| TPDO1 status/current | `0x280 + N` | 4 | 8 | `2183:00` u32 + `6041:00` u16 + `221C:00` i16 |
+| TPDO1 status/current | `0x280 + N` | 10 | 8 | `2183:00` u32 + `6041:00` u16 + `221C:00` i16 |
 
 `6060:00` is carried inside RPDO0/RPDO1/RPDO3. This is intentionally less compact
 than a 6-byte speed/position command, but it is safer for whole-machine
@@ -220,7 +224,7 @@ RPDO1 type 1
 RPDO2 type 1
 RPDO3 type 1
 TPDO0 type 1
-TPDO1 type 4
+TPDO1 type 10
 SYNC COB-ID 0x080
 ```
 

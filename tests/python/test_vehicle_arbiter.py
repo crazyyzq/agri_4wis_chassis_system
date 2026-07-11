@@ -430,6 +430,12 @@ def test_motion_units_are_mps_and_realtime_smoothing_is_discrete(root: pathlib.P
     ]:
         assert token in config_h, token
 
+    # The analyzer simulator must use the same servo ceiling as the ECU
+    # configuration; otherwise it rejects valid commissioning profiles.
+    assert "#define ECU_SERVO_MOTION_MAX_RPM                     (3000.0f)" in config_h
+    assert "SERVO_COMMISSIONING_MAX_RPM = 3000.0" in debug_py
+    assert "SERVO_MAX_VELOCITY_UNITS_FROM_RPM = 5_000_000" in debug_py
+
     assert "drive_direction_sign[ECU_WHEEL_COUNT]" in config_h
     assert ".drive_direction_sign = {" in config_c
     assert "ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN" in config_c

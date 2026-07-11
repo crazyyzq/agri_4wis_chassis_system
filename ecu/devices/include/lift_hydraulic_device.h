@@ -23,7 +23,6 @@ typedef enum {
     LIFT_INTERPOLATION_STATE_SWITCHING_ON,
     LIFT_INTERPOLATION_STATE_ENABLING,
     LIFT_INTERPOLATION_STATE_SETTLING,
-    LIFT_INTERPOLATION_STATE_LEVELING,
     LIFT_INTERPOLATION_STATE_PRELOADING,
     LIFT_INTERPOLATION_STATE_TRIGGERING,
     LIFT_INTERPOLATION_STATE_RUNNING,
@@ -84,8 +83,8 @@ typedef struct {
     int32_t lift_stream_origin_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_progress_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_command_target_position_counts;
-    int32_t lift_level_target_position_counts;
     int32_t lift_stream_planned_delta_counts;
+    int32_t lift_stream_total_distance_counts;
     int32_t lift_stream_velocity_counts_per_sec;
     int32_t last_pump_velocity_units;
     int32_t pump_active_velocity_units;
@@ -127,7 +126,8 @@ void lift_hydraulic_device_init(lift_hydraulic_device_state_t *state);
 /* Convert a logical pump request into a motor-side velocity command.
  *
  * Zero means stop.  A positive logical request means "run hydraulic pump" and
- * is clamped to the configured 1500..2400 rpm working range.  Field
+ * is clamped to ECU_HYDRAULIC_PUMP_WORK_RPM through
+ * ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM. Field
  * commissioning confirms the physical pump motor must run only in reverse; if
  * a future code path would emit positive motor velocity, this helper clamps it
  * to zero.

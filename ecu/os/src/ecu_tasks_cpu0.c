@@ -574,6 +574,16 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.can2_realtime_consecutive_failure_count;
     out->can2_realtime_last_recovery_ms =
         s_runtime.executor.can2_realtime_last_recovery_ms;
+    out->can2_node_recovery_pending_mask =
+        s_runtime.executor.can2_node_recovery_pending_mask;
+    out->can2_stale_feedback_mask =
+        s_runtime.executor.can2_stale_feedback_mask;
+    out->can2_partial_group_recovery_active =
+        s_runtime.executor.can2_partial_group_recovery_active;
+    out->can2_recovery_steer_sync_pending =
+        s_runtime.executor.can2_recovery_steer_sync_pending;
+    out->can2_partial_group_recovery_count =
+        s_runtime.executor.can2_partial_group_recovery_count;
     out->presteer_drive_hold_active =
         s_runtime.executor.presteer_drive_hold_active;
     out->presteer_target_reached =

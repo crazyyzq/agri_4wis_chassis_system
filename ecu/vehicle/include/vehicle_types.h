@@ -113,6 +113,11 @@ typedef struct {
     uint32_t can2_realtime_transient_recovery_count;
     uint32_t can2_realtime_consecutive_failure_count;
     uint32_t can2_realtime_last_recovery_ms;
+    uint8_t can2_node_recovery_pending_mask;
+    uint8_t can2_stale_feedback_mask;
+    bool can2_partial_group_recovery_active;
+    bool can2_recovery_steer_sync_pending;
+    uint32_t can2_partial_group_recovery_count;
     uint32_t can2_command_stale_count;
     uint32_t can2_last_command_stale_ms;
     bool presteer_drive_hold_active;

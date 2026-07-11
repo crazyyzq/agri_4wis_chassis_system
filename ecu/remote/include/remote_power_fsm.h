@@ -30,8 +30,9 @@ void remote_power_fsm_init(remote_power_fsm_t *fsm, uint32_t now_ms);
  * The release request is emitted even if orderly shutdown preconditions reject
  * the higher-level state transition, because the logical high-voltage request
  * must not remain latched after the operator explicitly disables high voltage.
- * The field value is 350 ms.  CH4 high still uses the shared SBUS high
- * threshold, so 1800..1950 PPM is accepted as a right-stick power request.
+ * The field value is 350 ms. CH4 high uses the shared
+ * ECU_SBUS_PPM_HIGH_MIN..ECU_SBUS_PPM_HIGH threshold range, so the power
+ * gesture remains calibration-owned rather than duplicated here.
  * Rejected requests are reported immediately and are not queued.
  */
 void remote_power_fsm_update(remote_power_fsm_t *fsm,

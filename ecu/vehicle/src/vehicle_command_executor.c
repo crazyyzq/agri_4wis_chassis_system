@@ -150,6 +150,16 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.can2_realtime_consecutive_failure_count;
     executor->can2_realtime_last_recovery_ms =
         s_runtime.motion.can2_realtime_last_recovery_ms;
+    executor->can2_node_recovery_pending_mask =
+        s_runtime.motion.can2_node_recovery_pending_mask;
+    executor->can2_stale_feedback_mask =
+        s_runtime.motion.can2_stale_feedback_mask;
+    executor->can2_partial_group_recovery_active =
+        s_runtime.motion.can2_partial_group_recovery_active;
+    executor->can2_recovery_steer_sync_pending =
+        s_runtime.motion.can2_recovery_steer_sync_pending;
+    executor->can2_partial_group_recovery_count =
+        s_runtime.motion.can2_partial_group_recovery_count;
     executor->presteer_drive_hold_active =
         s_runtime.motion.presteer_drive_hold_active;
     executor->presteer_target_reached =

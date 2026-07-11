@@ -2,6 +2,10 @@
 
 日期：2026-07-07
 
+> 历史调试操作记录，已于 2026-07-12 对齐当前 `current7 + sync1` PDO
+> 契约。它只能指导隔离台架调试；生产参数、故障恢复和整车安全逻辑必须以
+> `ecu/config/include/ecu_config.h`、PDO 契约和当前 ECU 代码为准。
+
 适用范围：
 
 - CAN 分析仪 CAN1 接 ECU CAN2，也就是整车行走/转向 CANopen 网络。
@@ -52,7 +56,7 @@ RPDO1: 0x300 + node, type 1, DLC 7
   6060:00 i8  mode = 1
   607A:00 i32 target position
 
-RPDO2: 0x400 + node, type 4, DLC 4
+RPDO2: 0x400 + node, type 1, DLC 4
   60C1:01 i32 interpolated position
 
 RPDO3: 0x500 + node, type 1, DLC 5
@@ -64,7 +68,7 @@ TPDO0: 0x180 + node, type 1, DLC 8
   6064:00 i32 actual position
   606C:00 i32 actual velocity
 
-TPDO1: 0x280 + node, type 4, DLC 8
+TPDO1: 0x280 + node, configured type 10, DLC 8
   2183:00 u32 latched fault
   6041:00 u16 statusword
   221C:00 i16 actual current

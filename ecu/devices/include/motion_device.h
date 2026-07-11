@@ -61,6 +61,7 @@ typedef enum {
     MOTION_STEER_ZERO_CAL_RETREAT_RIGHT,
     MOTION_STEER_ZERO_CAL_RETURN_MID,
     MOTION_STEER_ZERO_CAL_WRITE_ZERO,
+    MOTION_STEER_ZERO_CAL_VERIFY_ZERO,
     MOTION_STEER_ZERO_CAL_COMPLETE,
     MOTION_STEER_ZERO_CAL_FAULT
 } motion_steer_zero_calibration_state_t;
@@ -160,10 +161,18 @@ typedef struct {
     uint8_t can2_motion_operational_nmt_sent_mask;
     uint32_t can2_motion_operational_nmt_last_ms;
     uint8_t can2_node_recovery_pending_mask;
+    uint8_t can2_node_recovery_entry_mask;
     uint32_t can2_node_bootup_seen[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
     uint32_t can2_node_recovery_last_ms[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
     uint32_t can2_node_recovery_count[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
     uint8_t can2_node_recovery_attempts[ECU_CANOPEN_CAN2_MOTION_NODE_COUNT];
+    uint8_t can2_stale_feedback_mask;
+    bool can2_partial_group_recovery_active;
+    bool can2_recovery_steer_sync_pending;
+    uint32_t can2_recovery_steer_group_sequence;
+    uint32_t can2_partial_group_recovery_start_ms;
+    uint32_t can2_partial_group_ready_since_ms;
+    uint32_t can2_partial_group_recovery_count;
     bool drive_safe_stop_pending;
     uint32_t drive_safe_stop_count;
     uint32_t can2_feedback_last_sync_ms;

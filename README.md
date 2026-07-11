@@ -4,8 +4,14 @@
 
 ## 当前阶段
 
-板级功能测试已经完成，主分支已经进入主控软件框架实现阶段。
-当前代码已建立主控框架和可配置硬件适配层：业务逻辑只产生车辆级指令，CANopen、Modbus、DIO、ADC、UART 等硬件细节集中在 `config`、`drivers`、`protocol` 和 `devices` 层。
+板级功能测试已经完成。当前主分支包含 CPU0 车辆控制、CAN2 行走/转向、
+CAN3 抬升/液压、CAN1 电源、SBUS、Modbus ADC 和 DIO 的完整软件链路；业务
+逻辑只产生车辆级指令，硬件细节集中在 `config`、`drivers`、`protocol` 和
+`devices` 层。
+
+当前代码已通过静态契约测试和目标构建，但整车运动、CAN2 自动恢复、转向找零、
+变地隙与液压仍必须按现行调试记录完成实车验证。软件构建成功不等于设备已接受
+CANopen 命令，也不等于车辆已完成安全验收。
 
 已完成验证的板级功能包括：
 
@@ -39,7 +45,7 @@ ecu/sdk_env_v1.11.0/
 
 ```text
 doc/                         硬件资料、需求文档、外设资料和原理图相关资料
-docs/                        设计说明、实施计划、项目进度和代码阅读指南
+docs/                        当前代码阅读指南、配置待确认项和历史测试证据
 ecu/apps/                    CPU0/CPU1 应用入口
 ecu/common/                  通用类型和时间定义
 ecu/config/                  全局配置、阈值、周期和优先级
@@ -77,15 +83,15 @@ tools/                       静态检查工具
 14. `ecu/protocol/*/include/*.h`
 15. `ecu/ipc/include/ipc_snapshot.h`
 
-## 当前框架文档
+## 当前工程文档
 
 - 主控框架阅读指南：`docs/ecu-main-control-architecture.md`
-- 当前进度记录：`docs/ecu-main-control-progress.md`
-- 主控框架实施计划：`docs/superpowers/plans/2026-06-27-ecu-main-control-framework.md`
-- 硬件适配框架实施计划：`docs/superpowers/plans/2026-06-27-ecu-full-hardware-framework.md`
 - 需求来源：`doc/ECU_Project_Implementation_v1.4.md`
+- 当前 PDO 映射契约：`doc/CANOPEN_PDO_MAPPING_RECORD_V1.md`
+- 遥控操作说明：`doc/ECU/遥控操作逻辑说明书.md`
+- 当前整车调试记录：`doc/ECU/整车调试记录_2026-07-07.md`
 
-## 可现场修改的猜测配置
+## 可现场标定的配置
 
 所有当前需要现场确认的硬件值都应集中在 `ecu/config/include/ecu_config.h` 和 `ecu/config/src/ecu_config.c`：
 
@@ -108,7 +114,7 @@ python tests\python\run_tests.py
 python tools\check_no_forbidden_patterns.py
 ```
 
-这些检查主要保护分层边界、安全边界、SBUS 阈值集中管理、猜测硬件参数集中管理、设备适配边界和 CPU0/CPU1 职责划分。
+这些检查主要保护分层边界、安全边界、SBUS 阈值集中管理、硬件参数集中管理、设备适配边界和 CPU0/CPU1 职责划分。
 
 ## SEGGER Embedded Studio 工程
 

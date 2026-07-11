@@ -776,7 +776,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--return-timeout-action",
         choices=["fail", "write-current-zero"],
-        default="write-current-zero",
+        default="fail",
         help=(
             "fail keeps calibration strict; write-current-zero accepts current "
             "position if return-to-midpoint stalls, matching field emergency workflow"

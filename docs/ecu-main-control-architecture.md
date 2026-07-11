@@ -2,6 +2,9 @@
 
 This document explains how to read the ECU control code from `main()` outward. Keep it open while reviewing the source tree.
 
+> Updated 2026-07-12. This is a code-reading guide, not a substitute for the
+> current PDO contract, remote operation manual, or hardware acceptance record.
+
 ## Current architecture
 
 CPU0 owns all safety-critical decisions and all final actuator output. CPU1 is reserved for non-critical sensing, communication snapshots and diagnostics publication.
@@ -20,6 +23,13 @@ apps/os
 
 Business logic must not write CAN, GPIO, UART, hydraulic outputs or warning lights directly. It produces structured requests and final actuator commands. The executor fans the final command out through device adapters.
 
+CAN2 and CAN3 retain exclusive real-time ownership in their respective tasks.
+In particular, `motion_device_flush_realtime()` owns Node1–8 PDO scheduling and
+recovery: an interrupted/partial group first creates explicit zero traction
+intent, repairs individual nodes through the CANopen service, re-synchronizes
+all four steering axes, and only then permits a newly published drive command.
+No remote, vehicle or diagnostic task may inject a raw motion PDO around it.
+
 ## Top-level layout
 
 ```text
@@ -33,7 +43,7 @@ ecu/
   drivers/                      CAN, DIO, ADC, UART and SBUS service boundaries.
   ipc/                          CPU0/CPU1 snapshot contracts.
   os/                           FreeRTOS task orchestration helpers.
-  protocol/                     Pure protocol helpers: SBUS, CANopen and Modbus RTU.
+  protocol/                     Pure protocol helpers: SBUS and CAN1 power framing.
   remote/                       Remote-control interpretation FSMs.
   vehicle/                      Command arbitration, safety clamping, executor and vehicle state.
 ```
@@ -146,7 +156,7 @@ These modules convert high-level requests into normalized command structures. Th
 
 ## 7. Read protocol, driver and device layers
 
-Protocol helpers:
+CANopen/Modbus service boundaries:
 
 - `ecu/drivers/canopen/include/canopen_master_service.h`
 - `ecu/drivers/canopen/src/canopen_master_service.c`

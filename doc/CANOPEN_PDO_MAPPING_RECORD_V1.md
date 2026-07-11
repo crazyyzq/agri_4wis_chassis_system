@@ -1,4 +1,8 @@
-# CANopen PDO Mapping Record V1
+# CANopen PDO Mapping Record V1 — Current Saved Contract
+
+> Filename is retained for test and tooling compatibility. Its content is the
+> current `current7 + sync1` contract as of 2026-07-12, not the old V1 profile.
+> Historical debug notes are not a production mapping source.
 
 This document is the frozen PDO contract for the agricultural 4WIS chassis ECU.
 All BC / BC2 drives are configured by the offline CAN analyzer maintenance tool.
@@ -14,7 +18,7 @@ during normal boot or runtime.
 | RPDO2 | `0x400 + N` | `60C1:01` 32-bit interpolation point | 4 | `0x01` |
 | RPDO3 | `0x500 + N` | `6040:00` 16-bit + `6060:00` 8-bit + `2340:00` 16-bit | 5 | `0x01` |
 | TPDO0 | `0x180 + N` | `6064:00` 32-bit + `606C:00` 32-bit | 8 | `0x01` |
-| TPDO1 | `0x280 + N` | `2183:00` 32-bit + `6041:00` 16-bit + `221C:00` 16-bit | 8 | `0x04` |
+| TPDO1 | `0x280 + N` | `2183:00` 32-bit + `6041:00` 16-bit + `221C:00` 16-bit | 8 | `0x0A` |
 
 `6060:00` is intentionally included in RPDO0/RPDO1/RPDO3.  This costs one extra
 byte in each speed/position command frame, but each realtime command is
@@ -49,7 +53,7 @@ RPDO2 interpolation:
 
 ```text
 1402:01 = 0x400 + node
-1402:02 = 0x04
+1402:02 = 0x01
 1602:01 = 0x60C10120
 1602:00 = 1
 ```
@@ -79,7 +83,7 @@ TPDO1:
 
 ```text
 1801:01 = 0x280 + node
-1801:02 = 0x04
+1801:02 = 0x0A
 1A01:01 = 0x21830020
 1A01:02 = 0x60410010
 1A01:03 = 0x221C0010

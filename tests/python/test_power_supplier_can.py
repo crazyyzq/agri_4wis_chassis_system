@@ -204,7 +204,7 @@ def test_remote_power_request_timing_matches_field_enable_gesture(root: pathlib.
     assert "ECU_SBUS_PPM_HIGH_MIN            (1800U)" in config_h
     assert ".power_long_press_ms = REMOTE_POWER_LONG_PRESS_MS" in config_c
     assert "350 ms" in power_fsm_h
-    assert "1800..1950 PPM" in power_fsm_h
+    assert "ECU_SBUS_PPM_HIGH_MIN..ECU_SBUS_PPM_HIGH" in power_fsm_h
 
 
 def test_remote_power_down_request_always_clears_hv_intent(root: pathlib.Path) -> None:
