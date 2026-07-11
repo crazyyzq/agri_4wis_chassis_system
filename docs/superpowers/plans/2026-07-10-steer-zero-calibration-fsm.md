@@ -81,4 +81,3 @@
 - [ ] Inhibit normal motion while FSM is active or faulted.
 - [ ] Print compact diagnostics in COM9 monitor.
 - [ ] Run static tests, `git diff --check`, CPU0 CMake/Ninja build, J-Link download, then hardware test with B1 triple press.
-
