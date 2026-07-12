@@ -26,6 +26,15 @@ This file records project defaults that need final confirmation from vehicle wir
     full-stroke lift behavior remains a field-validation item.
 - CAN4 auxiliary bus: project default `500 kbit/s`.
 
+## Frozen encoder position units
+
+- Node1–8 drive/steering: `10000 counts/rev`.
+- Node9–12 lift: `131072 counts/rev`.
+- Node13 hydraulic pump: `10000 counts/rev`.
+
+These are implemented role contracts, not open calibration items. Linear lift
+geometry, steering zero and loaded-machine behavior remain calibration items.
+
 ## Items requiring vehicle calibration
 
 - Remote manual driving limits:

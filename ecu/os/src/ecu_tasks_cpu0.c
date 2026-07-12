@@ -279,9 +279,9 @@ static void refresh_can2_feedback(void)
             break;
         }
         if (feedback->actual_velocity_units >
-                ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS ||
+                ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS ||
             feedback->actual_velocity_units <
-                -ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS) {
+                -ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS) {
             all_drive_zero_speed = false;
         }
     }

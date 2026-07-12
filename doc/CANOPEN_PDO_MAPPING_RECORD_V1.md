@@ -4,6 +4,19 @@
 > current `current7 + sync1` contract as of 2026-07-12, not the old V1 profile.
 > Historical debug notes are not a production mapping source.
 
+## Encoder position units
+
+| Nodes | Role | Position feedback scale |
+|---:|---|---:|
+| 1–4 | drive | 10000 counts/motor revolution |
+| 5–8 | steering | 10000 counts/motor revolution |
+| 9–12 | lift | 131072 counts/motor revolution |
+| 13 | hydraulic pump | 10000 counts/motor revolution |
+
+The PDO object indexes are shared, but these position scales are not. In
+particular, Node9–12 lift position and millimetre conversions must never reuse
+the Node1–8/13 10000-count conversion.
+
 This document is the frozen PDO contract for the agricultural 4WIS chassis ECU.
 All BC / BC2 drives are configured by the offline CAN analyzer maintenance tool.
 ECU firmware must use this contract and must not rewrite PDO mapping objects

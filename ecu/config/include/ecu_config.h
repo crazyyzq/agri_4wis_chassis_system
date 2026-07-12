@@ -269,9 +269,12 @@
 #define ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED (0)
 #define ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS (1000)
 #define ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE      (3.0f)
-#define ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS \
+#define ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS \
     ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
-                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+                ECU_CAN2_MOTION_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_HYDRAULIC_PUMP_ZERO_SPEED_VELOCITY_UNITS \
+    ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
+                ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_CANOPEN_DRIVE_PDO_PERIOD_MS           (20U)
 /* Keep velocity-mode RPDO alive even when the requested speed is unchanged.
  * Several BC/BC2 commissioning tests showed that a steady nonzero velocity
@@ -630,19 +633,26 @@ typedef enum {
  * must not synthesize a local DIO output or 0x2194/OUT1 write for brake
  * release.
  */
-#define ECU_BC_SERVO_ENCODER_COUNTS_PER_REV          (10000.0f)
-#define ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC (10.0f)
-#define ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM \
-    (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV / 0.1f / 60.0f)
+/* Encoder position-count contracts are node-role specific.
+ *
+ * Node1..8 (drive + steering) and Node13 (hydraulic pump) report 10000
+ * position counts per motor revolution. Node9..12 lift axes report 131072
+ * position counts per motor revolution and must never use either 10000-count
+ * conversion below. The velocity objects use 0.1 encoder-count/s units on the
+ * measured Node1..8/13 drives.
+ */
+#define ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV          (10000.0f)
+#define ECU_HYDRAULIC_PUMP_ENCODER_COUNTS_PER_REV       (10000.0f)
+#define ECU_CANOPEN_VELOCITY_UNITS_PER_COUNT_PER_SEC    (10.0f)
+#define ECU_CAN2_MOTION_VELOCITY_UNITS_PER_RPM \
+    ((ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV * \
+      ECU_CANOPEN_VELOCITY_UNITS_PER_COUNT_PER_SEC) / 60.0f)
+#define ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM \
+    ((ECU_HYDRAULIC_PUMP_ENCODER_COUNTS_PER_REV * \
+      ECU_CANOPEN_VELOCITY_UNITS_PER_COUNT_PER_SEC) / 60.0f)
 #define ECU_SERVO_MOTION_MAX_RPM                     (3000.0f)
 /* 3000 rpm * 10000 encoder-count/rev / 0.1 / 60 = 5,000,000 velocity units. */
 #define ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM (5000000)
-/* Profile acceleration/deceleration objects 0x6083/0x6084 are kept at or below
- * 50 motor rev/s^2 during commissioning.  With the installed 2500-line encoder
- * and drive-side 4x decoding, that is 50 * 10000 = 500000 count/s^2.
- */
-#define ECU_SERVO_COMMISSIONING_MAX_ACCEL_RPS2       (50.0f)
-#define ECU_SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 (500000)
 #define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)
 #define ECU_DRIVE_WHEEL_DIAMETER_M                   (0.580f)
 #define ECU_DRIVE_WHEEL_CIRCUMFERENCE_M              (1.822124f)
@@ -660,7 +670,7 @@ typedef enum {
 #define ECU_DRIVE_COMMISSIONING_MAX_SPEED_MPS        (0.50f)
 #define ECU_STEER_GEAR_REDUCTION                     (490.0f)
 #define ECU_STEER_COUNTS_PER_OUTPUT_REV \
-    (ECU_BC_SERVO_ENCODER_COUNTS_PER_REV * ECU_STEER_GEAR_REDUCTION)
+    (ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV * ECU_STEER_GEAR_REDUCTION)
 #define ECU_STEER_POSITION_SPEED_UNITS               (5000000)
 /* Steering has a 490:1 reducer and was field-tested as too slow at the generic
  * old hydraulic-pump 2400 rpm commissioning limit.  CAN2 drive and steering
@@ -669,19 +679,14 @@ typedef enum {
 #if ECU_STEER_POSITION_SPEED_UNITS > ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
 #error ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
 #endif
-#define ECU_LIFT_POSITION_SPEED_UNITS                ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
-/* CAN3 lift calibration is separate from the BC drive/steering 10000-count
- * motor units.  Field measurement on the installed ground-clearance actuator:
+/* CAN3 lift calibration is separate from Node1..8/13 10000-count motor units.
+ * Field measurement on the installed ground-clearance actuator:
  * 131072 count/motor-rev and 12 motor rev per 10 mm linear travel.
  */
 #define ECU_LIFT_ENCODER_COUNTS_PER_REV              (131072.0f)
 #define ECU_LIFT_MOTOR_REVS_PER_MM                   (1.2f)
 #define ECU_LIFT_MM_TO_COUNTS \
     (ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_LIFT_MOTOR_REVS_PER_MM)
-#define ECU_LIFT_PROFILE_VELOCITY_UNITS_PER_MM_S \
-    (ECU_LIFT_MM_TO_COUNTS * ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC)
-#define ECU_LIFT_PROFILE_ACCEL_UNITS_PER_RPS2 \
-    ((ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC) / 100.0f)
 #define ECU_LIFT_SHORTEST_POSITION_COUNTS            (-10000)
 #define ECU_LIFT_LONGEST_POSITION_COUNTS \
     ((int32_t)(-(ECU_LIFT_MM_TO_COUNTS * 490.0f)))
@@ -691,7 +696,9 @@ typedef enum {
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 8.0f))
 /* Analyzer-derived full-stroke lift parameters, 2026-07-11:
  * 5.0 mm/s stream, 8.0 mm/s^2 stream ramp, 75000-count nominal target lead,
- * 24,000,000 profile velocity units and 500,000 profile acceleration units.
+ * 24,000,000 vendor profile-velocity units and 500,000 vendor
+ * profile-acceleration units. These two vendor object values are analyzer
+ * tuned; do not derive them from the Node1..8 10000-count velocity scale.
  * The successful analyzer sequence starts all four trajectories from measured
  * positions and runs 10->490->10 mm without EMCY. 20 mm/s and 7.5 mm/s
  * full-stroke attempts tripped Node9 0x7390.
@@ -740,15 +747,15 @@ typedef enum {
 #define ECU_HYDRAULIC_VALVE_CHANGE_DEADTIME_MS       (10U)
 #define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS \
     ((int32_t)((ECU_HYDRAULIC_PUMP_WORK_RPM * \
-                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+                ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_HYDRAULIC_PUMP_MIN_WORK_VELOCITY_UNITS \
     ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS
 #define ECU_HYDRAULIC_PUMP_MAX_REVERSE_VELOCITY_UNITS \
     ((int32_t)((ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM * \
-                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+                ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS \
     ((int32_t)((ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM * \
-                ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM) + 0.5f))
+                ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_HYDRAULIC_PUMP_DIRECTION_SIGN (-1)
 #define ECU_HYDRAULIC_PUMP_ALLOW_POSITIVE_VELOCITY (0)
 #define ECU_SERVO_COMMAND_CURRENT_RAMP_MA_PER_SEC    (1000)
@@ -769,8 +776,8 @@ typedef enum {
  * wheel gearbox and 580 mm tire diameter so a vehicle-speed request produces a
  * motor-side target accepted by the drive. */
 #define ECU_DRIVE_SPEED_MPS_TO_COUNTS_PER_SEC \
-    ((ECU_BC_SERVO_ENCODER_COUNTS_PER_REV * ECU_DRIVE_GEAR_REDUCTION * \
-      ECU_BC_SERVO_VELOCITY_UNITS_PER_COUNT_PER_SEC) / \
+    ((ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV * ECU_DRIVE_GEAR_REDUCTION * \
+      ECU_CANOPEN_VELOCITY_UNITS_PER_COUNT_PER_SEC) / \
      ECU_DRIVE_WHEEL_CIRCUMFERENCE_M)
 /* Field calibration from installed steering gearbox:
  * 2500-line encoder * 4x drive decoding * 490:1 reduction = 4,900,000 counts

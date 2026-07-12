@@ -673,8 +673,33 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
     assert "#define ECU_LIFT_ENCODER_COUNTS_PER_REV              (131072.0f)" in config_h
     assert "#define ECU_LIFT_MOTOR_REVS_PER_MM                   (1.2f)" in config_h
     assert "ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_LIFT_MOTOR_REVS_PER_MM" in config_h
-    assert "ECU_LIFT_PROFILE_VELOCITY_UNITS_PER_MM_S" in config_h
-    assert "ECU_LIFT_PROFILE_ACCEL_UNITS_PER_RPS2" in config_h
+    assert "ECU_LIFT_PROFILE_VELOCITY_UNITS_PER_MM_S" not in config_h
+    assert "ECU_LIFT_PROFILE_ACCEL_UNITS_PER_RPS2" not in config_h
+
+
+def test_encoder_count_contracts_are_explicit_per_node_role(root: pathlib.Path) -> None:
+    """Node1-8/13 use 10000 counts/rev; lift Node9-12 use 131072."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "#define ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV          (10000.0f)",
+        "#define ECU_HYDRAULIC_PUMP_ENCODER_COUNTS_PER_REV       (10000.0f)",
+        "#define ECU_LIFT_ENCODER_COUNTS_PER_REV              (131072.0f)",
+        "ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV * ECU_STEER_GEAR_REDUCTION",
+        "ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV * ECU_DRIVE_GEAR_REDUCTION",
+        "ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM",
+        "ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_LIFT_MOTOR_REVS_PER_MM",
+    ]:
+        assert token in config_h, token
+
+    assert "ECU_BC_SERVO_ENCODER_COUNTS_PER_REV" not in config_h
+    assert "ECU_LIFT_POSITION_SPEED_UNITS" not in config_h
+    assert "ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS" in tasks_c
+    assert "ECU_HYDRAULIC_PUMP_ZERO_SPEED_VELOCITY_UNITS" in lift_c
+    assert "ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS" not in lift_c
 
 
 def test_canopen_controlword_sequence_is_not_coalesced(root: pathlib.Path) -> None:
@@ -1369,8 +1394,7 @@ def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) 
     assert "#define ECU_REMOTE_MAX_STEER_DEG          (50.0f)" in config_h
     assert "#define ECU_STEER_POSITION_SPEED_UNITS               (5000000)" in config_h
     assert "#define ECU_SERVO_MOTION_MAX_RPM                     (3000.0f)" in config_h
-    assert "#define ECU_SERVO_COMMISSIONING_MAX_ACCEL_RPS2       (50.0f)" in config_h
-    assert "#define ECU_SERVO_PROFILE_ACCEL_LIMIT_COUNTS_PER_SEC2 (500000)" in config_h
+    assert "#define ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2       (500000)" in config_h
     assert "#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_MOTION_MAX_RPM" in config_h
     assert "ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM" in config_h
     assert "#define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)" in config_h
@@ -1672,15 +1696,15 @@ def test_whole_vehicle_motion_profile_uses_tpdo_feedback_for_zero_speed(root: pa
 
     for token in [
         "ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE",
-        "ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS",
-        "ECU_BC_SERVO_VELOCITY_UNITS_PER_RPM",
+        "ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS",
+        "ECU_CAN2_MOTION_VELOCITY_UNITS_PER_RPM",
     ]:
         assert token in config_h, token
 
     for token in [
         "ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION",
         "feedback->actual_velocity_units",
-        "ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS",
+        "ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS",
         "pre_hv_stationary_window",
         "!s_runtime.final_command.high_voltage_enable",
         "!s_runtime.power_snapshot.high_voltage_requested",

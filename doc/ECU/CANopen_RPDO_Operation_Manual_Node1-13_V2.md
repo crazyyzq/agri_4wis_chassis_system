@@ -107,9 +107,12 @@ COB-ID 0x201
 Data   00 00 03 00 00 00 00
 ```
 
-The project commissioning limit has used 200 rpm as a safe test maximum. The
-known manual example gives 500 rpm as `833333` command units, so 200 rpm is
-approximately `333333` command units.
+For Node1–8 and Node13, one motor revolution is 10000 position counts and the
+verified velocity-object scale is 0.1 count/s per command unit. Therefore
+`rpm * 10000 * 10 / 60` gives the velocity command; for example, 500 rpm is
+approximately `833333` units. Do not apply this conversion to Node9–12: their
+position feedback is 131072 counts/rev and ground-clearance motion uses RPDO2
+absolute interpolation points plus separately analyzer-tuned profile values.
 
 ## 5. RPDO1 absolute position command
 

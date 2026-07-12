@@ -110,6 +110,19 @@ Node 12: rear-left lift
 Node 13: pump / hydraulic auxiliary
 ```
 
+### Encoder position-count contracts
+
+```text
+Node 1..8 : 10000 position counts per motor revolution
+Node 9..12: 131072 position counts per motor revolution
+Node 13   : 10000 position counts per motor revolution
+```
+
+These values are tied to installed node roles, not merely to the BC/BC2 family
+name. Never use the Node1–8/13 velocity or position conversion for Node9–12.
+Keep separate configuration symbols and focused tests for CAN2 motion, CAN3
+lift, and the Node13 hydraulic pump.
+
 Do not swap wheel order, node IDs, bus assignments, bitrate, standard versus
 extended CAN format, or physical-unit conversions without modifying the
 appropriate configuration and adding a focused test or explicit hardware

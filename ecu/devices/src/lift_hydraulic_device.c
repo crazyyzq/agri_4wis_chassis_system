@@ -1842,7 +1842,8 @@ static bool apply_hydraulic_pump_and_valves(lift_hydraulic_device_state_t *state
         state->pump_start_request_ms = now_ms;
     }
     if (feedback_ok &&
-        state->pump_actual_velocity_units > ECU_CANOPEN_ZERO_SPEED_VELOCITY_UNITS) {
+        state->pump_actual_velocity_units >
+            ECU_HYDRAULIC_PUMP_ZERO_SPEED_VELOCITY_UNITS) {
         close_hydraulic_valves(state, config);
         state->pump_pressure_ready = false;
         state->pump_state = HYDRAULIC_PUMP_STATE_START_TIMEOUT;
