@@ -19,10 +19,11 @@ typedef enum {
 
 typedef enum {
     LIFT_INTERPOLATION_STATE_STOPPED = 0,
-    LIFT_INTERPOLATION_STATE_CONFIGURING,
-    LIFT_INTERPOLATION_STATE_SWITCHING_ON,
-    LIFT_INTERPOLATION_STATE_ENABLING,
-    LIFT_INTERPOLATION_STATE_SETTLING,
+    LIFT_INTERPOLATION_STATE_CONFIGURING = 1,
+    /* Values 2 and 3 belonged to an obsolete PDO enable sequence.  Keep the
+     * remaining diagnostic values stable while setup/enable is now owned by
+     * the verified SDO transaction. */
+    LIFT_INTERPOLATION_STATE_SETTLING = 4,
     LIFT_INTERPOLATION_STATE_PRELOADING,
     LIFT_INTERPOLATION_STATE_TRIGGERING,
     LIFT_INTERPOLATION_STATE_RUNNING,
@@ -36,6 +37,7 @@ typedef struct {
     uint32_t valve_interlock_reject_count;
     uint32_t lift_setup_request_mask;
     uint32_t lift_feedback_fresh_mask;
+    uint32_t lift_axis_fault_mask;
     uint32_t lift_interpolation_group_sequence;
     uint32_t lift_interpolation_queued_count;
     uint32_t lift_interpolation_reject_count;
@@ -75,6 +77,8 @@ typedef struct {
     uint32_t lift_recovery_not_before_ms;
     uint32_t lift_remote_neutral_since_ms;
     uint32_t lift_enable_settle_until_ms;
+    uint32_t lift_settle_sample_ms;
+    uint32_t lift_settle_stable_since_ms;
     uint32_t lift_last_stream_step_ms;
     uint32_t last_pump_velocity_ms;
     uint32_t lift_progress_timestamp_ms[ECU_WHEEL_COUNT];
@@ -82,6 +86,7 @@ typedef struct {
     int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_stream_origin_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_progress_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_settle_reference_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_command_target_position_counts;
     int32_t lift_stream_planned_delta_counts;
     int32_t lift_stream_total_distance_counts;
@@ -93,7 +98,7 @@ typedef struct {
     uint16_t pump_active_controlword;
     uint8_t pump_speed_ready_samples;
     uint8_t lift_preload_points_completed;
-    uint8_t lift_recovery_attempts;
+    uint8_t lift_target_stable_samples;
     int8_t lift_requested_direction;
     int8_t lift_active_direction;
     hydraulic_pump_state_t pump_state;
@@ -108,10 +113,12 @@ typedef struct {
     bool lift_targets_initialized;
     bool lift_progress_initialized;
     bool lift_group_in_flight;
+    bool lift_transport_recovery_required;
     bool lift_at_target_disabled;
     bool lift_setup_sdo_queued;
     bool lift_setup_enable_operation;
     bool lift_preload_group_pending;
+    bool lift_settle_initialized;
     vehicle_actuator_command_t last_lift_command;
     ecu_device_apply_result_t last_result;
 } lift_hydraulic_device_state_t;
@@ -139,8 +146,9 @@ int32_t hydraulic_pump_safe_velocity_units(int32_t requested_velocity_units);
  * Units: height is mm, height rate is mm/s, track rate is mm/s.
  * Dependencies: CAN3 lift nodes and hardware configuration.  Valve intent is
  * published to the single CPU0 IO owner by the vehicle executor.
- * Timing: unchanged CANopen commands are periodically re-queued because local
- * SDO enqueue success is not the same as remote SDO completion.
+ * Timing: the lift position stream is periodic.  The synchronous pump PDO is
+ * sent only when its command changes (or after a confirmed speed-loss retry),
+ * so it cannot inject unrelated SYNC frames into the lift interpolation stream.
  * Failure behavior: returns an aggregate result; abort/exit ordering is decided
  * by the vehicle and control layers before this function is called.
  */

@@ -25,7 +25,6 @@ typedef struct {
     remote_lights_fsm_t lights;
     remote_event_lifecycle_t mode_event;
     remote_event_lifecycle_t power_event;
-    remote_event_lifecycle_t estop_reset_event;
     remote_event_lifecycle_t light_event;
     uint8_t b1_zero_calibration_press_count;
     bool b1_zero_calibration_press_latched;

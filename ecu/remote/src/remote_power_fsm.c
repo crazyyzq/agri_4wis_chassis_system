@@ -24,6 +24,28 @@ static bool power_down_preconditions_ok(const remote_preconditions_t *preconditi
            !preconditions->estop_latched;
 }
 
+static void request_safe_power_down(remote_power_fsm_t *fsm,
+                                    const remote_preconditions_t *preconditions)
+{
+    if (power_down_preconditions_ok(preconditions)) {
+        fsm->high_voltage_enable_request = false;
+        fsm->high_voltage_disable_request = true;
+        fsm->state = REMOTE_POWER_OFF;
+        fsm->orderly_shutdown_request = true;
+        fsm->diagnostic = DIAG_OK;
+        return;
+    }
+
+    /* Keep the battery-key relay latched while the vehicle is moving or
+     * hydraulics are active. Removing high voltage before the controlled stop
+     * and brake conditions are true would defeat the actuators needed to reach
+     * a safe state.
+     */
+    fsm->state = REMOTE_POWER_REJECTED;
+    fsm->request_rejected = true;
+    fsm->diagnostic = DIAG_REJECT_POWER_PRECONDITION;
+}
+
 void remote_power_fsm_init(remote_power_fsm_t *fsm, uint32_t now_ms)
 {
     if (fsm == 0) {
@@ -53,9 +75,13 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
     fsm->orderly_shutdown_request = false;
 
     if (preconditions->estop_latched || preconditions->a_class_fault) {
+        /* The safety/actuator layers own the controlled stop.  Preserve the
+         * logical battery-key latch here so software state cannot claim OFF
+         * while the physical MOS6 relay is deliberately held during braking.
+         * A later operator low-hold performs the explicit safe power-down.
+         */
         fsm->state = REMOTE_POWER_SHUTDOWN_PROTECT;
-        fsm->high_voltage_enable_request = false;
-        fsm->high_voltage_disable_request = true;
+        fsm->high_voltage_disable_request = false;
         fsm->diagnostic = preconditions->a_class_fault ? DIAG_A_CLASS_FAULT : DIAG_CONTROLLED_STOP_ACTIVE;
         return;
     }
@@ -97,17 +123,7 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
             fsm->diagnostic = DIAG_REJECT_POWER_PRECONDITION;
         }
     } else {
-        fsm->high_voltage_enable_request = false;
-        fsm->high_voltage_disable_request = true;
-        if (power_down_preconditions_ok(preconditions)) {
-            fsm->state = REMOTE_POWER_OFF;
-            fsm->orderly_shutdown_request = true;
-            fsm->diagnostic = DIAG_OK;
-        } else {
-            fsm->state = REMOTE_POWER_REJECTED;
-            fsm->request_rejected = true;
-            fsm->diagnostic = DIAG_REJECT_POWER_PRECONDITION;
-        }
+        request_safe_power_down(fsm, preconditions);
     }
 }
 

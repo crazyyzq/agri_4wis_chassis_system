@@ -16,7 +16,6 @@
 #define REMOTE_ESTOP_CENTER_HOLD_MS     (1000U)
 #define REMOTE_EVENT_MODE_REQUEST_TTL_MS (250U)
 #define REMOTE_EVENT_POWER_REQUEST_TTL_MS (500U)
-#define REMOTE_EVENT_ESTOP_RESET_TTL_MS (1000U)
 #define REMOTE_EVENT_LIGHT_REQUEST_TTL_MS (1000U)
 
 /* SBUS channel values are decoded from the receiver as protocol-native 11-bit
@@ -59,6 +58,8 @@
  */
 #define ECU_CAN3_COMMAND_STALE_TIMEOUT_MS (50U)
 #define ECU_CAN2_COMMAND_STALE_TIMEOUT_MS (50U)
+#define ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS (50U)
+#define ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS (10U)
 
 #ifndef ECU_ENABLE_DEBUG_MONITOR
 #define ECU_ENABLE_DEBUG_MONITOR         (1)
@@ -290,7 +291,11 @@
 #define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (3U)
 #define ECU_CANOPEN_LIFT_INTERPOLATION_MODE       (0)
 #define ECU_CANOPEN_LIFT_ENABLE_SETTLE_MS         (1500U)
-#define ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS      (1000U)
+#define ECU_CANOPEN_LIFT_SETTLE_SAMPLE_MS         (100U)
+#define ECU_CANOPEN_LIFT_SETTLE_STABLE_MS         (500U)
+#define ECU_CANOPEN_LIFT_SETTLE_TIMEOUT_MS        (3000U)
+#define ECU_CANOPEN_LIFT_SETTLE_MAX_DRIFT_COUNTS  (3000)
+#define ECU_CANOPEN_LIFT_TARGET_STABLE_SAMPLES    (5U)
 /* A single non-trigger PDO TX fault must not permanently freeze the vehicle.
  * The CAN2 realtime owner cancels the local group, discards stale queued
  * frames, and retries from the newest vehicle command.  Trigger-phase steering
@@ -737,13 +742,12 @@ typedef enum {
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 0.05f))
 #define ECU_LIFT_STALL_TIMEOUT_MS                   (5000U)
 #define ECU_LIFT_RECOVERY_BACKOFF_MS                (1000U)
-#define ECU_LIFT_RECOVERY_COOLDOWN_MS               (10000U)
-#define ECU_LIFT_RECOVERY_FAST_ATTEMPTS             (3U)
 #define ECU_HYDRAULIC_PUMP_WORK_RPM                  (1500.0f)
 #define ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)
 #define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM        (800.0f)
 #define ECU_HYDRAULIC_PUMP_SPEED_READY_SAMPLES       (3U)
 #define ECU_HYDRAULIC_PUMP_START_TIMEOUT_MS          (3000U)
+#define ECU_HYDRAULIC_PUMP_SPEED_LOSS_CONFIRM_MS     (500U)
 #define ECU_HYDRAULIC_VALVE_CHANGE_DEADTIME_MS       (10U)
 #define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS \
     ((int32_t)((ECU_HYDRAULIC_PUMP_WORK_RPM * \
@@ -907,7 +911,9 @@ typedef enum {
 #define ECU_MOTION_CRAB_STEER_DEG         (90.0f)
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (10.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (490.0f)
-#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
+/* Operator command magnitude and diagnostic unit.  The lift device consumes
+ * only the sign and generates the analyzer-proven 5 mm/s trajectory below. */
+#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (5.0f)
 #define ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN     (778)
 #define ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX   (-778)
 #define ECU_REMOTE_MAX_TRACK_RATE_MM_S    (20.0f)
@@ -1002,7 +1008,6 @@ typedef struct {
     uint32_t power_long_press_ms;
     uint32_t mode_request_ttl_ms;
     uint32_t power_request_ttl_ms;
-    uint32_t estop_reset_ttl_ms;
     uint32_t light_request_ttl_ms;
     ecu_sbus_thresholds_t sbus_thresholds;
     uint32_t cpu0_task_period_ms[8];

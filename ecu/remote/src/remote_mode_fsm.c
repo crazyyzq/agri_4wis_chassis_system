@@ -38,7 +38,7 @@ void remote_mode_fsm_init(remote_mode_fsm_t *fsm, uint32_t now_ms)
     fsm->active_domain = ECU_HOME_DOMAIN_ACKERMANN;
     fsm->requested_motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
     fsm->active_motion_mode = ECU_MOTION_MODE_POSITIVE_ACKERMANN;
-    fsm->domain_guard_until_ms = now_ms;
+    fsm->domain_changed_since_ms = now_ms;
     fsm->domain_default_pending = false;
     fsm->request_rejected = false;
     fsm->diagnostic = DIAG_OK;
@@ -53,15 +53,24 @@ void remote_mode_fsm_update(remote_mode_fsm_t *fsm,
         return;
     }
     fsm->request_rejected = false;
+    if (input->home == REMOTE_POS_INVALID) {
+        /* An invalid HOME value must not silently select Ackermann and release
+         * an adjustment-domain inhibit.  Hold the last accepted domain until
+         * the debounced switch position is valid again.
+         */
+        fsm->request_rejected = true;
+        fsm->diagnostic = DIAG_REJECT_MODE_PRECONDITION;
+        return;
+    }
     ecu_home_domain_t new_domain = domain_from_home(input->home);
     if (new_domain != fsm->requested_domain) {
         fsm->requested_domain = new_domain;
-        fsm->domain_guard_until_ms = input->now_ms + guard_ms;
+        fsm->domain_changed_since_ms = input->now_ms;
         fsm->domain_default_pending = true;
         return;
     }
-    if (!ecu_time_elapsed(input->now_ms, fsm->domain_guard_until_ms, 0U)) {
-        return; /* HOME domain guard requires a new R1/R2 edge after settling. */
+    if (!ecu_time_elapsed(input->now_ms, fsm->domain_changed_since_ms, guard_ms)) {
+        return; /* Ignore R1/R2 events until the new HOME domain is stable. */
     }
     /* R1/R2 are treated as edge events, not as held-level selectors.  Field
      * tests showed the physical button/wheel stable level can be high or low

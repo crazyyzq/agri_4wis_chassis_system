@@ -149,8 +149,8 @@ Data   3F 00 01 E0 5E F8 FF
 Current steering calibration:
 
 ```text
-+500000 counts = +45 degrees = left steering
--500000 counts = -45 degrees = right steering
++612500 counts = +45 degrees = left steering
+-612500 counts = -45 degrees = right steering
 ```
 
 For four-wheel steering, generate all wheel targets from one coherent vehicle
@@ -216,6 +216,12 @@ RPDO2 is the active ground-clearance interpolation command path for CAN3 lift
 nodes. The ECU sends one four-axis `60C1:01` point group and then one SYNC every
 20 ms, so RPDO2 must be type 1. Type 4 would execute only every fourth SYNC and
 is not suitable for synchronized lift motion.
+
+During this realtime window no unrelated periodic SYNC may be inserted. Node13
+pump RPDO0 is therefore sent only when start/stop changes or after a confirmed
+speed-loss retry; a completed unchanged pump command is not refreshed on a
+timer. This preserves the lift pattern as exactly four RPDO2 frames plus one
+common SYNC per 20 ms cycle.
 
 ## 8. SYNC usage
 

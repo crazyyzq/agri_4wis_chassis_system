@@ -97,7 +97,6 @@ typedef enum {
 typedef enum {
     REMOTE_EVENT_MODE_REQUEST = 0,
     REMOTE_EVENT_POWER_REQUEST,
-    REMOTE_EVENT_ESTOP_RESET,
     REMOTE_EVENT_LIGHT_REQUEST
 } remote_event_type_t;
 
@@ -139,8 +138,6 @@ typedef struct {
     bool decode_error_limit;
     bool credibility_error;
     remote_position_t ch13_estop;
-    bool ch13_estop_changed;
-    uint32_t ch13_estop_stable_since_ms;
     remote_position_t gear;
     remote_position_t home;
     remote_position_t clearance;

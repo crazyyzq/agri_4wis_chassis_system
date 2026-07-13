@@ -8,7 +8,7 @@ typedef struct {
     ecu_home_domain_t active_domain;
     ecu_motion_mode_t requested_motion_mode;
     ecu_motion_mode_t active_motion_mode;
-    uint32_t domain_guard_until_ms;
+    uint32_t domain_changed_since_ms;
     bool domain_default_pending;
     bool request_rejected;
     diag_code_t diagnostic;

@@ -377,6 +377,20 @@ For steering:
 - Lift/hydraulic commands must flow through the command arbiter and safety
   manager.
 - Do not use direct blocking CAN/SDO calls from the vehicle task.
+- Node9–12 use `131072 count/rev`; the measured mechanism is `12 rev/10 mm`.
+  Normal remote targets are 10–490 mm and extension moves the absolute position
+  in the negative direction. Do not reuse the Node1–8/Node13 10000-count scale.
+- The verified lift stream is: SDO setup while not Operation Enabled, measured
+  post-enable settling, three stationary preload points, then exactly four
+  synchronous RPDO2 position frames followed by one SYNC every 20 ms. Do not
+  insert another periodic SYNC into this realtime window.
+- BC/BC2 lift drives may report statusword `0x162F` while healthy and movable in
+  interpolation mode. Treat the mapped vendor latch `0x2183` as the hard drive
+  fault source for this workflow, clear it by writing back the received value,
+  and never reset a node merely to recover interpolation.
+- Node13's synchronous pump RPDO is command-on-change (plus confirmed
+  speed-loss retry), not a periodic keepalive; periodic pump refresh can consume
+  a lift interpolation buffer point.
 - Define safe behavior for one lift axis fault, pump fault, position mismatch,
   timeout, and loss of CAN3 before enabling real hydraulic hardware.
 

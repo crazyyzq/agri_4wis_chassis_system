@@ -139,9 +139,16 @@ The arbiter rebuilds a complete command from safe defaults every cycle. The safe
 
 Conservative safety behavior:
 
-- Emergency stop forces zero speed, brake release off, hydraulic off and high voltage off.
+- Emergency stop forces zero speed, brake release off and hydraulic off. The
+  MOS6 battery-key latch is retained while the controlled stop is in progress;
+  explicit safe power-down releases it only after zero-speed, brake and
+  hydraulic-stop preconditions are true.
 - A-class faults force the same safe command.
 - Missing command source falls back to a safe default command.
+
+The remote task and safety supervisor publish through timestamped double-buffer
+mailboxes. A reader never consumes a partially copied structure; stale remote
+or safety data is converted to an explicit controlled-stop command.
 
 ## 6. Read control command-shape modules
 
@@ -204,6 +211,8 @@ Device adapters:
 - `ecu/devices/src/warning_light_device.c`
 
 This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. CAN2 is the CANopenNode BC/BC2 motion network, and CAN3 is the CANopenNode lift/hydraulic network. DIO service polarity conversion is connected to the 12 isolated board outputs through `dio_hw`. RS485_1/UART11 is bound to a Modbus master transport service for the 8-channel analog acquisition module; RS485_2/UART12 is bound to the warning-light Agile Modbus direct-control protocol. RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. `servo_drive_canopen` remains the device-level CiA 402 boundary for normal vehicle command fan-out and delegates NMT/SDO requests to `canopen_master_service`. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
+
+CAN3 has one strict realtime FIFO shared by Node9–12 lift interpolation and Node13 pump velocity. Ground-clearance motion follows the analyzer-verified sequence: SDO setup, measured post-enable settling, three stationary preload points, one four-axis RPDO2 batch plus one SYNC every 20 ms, and multi-sample final-position confirmation before drive-owned brake holding. Node13 synchronous RPDO0 is command-on-change; periodic pump refresh must not inject an extra SYNC into a running lift stream. A nonzero vendor fault latch is cleared and retried through the CAN3 owner without resetting drive position references, while a true CAN transport failure uses the bounded transport-recovery path.
 
 ## 8. Read CPU0/CPU1 data exchange
 

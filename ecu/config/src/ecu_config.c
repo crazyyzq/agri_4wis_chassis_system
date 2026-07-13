@@ -28,7 +28,6 @@ static const ecu_config_t s_default_config = {
     .power_long_press_ms = REMOTE_POWER_LONG_PRESS_MS,
     .mode_request_ttl_ms = REMOTE_EVENT_MODE_REQUEST_TTL_MS,
     .power_request_ttl_ms = REMOTE_EVENT_POWER_REQUEST_TTL_MS,
-    .estop_reset_ttl_ms = REMOTE_EVENT_ESTOP_RESET_TTL_MS,
     .light_request_ttl_ms = REMOTE_EVENT_LIGHT_REQUEST_TTL_MS,
     .sbus_thresholds = {
         .low_max = ECU_SBUS_PPM_LOW_MAX,

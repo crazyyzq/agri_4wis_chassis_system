@@ -240,6 +240,8 @@ static void update_executor_lift_hydraulic_diagnostics(vehicle_executor_state_t 
         s_runtime.lift_hydraulic.lift_active_direction;
     executor->lift_feedback_fresh_mask =
         (uint8_t)s_runtime.lift_hydraulic.lift_feedback_fresh_mask;
+    executor->lift_axis_fault_mask =
+        (uint8_t)s_runtime.lift_hydraulic.lift_axis_fault_mask;
     executor->lift_preload_points_completed =
         s_runtime.lift_hydraulic.lift_preload_points_completed;
     executor->lift_interpolation_queued_count =

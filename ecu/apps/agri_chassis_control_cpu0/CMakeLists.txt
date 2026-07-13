@@ -180,5 +180,6 @@ sdk_app_src(../../control/src/steering_transition_planner.c)
 sdk_app_src(../../control/src/adjust_control.c)
 sdk_app_src(../../ipc/src/ipc_snapshot.c)
 sdk_app_src(../../os/src/ecu_tasks_cpu0.c)
+sdk_app_src(../../os/src/ecu_control_snapshot_mailbox.c)
 
 generate_ide_projects()

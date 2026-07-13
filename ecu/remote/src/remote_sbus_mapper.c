@@ -135,6 +135,15 @@ static bool sbus_ppm_channels_are_credible(const remote_sbus_sample_t *sbus)
     return true;
 }
 
+static bool safety_discrete_positions_valid(const remote_input_snapshot_t *input)
+{
+    return input != NULL &&
+           input->gear != REMOTE_POS_INVALID &&
+           input->home != REMOTE_POS_INVALID &&
+           input->power != REMOTE_POS_INVALID &&
+           input->ch13_estop != REMOTE_POS_INVALID;
+}
+
 void remote_sbus_mapper_init(remote_sbus_mapper_t *mapper, uint32_t now_ms)
 {
     if (mapper == 0) {
@@ -229,12 +238,13 @@ void remote_sbus_mapper_build_input(remote_sbus_mapper_t *mapper,
     }
 
     out->ch13_estop = stable_position_from_channel(mapper, ppm_sbus, ECU_SBUS_CH_ESTOP, config, now_ms);
-    out->ch13_estop_changed = mapper->discrete_channels[ECU_SBUS_CH_ESTOP].changed;
-    out->ch13_estop_stable_since_ms =
-        mapper->discrete_channels[ECU_SBUS_CH_ESTOP].stable_since_ms;
-    if (ppm_sbus->valid &&
-        remote_discrete_position_from_raw(ppm_sbus->channels[ECU_SBUS_CH_ESTOP],
-                                          &config->sbus_thresholds) == REMOTE_POS_HIGH) {
-        out->ch13_estop = REMOTE_POS_HIGH;
+    /* A switch may briefly cross the unused threshold gap; debounce keeps its
+     * previous stable position during that transition.  If a safety-critical
+     * switch remains in the gap long enough to become stably INVALID, treat
+     * the sample as non-credible instead of silently mapping HOME to a driving
+     * domain or CH13 to an inactive emergency-stop state.
+     */
+    if (out->sbus_valid && !safety_discrete_positions_valid(out)) {
+        out->credibility_error = true;
     }
 }

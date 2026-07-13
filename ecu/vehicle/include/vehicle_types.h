@@ -88,6 +88,7 @@ typedef struct {
     int8_t lift_requested_direction;
     int8_t lift_active_direction;
     uint8_t lift_feedback_fresh_mask;
+    uint8_t lift_axis_fault_mask;
     uint8_t lift_preload_points_completed;
     uint32_t lift_interpolation_queued_count;
     uint32_t lift_interpolation_reject_count;

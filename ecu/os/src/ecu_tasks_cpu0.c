@@ -11,6 +11,7 @@
 #include "dio_hw.h"
 #include "dio_service.h"
 #include "ecu_config.h"
+#include "ecu_control_snapshot_mailbox.h"
 #include "ecu_tasks.h"
 #include "ipc_snapshot.h"
 #include "lift_hydraulic_device.h"
@@ -53,8 +54,10 @@ typedef struct {
     remote_sbus_mapper_t remote_sbus_mapper;
     remote_manager_t remote_manager;
     remote_control_request_t remote_request;
+    remote_request_mailbox_t remote_request_mailbox;
     auto_control_request_t auto_request;
     vehicle_safety_snapshot_t safety_snapshot;
+    safety_snapshot_mailbox_t safety_snapshot_mailbox;
     ecu_hardware_feedback_snapshot_t hardware_feedback;
     vehicle_actuator_command_t final_command;
     vehicle_executor_state_t executor;
@@ -198,13 +201,15 @@ static void remote_sbus_sample_from_service(const sbus_service_snapshot_t *servi
 }
 
 static void build_remote_preconditions(const remote_input_snapshot_t *input,
+                                       const remote_control_request_t *previous_remote,
+                                       const vehicle_safety_snapshot_t *safety,
                                        remote_preconditions_t *out)
 {
     memset(out, 0, sizeof(*out));
-    out->link_online = s_runtime.remote_request.link_state == REMOTE_LINK_ONLINE;
-    out->arm_ready = s_runtime.remote_request.arm_state == REMOTE_ARM_READY;
-    out->estop_latched = s_runtime.safety_snapshot.estop_latched;
-    out->a_class_fault = s_runtime.safety_snapshot.a_class_fault;
+    out->link_online = previous_remote->link_state == REMOTE_LINK_ONLINE;
+    out->arm_ready = previous_remote->arm_state == REMOTE_ARM_READY;
+    out->estop_latched = safety->estop_latched;
+    out->a_class_fault = safety->a_class_fault;
     out->zero_speed = s_runtime.hardware_feedback.zero_speed_confirmed;
     /* No independent brake-applied input exists on the current ECU wiring.
      * Do not derive mechanical brake state from the last requested command.
@@ -248,15 +253,15 @@ static void build_remote_preconditions(const remote_input_snapshot_t *input,
     out->brake_release_confirmed = s_runtime.hardware_feedback.brake_release_confirmed;
     out->throttle_low = input->throttle == REMOTE_POS_LOW;
     out->steering_neutral = input->steering == REMOTE_POS_CENTER;
-    out->adjustment_active = s_runtime.remote_request.adjust_state != ADJUST_STATE_IDLE;
+    out->adjustment_active = previous_remote->adjust_state != ADJUST_STATE_IDLE;
     out->active_transition = false;
     out->external_auto_request_valid = s_runtime.auto_request.valid;
     out->power_ready = s_runtime.hardware_feedback.power_ready;
     out->low_voltage_ok = s_runtime.hardware_feedback.low_voltage_ok;
     out->can1_power_online = s_runtime.hardware_feedback.can1_power_online;
     out->hydraulic_stopped = s_runtime.hardware_feedback.hydraulic_stopped;
-    out->requested_gear = s_runtime.remote_request.requested_gear;
-    out->active_gear = s_runtime.remote_request.active_gear;
+    out->requested_gear = previous_remote->requested_gear;
+    out->active_gear = previous_remote->active_gear;
 }
 
 static void refresh_can2_feedback(void)
@@ -295,8 +300,6 @@ static void refresh_can2_feedback(void)
      */
     s_runtime.hardware_feedback.zero_speed_confirmed =
         all_drive_feedback_fresh && all_drive_zero_speed;
-    s_runtime.safety_snapshot.zero_speed_confirmed =
-        s_runtime.hardware_feedback.zero_speed_confirmed;
 #else
     (void)all_drive_feedback_fresh;
     (void)all_drive_zero_speed;
@@ -354,7 +357,6 @@ static void refresh_local_io_feedback(void)
     s_runtime.hardware_feedback.brake_release_confirmed = false;
 #if !ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION
     s_runtime.hardware_feedback.zero_speed_confirmed = false;
-    s_runtime.safety_snapshot.zero_speed_confirmed = false;
 #endif
 }
 
@@ -522,6 +524,8 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.lift_active_direction;
     out->lift_feedback_fresh_mask =
         s_runtime.executor.lift_feedback_fresh_mask;
+    out->lift_axis_fault_mask =
+        s_runtime.executor.lift_axis_fault_mask;
     out->lift_preload_points_completed =
         s_runtime.executor.lift_preload_points_completed;
     out->lift_interpolation_queued_count =
@@ -716,20 +720,40 @@ const ecu_task_descriptor_t *ecu_cpu0_task_descriptor(ecu_cpu0_task_id_t task_id
 void ecu_task_safety_supervisor_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
+    remote_control_request_t remote_request;
+    uint32_t remote_timestamp_ms = 0U;
+    bool remote_fresh = remote_request_mailbox_read(
+                            &s_runtime.remote_request_mailbox,
+                            &remote_request,
+                            &remote_timestamp_ms) &&
+                        (uint32_t)(now_ms - remote_timestamp_ms) <=
+                            ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS;
+    if (!remote_fresh) {
+        memset(&remote_request, 0, sizeof(remote_request));
+        remote_request.link_state = REMOTE_LINK_OFFLINE;
+        remote_request.estop_state = REMOTE_ESTOP_LATCHED;
+        remote_request.estop_source = ECU_ESTOP_SOURCE_SBUS_TIMEOUT;
+        remote_request.diagnostic = DIAG_REMOTE_ESTOP_SBUS_TIMEOUT;
+    }
     s_runtime.safety_snapshot.estop_latched =
-        s_runtime.remote_request.estop_state != REMOTE_ESTOP_CLEAR;
+        remote_request.estop_state != REMOTE_ESTOP_CLEAR;
     s_runtime.safety_snapshot.sbus_failsafe =
-        s_runtime.remote_request.link_state == REMOTE_LINK_FAILSAFE;
+        remote_request.link_state == REMOTE_LINK_FAILSAFE || !remote_fresh;
     s_runtime.safety_snapshot.controlled_stop_active =
         s_runtime.safety_snapshot.estop_latched ||
         s_runtime.safety_snapshot.sbus_failsafe;
     s_runtime.safety_snapshot.shutdown_protect_active =
-        s_runtime.remote_request.orderly_shutdown_request;
+        remote_request.orderly_shutdown_request;
+    s_runtime.safety_snapshot.zero_speed_confirmed =
+        s_runtime.hardware_feedback.zero_speed_confirmed;
     s_runtime.safety_snapshot.brake_release_allowed =
         !s_runtime.safety_snapshot.a_class_fault &&
         !s_runtime.safety_snapshot.estop_latched &&
         !s_runtime.safety_snapshot.sbus_failsafe;
-    s_runtime.safety_snapshot.primary_diag = s_runtime.remote_request.diagnostic;
+    s_runtime.safety_snapshot.primary_diag = remote_request.diagnostic;
+    safety_snapshot_mailbox_publish(&s_runtime.safety_snapshot_mailbox,
+                                    &s_runtime.safety_snapshot,
+                                    now_ms);
 }
 
 void ecu_task_can2_motion_step(uint32_t now_ms)
@@ -771,6 +795,8 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
     remote_sbus_sample_t remote_sbus;
     remote_input_snapshot_t remote_input;
     remote_preconditions_t preconditions;
+    vehicle_safety_snapshot_t safety_snapshot;
+    uint32_t safety_timestamp_ms = 0U;
 
     sbus_service_poll(&s_runtime.sbus, now_ms);
     sbus_service_get_snapshot(&s_runtime.sbus, &s_runtime.sbus_snapshot);
@@ -781,17 +807,37 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
                                    config,
                                    now_ms,
                                    &remote_input);
-    build_remote_preconditions(&remote_input, &preconditions);
+    if (!safety_snapshot_mailbox_read(&s_runtime.safety_snapshot_mailbox,
+                                      &safety_snapshot,
+                                      &safety_timestamp_ms) ||
+        (uint32_t)(now_ms - safety_timestamp_ms) >
+            ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS) {
+        memset(&safety_snapshot, 0, sizeof(safety_snapshot));
+        safety_snapshot.a_class_fault = true;
+        safety_snapshot.estop_latched = true;
+        safety_snapshot.primary_diag = DIAG_A_CLASS_FAULT;
+    }
+    build_remote_preconditions(&remote_input,
+                               &s_runtime.remote_request,
+                               &safety_snapshot,
+                               &preconditions);
     remote_manager_update(&s_runtime.remote_manager,
                           &remote_input,
                           &preconditions,
                           config);
     remote_manager_get_request(&s_runtime.remote_manager, &s_runtime.remote_request);
+    remote_request_mailbox_publish(&s_runtime.remote_request_mailbox,
+                                   &s_runtime.remote_request,
+                                   now_ms);
 }
 
 void ecu_task_vehicle_control_step(uint32_t now_ms)
 {
     ecu_runtime_init_once(now_ms);
+    remote_control_request_t remote_request;
+    vehicle_safety_snapshot_t safety_snapshot;
+    uint32_t remote_timestamp_ms = 0U;
+    uint32_t safety_timestamp_ms = 0U;
     vehicle_executor_io_t executor_io = {
         .can2_motion_canopen = &s_runtime.can2_motion_canopen,
         .can3_lift_hydraulic_canopen = &s_runtime.can3_lift_hydraulic_canopen,
@@ -800,14 +846,37 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
         .warning_light_modbus = &s_runtime.warning_light_modbus_master,
     };
 
-    command_arbiter_update(&s_runtime.remote_request,
+    bool remote_valid = remote_request_mailbox_read(
+                            &s_runtime.remote_request_mailbox,
+                            &remote_request,
+                            &remote_timestamp_ms) &&
+                        (uint32_t)(now_ms - remote_timestamp_ms) <=
+                            ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS;
+    bool safety_valid = safety_snapshot_mailbox_read(
+                            &s_runtime.safety_snapshot_mailbox,
+                            &safety_snapshot,
+                            &safety_timestamp_ms) &&
+                        (uint32_t)(now_ms - safety_timestamp_ms) <=
+                            ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS;
+    if (!remote_valid) {
+        memset(&remote_request, 0, sizeof(remote_request));
+        remote_request.estop_state = REMOTE_ESTOP_LATCHED;
+    }
+    if (!safety_valid) {
+        memset(&safety_snapshot, 0, sizeof(safety_snapshot));
+        safety_snapshot.a_class_fault = true;
+        safety_snapshot.estop_latched = true;
+        safety_snapshot.controlled_stop_active = true;
+        safety_snapshot.primary_diag = DIAG_A_CLASS_FAULT;
+    }
+    command_arbiter_update(&remote_request,
                            &s_runtime.auto_request,
-                           &s_runtime.safety_snapshot,
+                           &safety_snapshot,
                            now_ms,
                            &s_runtime.final_command);
-    safety_manager_apply(&s_runtime.safety_snapshot, &s_runtime.final_command);
+    safety_manager_apply(&safety_snapshot, &s_runtime.final_command);
     (void)commissioning_debug_apply_power_request(&s_runtime.commissioning_debug,
-                                                  &s_runtime.safety_snapshot,
+                                                  &safety_snapshot,
                                                   &s_runtime.final_command,
                                                   now_ms);
     /* high_voltage_enable is a logical request; servo and accessory output must
@@ -822,7 +891,7 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
                                          &s_runtime.final_command, now_ms);
     vehicle_state_publish(&s_runtime.vehicle_state,
                           now_ms,
-                          &s_runtime.safety_snapshot,
+                          &safety_snapshot,
                           &s_runtime.final_command);
 }
 

@@ -449,7 +449,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
     printf("[ECU HYD] hyd=%s valve_cmd=0x%08lx valve_req=0x%08lx valve_out=0x%08lx "
            "valve_block=0x%08lx pump[state=%u fb=%s vel=%ld timeout=%lu] "
            "pump_tpdo[fresh=%s t0=%lu/%lu t1=%lu/%lu sw=0x%04x flt=0x%08lx] "
-           "lift[state=%u req=%d active=%d fresh=0x%02x pre=%u q=%lu rej=%lu fail=%lu rec=%lu "
+           "lift[state=%u req=%d active=%d fresh=0x%02x fault=0x%02x pre=%u q=%lu rej=%lu fail=%lu rec=%lu "
            "delta=%ld a0=%ld t0=%ld e0=%ld] "
            "can3[tx=%lu err=%lu q=%lu drop=%lu st=%u grp=%lu done=%u fail=%u] "
            "res[lift=%u io=%u]\r\n",
@@ -473,6 +473,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (int)snapshot->lift_requested_direction,
            (int)snapshot->lift_active_direction,
            (unsigned int)snapshot->lift_feedback_fresh_mask,
+           (unsigned int)snapshot->lift_axis_fault_mask,
            (unsigned int)snapshot->lift_preload_points_completed,
            (unsigned long)snapshot->lift_interpolation_queued_count,
            (unsigned long)snapshot->lift_interpolation_reject_count,
@@ -962,7 +963,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "valve_cmd=0x%08lx valve_req=0x%08lx valve_out=0x%08lx "
            "valve_block=0x%08lx valve_block_cnt=%lu "
            "pump[state=%u fb=%s vel=%ld timeout=%lu] "
-           "lift_interp[state=%u req=%d active=%d fresh=0x%02x preload=%u fail=%lu] "
+           "lift_interp[state=%u req=%d active=%d fresh=0x%02x fault=0x%02x preload=%u fail=%lu] "
            "res[pwr=%s mot=%s lift=%s io=%s warn=%s]\r\n",
            bool_text(snapshot->brake_release),
            bool_text(snapshot->high_voltage_enable),
@@ -982,6 +983,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (int)snapshot->lift_requested_direction,
            (int)snapshot->lift_active_direction,
            (unsigned int)snapshot->lift_feedback_fresh_mask,
+           (unsigned int)snapshot->lift_axis_fault_mask,
            (unsigned int)snapshot->lift_preload_points_completed,
            (unsigned long)snapshot->lift_interpolation_failure_count,
            device_result_text(snapshot->power_result),

@@ -195,6 +195,17 @@ def test_remote_power_on_latch_does_not_chatter_on_post_hv_tpdo_gap(root: pathli
     )
 
 
+def test_estop_preserves_hv_latch_until_explicit_safe_power_down(root: pathlib.Path) -> None:
+    power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+    protect_block = power_fsm_c.split(
+        "if (preconditions->estop_latched || preconditions->a_class_fault)", 1
+    )[1].split("if (input->power != REMOTE_POS_HIGH", 1)[0]
+
+    assert "REMOTE_POWER_SHUTDOWN_PROTECT" in protect_block
+    assert "fsm->high_voltage_disable_request = false;" in protect_block
+    assert "fsm->high_voltage_enable_request = false;" not in protect_block
+
+
 def test_remote_power_request_timing_matches_field_enable_gesture(root: pathlib.Path) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
     config_c = read(root, "ecu/config/src/ecu_config.c")
@@ -207,17 +218,19 @@ def test_remote_power_request_timing_matches_field_enable_gesture(root: pathlib.
     assert "ECU_SBUS_PPM_HIGH_MIN..ECU_SBUS_PPM_HIGH" in power_fsm_h
 
 
-def test_remote_power_down_request_always_clears_hv_intent(root: pathlib.Path) -> None:
+def test_remote_power_down_waits_for_safe_preconditions_before_clearing_hv(root: pathlib.Path) -> None:
     power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
     power_fsm_h = read(root, "ecu/remote/include/remote_power_fsm.h")
     remote_manager_c = read(root, "ecu/remote/src/remote_manager.c")
 
-    low_position_block = power_fsm_c.split("} else {", 1)[1]
-    assert "fsm->high_voltage_enable_request = false;" in low_position_block
-    assert "fsm->high_voltage_disable_request = true;" in low_position_block
-    assert low_position_block.index("fsm->high_voltage_enable_request = false;") < low_position_block.index(
-        "power_down_preconditions_ok(preconditions)"
-    )
+    power_down_fn = power_fsm_c.split("static void request_safe_power_down", 1)[1]
+    power_down_fn = power_down_fn.split("void remote_power_fsm_init", 1)[0]
+    assert "fsm->high_voltage_enable_request = false;" in power_down_fn
+    assert "fsm->high_voltage_disable_request = true;" in power_down_fn
+    safe_check = power_down_fn.index("if (power_down_preconditions_ok(preconditions))")
+    assert safe_check < power_down_fn.index("fsm->high_voltage_enable_request = false;")
+    assert safe_check < power_down_fn.index("fsm->high_voltage_disable_request = true;")
+    assert "request_safe_power_down(fsm, preconditions);" in power_fsm_c
     assert "bool high_voltage_disable_request;" in power_fsm_h
     assert "manager->request.high_voltage_disable_request = manager->power.high_voltage_disable_request" in remote_manager_c
 

@@ -60,7 +60,6 @@ void remote_manager_init(remote_manager_t *manager, uint32_t now_ms)
     remote_lights_fsm_init(&manager->lights);
     remote_event_lifecycle_init(&manager->mode_event, REMOTE_EVENT_MODE_REQUEST);
     remote_event_lifecycle_init(&manager->power_event, REMOTE_EVENT_POWER_REQUEST);
-    remote_event_lifecycle_init(&manager->estop_reset_event, REMOTE_EVENT_ESTOP_RESET);
     remote_event_lifecycle_init(&manager->light_event, REMOTE_EVENT_LIGHT_REQUEST);
 }
 

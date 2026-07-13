@@ -2007,7 +2007,7 @@ def test_commissioning_power_debug_can_request_hv_without_motion(root: pathlib.P
     )
     assert control_step, "missing vehicle control task body"
     control_body = control_step.group(0)
-    assert control_body.index("safety_manager_apply(&s_runtime.safety_snapshot") < control_body.index(
+    assert control_body.index("safety_manager_apply(&safety_snapshot") < control_body.index(
         "commissioning_debug_apply_power_request"
     )
     assert control_body.index("commissioning_debug_apply_power_request") < control_body.index(
@@ -2265,7 +2265,6 @@ def test_hydraulic_valves_wait_for_fresh_node13_reverse_speed_feedback(
         "feedback.tpdo0_valid",
         "feedback.last_tpdo0_ms",
         "feedback.tpdo1_valid",
-        "feedback.statusword",
         "feedback.fault_latched",
         "state->pump_actual_velocity_units <",
         "-ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS",
@@ -2276,7 +2275,19 @@ def test_hydraulic_valves_wait_for_fresh_node13_reverse_speed_feedback(
     ]:
         assert token in lift_c, token
 
+    pump_feedback = lift_c.split("static bool read_hydraulic_pump_feedback", 1)[1]
+    pump_feedback = pump_feedback.split("static void close_hydraulic_valves", 1)[0]
+    assert "feedback.fault_latched" in pump_feedback
+    assert "feedback.statusword" not in pump_feedback
+
     assert "ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_VELOCITY_UNITS" in config_h
+    assert "ECU_HYDRAULIC_PUMP_SPEED_LOSS_CONFIRM_MS" in config_h
+    assert "state->pump_last_speed_ready_ms = now_ms" in lift_c
+    speed_loss = lift_c.split(
+        "ECU_HYDRAULIC_PUMP_SPEED_LOSS_CONFIRM_MS", 1
+    )[1].split("const can3_pdo_submit_result_t pump_submit_result", 1)[0]
+    assert "close_hydraulic_valves(state, config)" in speed_loss
+    assert "state->last_pump_velocity_command_valid = false" in speed_loss
 
 
 def test_can3_lift_interpolation_uses_feedback_and_sync_rpdo2(root: pathlib.Path) -> None:
@@ -2351,7 +2362,15 @@ def test_can3_lift_interpolation_uses_feedback_and_sync_rpdo2(root: pathlib.Path
     assert "out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM" in physical_down_block
     assert "out->hydraulic_enable = hydraulic_valve_mask != 0U;" in arbiter_c
     assert "Ground-clearance lift is electric CAN3 servo motion" in arbiter_c
-    assert "#define ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS      (1000U)" in config_h
+    assert "ECU_CANOPEN_PUMP_VELOCITY_REFRESH_MS" not in config_h
+    pump_queue = lift_c.split("static can3_pdo_submit_result_t queue_hydraulic_pump_velocity", 1)[1]
+    pump_queue = pump_queue.split("static bool hydraulic_pump_stop_confirmed", 1)[0]
+    unchanged = pump_queue.split(
+        "state->last_pump_velocity_command_valid", 1
+    )[1].split("if (!canopen_master_service_realtime_pdo_idle", 1)[0]
+    assert "state->last_pump_controlword == controlword" in unchanged
+    assert "state->last_pump_velocity_units == target_velocity_units" in unchanged
+    assert "now_ms - state->last_pump_velocity_ms" not in unchanged
 
 
 def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
@@ -2507,26 +2526,122 @@ def test_can3_lift_group_sync_does_not_compete_with_periodic_feedback_sync(
     assert "service == NULL || !service->periodic_sdo_enabled" in service_c
 
 
+def test_can3_stopped_pump_does_not_inject_periodic_sync_into_lift_stream(
+    root: pathlib.Path,
+) -> None:
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "static bool hydraulic_pump_stop_confirmed" in lift_c
+    helper = lift_c.split("static bool hydraulic_pump_stop_confirmed", 1)[1]
+    helper = helper.split("static bool ensure_hydraulic_pump_velocity_setup", 1)[0]
+    assert "state->last_pump_velocity_command_valid" in helper
+    assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" in helper
+
+    stopped = lift_c.split("if (!pump_request)", 1)[1]
+    stopped = stopped.split("if (!ensure_hydraulic_pump_velocity_setup", 1)[0]
+    assert "hydraulic_pump_stop_confirmed(state)" in stopped
+    assert stopped.index("hydraulic_pump_stop_confirmed(state)") < stopped.index(
+        "queue_hydraulic_pump_velocity"
+    )
+
+
+def test_can3_pump_setup_completion_starts_fresh_feedback_timeout_window(
+    root: pathlib.Path,
+) -> None:
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    setup = lift_c.split("static bool ensure_hydraulic_pump_velocity_setup", 1)[1]
+    setup = setup.split("static bool read_hydraulic_pump_feedback", 1)[0]
+    completed = setup.split("servo_setup_feedback_allows_ready", 1)[1]
+    completed = completed.split("return true;", 1)[0]
+    assert "state->pump_state = HYDRAULIC_PUMP_STATE_STARTING" in completed
+    assert "state->pump_start_request_ms = now_ms" in completed
+    assert "state->pump_speed_ready_samples = 0U" in completed
+    assert "state->pump_pressure_ready = false" in completed
+
+
 def test_can3_lift_setup_uses_sdo_completion_not_sparse_tpdo1_as_hard_gate(
     root: pathlib.Path,
 ) -> None:
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
     helper = lift_c.split("static bool servo_setup_feedback_allows_ready", 1)[1]
-    helper = helper.split("static bool lift_axes_operation_enabled", 1)[0]
+    helper = helper.split("static bool lift_axes_setup_feedback_ready", 1)[0]
     assert "lack of a fresh TPDO1 is not by itself" in lift_c
     assert "feedback.tpdo1_valid &&" in helper
     assert "feedback.fault_latched != 0U" in helper
-    assert "feedback.tpdo1_fresh &&" in helper
-    assert "!feedback.tpdo1_fresh" not in helper
-    assert "SERVO_DRIVE_STATUS_OPERATION_ENABLED_MASK" in helper
+    assert "0x162F" in helper
+    assert "feedback.statusword" not in helper
+    assert "SERVO_DRIVE_STATUS_OPERATION_ENABLED_MASK" not in lift_c
 
-    lift_ready = lift_c.split("static bool lift_axes_operation_enabled", 1)[1]
+    lift_ready = lift_c.split("static bool lift_axes_setup_feedback_ready", 1)[1]
     lift_ready = lift_ready.split("static bool queue_lift_setup_sdos", 1)[0]
     pump_setup = lift_c.split("static bool ensure_hydraulic_pump_velocity_setup", 1)[1]
     pump_setup = pump_setup.split("static bool read_hydraulic_pump_feedback", 1)[0]
     assert "servo_setup_feedback_allows_ready(" in lift_ready
     assert "servo_setup_feedback_allows_ready(canopen, node->node_id)" in pump_setup
+
+
+def test_can3_lift_clears_vendor_fault_and_recovers_without_transport_reset(
+    root: pathlib.Path,
+) -> None:
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+    vehicle_h = read(root, "ecu/vehicle/include/vehicle_types.h")
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    monitor_h = read(root, "ecu/diag/include/runtime_monitor.h")
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    assert "lift_axis_fault_mask" in lift_h
+    for source in [vehicle_h, executor_c, monitor_h, tasks_c, monitor_c]:
+        assert "lift_axis_fault_mask" in source
+    setup = lift_c.split("static bool queue_lift_setup_sdos", 1)[1]
+    setup = setup.split("static bool begin_lift_interpolation_setup", 1)[0]
+    assert "feedback.fault_latched != 0U" in setup
+    assert "ECU_CANOPEN_OBJ_FAULT_LATCHED" in setup
+    assert "expected_writes++" in setup
+
+    refresh = lift_c.split("static bool refresh_lift_feedback", 1)[1]
+    refresh = refresh.split("static bool servo_setup_feedback_allows_ready", 1)[0]
+    assert "state->lift_axis_fault_mask" in refresh
+    assert "axis_fault" in refresh
+
+    running = lift_c.split("static bool queue_lift_interpolation_group", 1)[1]
+    running = running.split("static bool queue_lift_interpolation_trigger", 1)[0]
+    fault_block = running.split("state->lift_axis_fault_mask != 0U", 1)[1]
+    fault_block = fault_block.split("if (state->lift_feedback_missing_since_ms", 1)[0]
+    assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" in fault_block
+    assert "LIFT_INTERPOLATION_STATE_STOPPING" in fault_block
+    assert "recover_lift_transport_state" not in fault_block
+
+
+def test_can3_lift_setup_failure_retries_without_reinitializing_can_controller(
+    root: pathlib.Path,
+) -> None:
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "lift_transport_recovery_required" in lift_h
+    group_completion = lift_c.split("static bool lift_group_completed", 1)[1]
+    group_completion = group_completion.split(
+        "static bool queue_lift_interpolation_trigger", 1
+    )[0]
+    assert "state->lift_transport_recovery_required = true" in group_completion
+
+    setup_completion = lift_c.split("static bool lift_setup_completed", 1)[1]
+    setup_completion = setup_completion.split(
+        "static int32_t lift_interpolation_delta_counts", 1
+    )[0]
+    assert "LIFT_INTERPOLATION_STATE_FAULT" in setup_completion
+    assert "lift_transport_recovery_required = true" not in setup_completion
+
+    fault_state = lift_c.rsplit(
+        "if (state->lift_interpolation_state == LIFT_INTERPOLATION_STATE_FAULT)", 1
+    )[1].split("LIFT_INTERPOLATION_STATE_CONFIGURING", 1)[0]
+    assert "state->lift_transport_recovery_required" in fault_state
+    assert "recover_lift_transport_state" in fault_state
+    assert "recover_lift_control_state" in fault_state
 
 
 def test_can3_lift_missing_tpdo0_pauses_interpolation_instead_of_disabling_axes(
@@ -2542,7 +2657,10 @@ def test_can3_lift_missing_tpdo0_pauses_interpolation_instead_of_disabling_axes(
     assert "state->lift_feedback_missing_since_ms = now_ms" in missing_feedback_block
     assert "recover_lift_transport_state(state, canopen, now_ms)" in missing_feedback_block
     assert "ECU_CANOPEN_LIFT_SETUP_TIMEOUT_MS" in missing_feedback_block
-    assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" not in missing_feedback_block
+    non_fault_missing = missing_feedback_block.split(
+        "if (state->lift_feedback_missing_since_ms == 0U)", 1
+    )[1]
+    assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" not in non_fault_missing
 
 
 def test_can3_lift_progress_stall_soft_recovers_without_axis_disable(
@@ -2605,6 +2723,53 @@ def test_can3_lift_neutral_during_setup_runs_disable_setup_before_stopped(
     assert "operator returned the stick to neutral" in neutral_configuring
     assert "LIFT_INTERP_DIRECTION_HOLD,\n                        false" in neutral_configuring
     assert "LIFT_INTERP_DIRECTION_HOLD" in neutral_configuring
+
+
+def test_can3_lift_waits_for_measured_axis_settle_before_capturing_origin(
+    root: pathlib.Path,
+) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "ECU_CANOPEN_LIFT_SETTLE_SAMPLE_MS",
+        "ECU_CANOPEN_LIFT_SETTLE_STABLE_MS",
+        "ECU_CANOPEN_LIFT_SETTLE_MAX_DRIFT_COUNTS",
+        "ECU_CANOPEN_LIFT_SETTLE_TIMEOUT_MS",
+    ]:
+        assert token in config_h, token
+    for token in [
+        "lift_settle_reference_position_counts",
+        "lift_settle_stable_since_ms",
+        "lift_settle_sample_ms",
+        "lift_settle_initialized",
+    ]:
+        assert token in lift_h, token
+    assert "lift_axes_settled" in lift_c
+    settling = lift_c.split(
+        "LIFT_INTERPOLATION_STATE_SETTLING", 2
+    )[2].split("if (state->lift_interpolation_state == LIFT_INTERPOLATION_STATE_STOPPED)", 1)[0]
+    assert "lift_axes_settled(state, now_ms)" in settling
+    assert settling.index("refresh_lift_feedback") < settling.index("lift_axes_settled")
+
+
+def test_can3_lift_requires_stable_final_feedback_before_brake_disable(
+    root: pathlib.Path,
+) -> None:
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    assert "#define ECU_CANOPEN_LIFT_TARGET_STABLE_SAMPLES" in config_h
+    assert "lift_target_stable_samples" in lift_h
+    target_block = lift_c.split(
+        "if (lift_positions_at_target(state, command_target_position_counts))", 1
+    )[1].split("if (lift_progress_stalled", 1)[0]
+    assert "state->lift_target_stable_samples++" in target_block
+    assert "ECU_CANOPEN_LIFT_TARGET_STABLE_SAMPLES" in target_block
+    assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" in target_block
+    assert "state->lift_target_stable_samples = 0U" in lift_c
 
 
 def test_default_dio_and_hydraulic_masks_do_not_overlap(root: pathlib.Path) -> None:
@@ -3132,6 +3297,7 @@ def test_remote_command_generation_uses_sbus_analog_channels(root: pathlib.Path)
     assert "sbus_per_mille_from_ppm" in mapper_c
     assert "decode_error_limit =" in mapper_c
     assert "credibility_error =" in mapper_c
+    assert "safety_discrete_positions_valid" in mapper_c
     assert "motion_control_build_candidate" in arbiter_c
     assert "ECU_REMOTE_MAX_SPEED_MPS" in config_h
     assert "ECU_REMOTE_MAX_STEER_DEG" in config_h
@@ -3156,6 +3322,35 @@ def test_can1_foreground_poll_has_a_frame_budget(root: pathlib.Path) -> None:
     assert "CAN_BUS_HW_MAX_RX_FRAMES_PER_POLL" in can_hw_c
     assert "frames_drained" in can_hw_c
     assert "frames_drained < CAN_BUS_HW_MAX_RX_FRAMES_PER_POLL" in can_hw_c
+
+
+def test_cpu0_remote_and_safety_handoffs_are_coherent_and_stale_safe(root: pathlib.Path) -> None:
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    mailbox_h = read(root, "ecu/os/include/ecu_control_snapshot_mailbox.h")
+    mailbox_c = read(root, "ecu/os/src/ecu_control_snapshot_mailbox.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "remote_request_mailbox_t",
+        "safety_snapshot_mailbox_t",
+        "remote_request_mailbox_publish",
+        "remote_request_mailbox_read",
+        "safety_snapshot_mailbox_publish",
+        "safety_snapshot_mailbox_read",
+        "__ATOMIC_RELEASE",
+        "__ATOMIC_ACQUIRE",
+        "ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS",
+        "ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS",
+    ]:
+        assert token in tasks_c or token in mailbox_h or token in mailbox_c or token in config_h, token
+
+    assert "remote_control_request_t value[2]" in mailbox_h
+    assert "vehicle_safety_snapshot_t value[2]" in mailbox_h
+    assert "uint32_t slot = sequence & 1U" in mailbox_c
+    assert "ecu_control_snapshot_mailbox.c" in cmake
+    assert "remote_request.estop_state = REMOTE_ESTOP_LATCHED" in tasks_c
+    assert "safety_snapshot.controlled_stop_active = true" in tasks_c
 
 
 def test_cpu0_preconditions_are_feedback_driven(root: pathlib.Path) -> None:
