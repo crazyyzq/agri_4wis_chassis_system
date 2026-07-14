@@ -418,6 +418,7 @@ static bool canopen_master_sdo_write_allowed(uint16_t index)
            index == ECU_CANOPEN_OBJ_PROFILE_ACCELERATION ||
            index == ECU_CANOPEN_OBJ_PROFILE_DECELERATION ||
            index == ECU_CANOPEN_OBJ_FOLLOWING_ERROR_WINDOW ||
+           index == ECU_CANOPEN_OBJ_COMMAND_CURRENT_RAMP ||
            index == ECU_CANOPEN_OBJ_FAULT_LATCHED;
 #endif
 }
@@ -737,7 +738,7 @@ static bool request_sdo_write_impl(canopen_master_service_t *service,
                                    uint8_t subindex,
                                    uint8_t size,
                                    int32_t value,
-                                   bool calibration_position_zero_allowed)
+                                   bool calibration_position_write_allowed)
 {
     canopen_master_sdo_write_request_t request;
 
@@ -746,9 +747,9 @@ static bool request_sdo_write_impl(canopen_master_service_t *service,
         return false;
     }
     if (!canopen_master_sdo_write_allowed(index) &&
-        !(calibration_position_zero_allowed &&
+        !(calibration_position_write_allowed &&
           index == ECU_CANOPEN_OBJ_ACTUAL_POSITION &&
-          subindex == 0U && size == 4U && value == 0)) {
+          subindex == 0U && size == 4U)) {
         service->snapshot.dropped_command_count++;
         service->snapshot.command_error_count++;
         service->snapshot.last_download_index = index;
@@ -830,6 +831,20 @@ bool canopen_master_service_request_calibration_position_zero(
                                   0U,
                                   4U,
                                   0,
+                                  true);
+}
+
+bool canopen_master_service_request_calibration_position_restore(
+    canopen_master_service_t *service,
+    uint8_t node_id,
+    int32_t position_counts)
+{
+    return request_sdo_write_impl(service,
+                                  node_id,
+                                  ECU_CANOPEN_OBJ_ACTUAL_POSITION,
+                                  0U,
+                                  4U,
+                                  position_counts,
                                   true);
 }
 

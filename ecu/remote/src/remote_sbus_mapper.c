@@ -75,6 +75,32 @@ static remote_position_t stable_position_from_channel(remote_sbus_mapper_t *mapp
     return mapper->discrete_channels[channel].stable_position;
 }
 
+static bool b1_transition_from_channel(remote_sbus_mapper_t *mapper,
+                                       const remote_sbus_sample_t *sbus,
+                                       const ecu_config_t *config,
+                                       uint32_t now_ms)
+{
+    if (mapper == NULL || sbus == NULL || config == NULL || !sbus->valid) {
+        return false;
+    }
+
+    remote_position_t candidate = remote_discrete_position_from_raw(
+        sbus->channels[ECU_SBUS_CH_HORN],
+        &config->sbus_thresholds);
+    /* B1 is a two-endpoint momentary button. Ignore the unused center/gap
+     * while it moves between endpoints so one physical transition cannot be
+     * counted twice through an INVALID/CENTER intermediate state. */
+    if (candidate != REMOTE_POS_LOW && candidate != REMOTE_POS_HIGH) {
+        return false;
+    }
+
+    remote_discrete_update(&mapper->b1_button,
+                           candidate,
+                           now_ms,
+                           ECU_REMOTE_B1_EDGE_DEBOUNCE_MS);
+    return mapper->b1_button.changed;
+}
+
 static int16_t sbus_per_mille_from_ppm(uint16_t ppm,
                                        const ecu_sbus_thresholds_t *thresholds)
 {
@@ -120,6 +146,27 @@ static int16_t sbus_throttle_per_mille_from_ppm(uint16_t ppm,
                                           1000U) / span));
 }
 
+static int16_t apply_throttle_hysteresis(remote_sbus_mapper_t *mapper,
+                                         int16_t throttle_per_mille)
+{
+    if (mapper == 0 || throttle_per_mille <= 0) {
+        if (mapper != 0) {
+            mapper->throttle_active = false;
+        }
+        return 0;
+    }
+
+    if (mapper->throttle_active) {
+        if (throttle_per_mille <= ECU_REMOTE_THROTTLE_STOP_PER_MILLE) {
+            mapper->throttle_active = false;
+        }
+    } else if (throttle_per_mille >= ECU_REMOTE_THROTTLE_START_PER_MILLE) {
+        mapper->throttle_active = true;
+    }
+
+    return mapper->throttle_active ? throttle_per_mille : 0;
+}
+
 static bool sbus_ppm_channels_are_credible(const remote_sbus_sample_t *sbus)
 {
     if (sbus == 0 || !sbus->valid || !sbus->connected) {
@@ -155,6 +202,8 @@ void remote_sbus_mapper_init(remote_sbus_mapper_t *mapper, uint32_t now_ms)
                              REMOTE_POS_CENTER,
                              now_ms);
     }
+    remote_discrete_init(&mapper->b1_button, REMOTE_POS_CENTER, now_ms);
+    mapper->throttle_active = false;
 }
 
 void remote_sbus_mapper_build_ppm_sample(const remote_sbus_sample_t *raw,
@@ -220,21 +269,28 @@ void remote_sbus_mapper_build_input(remote_sbus_mapper_t *mapper,
      * ECU_SBUS_CH_HORN.  Keep the channel mapping stable and expose a semantic
      * B1 edge for maintenance gestures such as steering zero calibration.
      */
-    out->b1_changed = mapper->discrete_channels[ECU_SBUS_CH_HORN].changed;
+    out->b1_changed = b1_transition_from_channel(mapper,
+                                                 ppm_sbus,
+                                                 config,
+                                                 now_ms);
 
     if (out->sbus_valid) {
         out->steer_per_mille =
             sbus_per_mille_from_ppm(ppm_sbus->channels[ECU_SBUS_CH_STEER],
                                     &config->sbus_thresholds);
-        out->throttle_per_mille =
-            sbus_throttle_per_mille_from_ppm(ppm_sbus->channels[ECU_SBUS_CH_THROTTLE],
-                                             &config->sbus_thresholds);
+        out->throttle_per_mille = apply_throttle_hysteresis(
+            mapper,
+            sbus_throttle_per_mille_from_ppm(
+                ppm_sbus->channels[ECU_SBUS_CH_THROTTLE],
+                &config->sbus_thresholds));
         out->clearance_per_mille =
             sbus_per_mille_from_ppm(ppm_sbus->channels[ECU_SBUS_CH_CLEARANCE],
                                     &config->sbus_thresholds);
         out->track_per_mille =
             sbus_per_mille_from_ppm(ppm_sbus->channels[ECU_SBUS_CH_TRACK],
                                     &config->sbus_thresholds);
+    } else {
+        mapper->throttle_active = false;
     }
 
     out->ch13_estop = stable_position_from_channel(mapper, ppm_sbus, ECU_SBUS_CH_ESTOP, config, now_ms);

@@ -232,8 +232,27 @@ void four_wheel_kinematics_build_crab(float speed_mps,
         return;
     }
     clear_output(out);
-    set_all_wheel_speeds(out, speed_mps);
-    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        out->target_steer_deg[wheel] = steer_deg;
-    }
+    /* +/-90 degrees describe the same lateral rolling line.  Use the
+     * equivalent angle nearest the spin posture for each installed wheel, and
+     * reverse wheel speed wherever the steering representation is shifted by
+     * 180 degrees.  This keeps the chassis lateral direction unchanged while
+     * every steering axis moves only 45 degrees from the spin posture.
+     */
+    out->target_steer_deg[ECU_WHEEL_LEG1_FRONT_RIGHT] =
+        steer_deg * ECU_CRAB_LEG1_STEER_SIGN;
+    out->target_steer_deg[ECU_WHEEL_LEG2_FRONT_LEFT] =
+        steer_deg * ECU_CRAB_LEG2_STEER_SIGN;
+    out->target_steer_deg[ECU_WHEEL_LEG3_REAR_LEFT] =
+        steer_deg * ECU_CRAB_LEG3_STEER_SIGN;
+    out->target_steer_deg[ECU_WHEEL_LEG4_REAR_RIGHT] =
+        steer_deg * ECU_CRAB_LEG4_STEER_SIGN;
+
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG1_FRONT_RIGHT] =
+        speed_mps * ECU_CRAB_LEG1_ROLL_SIGN;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG2_FRONT_LEFT] =
+        speed_mps * ECU_CRAB_LEG2_ROLL_SIGN;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG3_REAR_LEFT] =
+        speed_mps * ECU_CRAB_LEG3_ROLL_SIGN;
+    out->target_wheel_speed_mps[ECU_WHEEL_LEG4_REAR_RIGHT] =
+        speed_mps * ECU_CRAB_LEG4_ROLL_SIGN;
 }

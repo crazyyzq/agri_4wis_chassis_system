@@ -128,6 +128,16 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.steer_last_allowed_to_inhibited_ms;
     executor->steer_safe_stop_pending =
         s_runtime.motion.steer_safe_stop_pending;
+    executor->steer_profile_setup_state =
+        (uint8_t)s_runtime.motion.steer_profile_setup_state;
+    executor->steer_profile_setup_axis =
+        s_runtime.motion.steer_profile_setup_axis;
+    executor->steer_profile_setup_object =
+        s_runtime.motion.steer_profile_setup_object;
+    executor->steer_profile_verified_mask =
+        s_runtime.motion.steer_profile_verified_mask;
+    executor->steer_profile_setup_failure_count =
+        s_runtime.motion.steer_profile_setup_failure_count;
     executor->steer_commission_state =
         (uint8_t)s_runtime.motion.steer_commission_state;
     executor->steer_commission_axis_mask =
@@ -166,6 +176,22 @@ static void update_executor_motion_diagnostics(vehicle_executor_state_t *executo
         s_runtime.motion.presteer_target_reached;
     executor->track_assist_steer_approximately_ready =
         s_runtime.motion.track_assist_steer_approximately_ready;
+    executor->track_assist_overspeed_mask =
+        s_runtime.motion.track_assist_overspeed_mask;
+    executor->track_assist_feedback_invalid_mask =
+        s_runtime.motion.track_assist_feedback_invalid_mask;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        executor->drive_last_command_kind[wheel] =
+            (uint8_t)s_runtime.motion.drive_last_command_kind[wheel];
+        executor->drive_last_enable_requested[wheel] =
+            s_runtime.motion.drive_last_enable_requested[wheel];
+        executor->drive_last_current_10ma[wheel] =
+            s_runtime.motion.drive_last_current_10ma[wheel];
+    }
+    executor->drive_group_complete_count =
+        s_runtime.motion.drive_group_complete_count;
+    executor->drive_group_failure_count =
+        s_runtime.motion.drive_group_failure_count;
     executor->presteer_mode =
         (uint8_t)s_runtime.motion.presteer_mode;
     executor->presteer_missing_axis_mask =
@@ -280,6 +306,23 @@ static uint32_t track_valve_mask(void)
 static bool timestamp_reached(uint32_t now_ms, uint32_t reference_ms)
 {
     return (int32_t)(now_ms - reference_ms) >= 0;
+}
+
+/* A higher-priority vehicle publisher may preempt CAN2/CAN3 after the bus task
+ * captured its cycle-entry now_ms.  The coherent mailbox can therefore carry
+ * a timestamp a few milliseconds newer than the consumer timestamp.  Unsigned
+ * subtraction turns that valid scheduling skew into a near-UINT32_MAX age and
+ * falsely injects a safe-stop command (observed as an intermittent pump stop).
+ */
+static bool command_snapshot_timestamp_is_fresh(uint32_t now_ms,
+                                                uint32_t timestamp_ms,
+                                                uint32_t stale_timeout_ms)
+{
+    int32_t signed_age_ms = (int32_t)(now_ms - timestamp_ms);
+    if (signed_age_ms >= 0) {
+        return (uint32_t)signed_age_ms <= stale_timeout_ms;
+    }
+    return (timestamp_ms - now_ms) <= ECU_CONTROL_SNAPSHOT_MAX_FUTURE_SKEW_MS;
 }
 
 static void update_track_valve_gate_session(const vehicle_actuator_command_t *command,
@@ -453,8 +496,10 @@ bool vehicle_command_executor_flush_can2_motion(vehicle_executor_state_t *execut
         executor->motion_result = ECU_DEVICE_APPLY_OK;
         return true;
     }
-    if ((uint32_t)(now_ms - command_timestamp_ms) >
-        ECU_CAN2_COMMAND_STALE_TIMEOUT_MS) {
+    if (!command_snapshot_timestamp_is_fresh(
+            now_ms,
+            command_timestamp_ms,
+            ECU_CAN2_COMMAND_STALE_TIMEOUT_MS)) {
         vehicle_actuator_command_t stale_safe_command;
         vehicle_actuator_command_safe_default(&stale_safe_command);
         stale_safe_command.source = COMMAND_SOURCE_SAFETY;
@@ -515,8 +560,10 @@ bool vehicle_command_executor_flush_can3_lift_hydraulic(
                                        config,
                                        now_ms);
     }
-    if ((uint32_t)(now_ms - command_timestamp_ms) >
-        ECU_CAN3_COMMAND_STALE_TIMEOUT_MS) {
+    if (!command_snapshot_timestamp_is_fresh(
+            now_ms,
+            command_timestamp_ms,
+            ECU_CAN3_COMMAND_STALE_TIMEOUT_MS)) {
         return apply_can3_safe_default(executor,
                                        can3_lift_hydraulic_canopen,
                                        config,

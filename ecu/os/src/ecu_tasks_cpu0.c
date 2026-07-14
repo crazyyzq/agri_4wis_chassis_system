@@ -581,6 +581,16 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.steer_last_allowed_to_inhibited_ms;
     out->steer_safe_stop_pending =
         s_runtime.executor.steer_safe_stop_pending;
+    out->steer_profile_setup_state =
+        s_runtime.executor.steer_profile_setup_state;
+    out->steer_profile_setup_axis =
+        s_runtime.executor.steer_profile_setup_axis;
+    out->steer_profile_setup_object =
+        s_runtime.executor.steer_profile_setup_object;
+    out->steer_profile_verified_mask =
+        s_runtime.executor.steer_profile_verified_mask;
+    out->steer_profile_setup_failure_count =
+        s_runtime.executor.steer_profile_setup_failure_count;
     out->steer_commission_state =
         (uint8_t)s_runtime.executor.steer_commission_state;
     out->steer_commission_axis_mask =
@@ -619,6 +629,22 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.presteer_target_reached;
     out->track_assist_steer_approximately_ready =
         s_runtime.executor.track_assist_steer_approximately_ready;
+    out->track_assist_overspeed_mask =
+        s_runtime.executor.track_assist_overspeed_mask;
+    out->track_assist_feedback_invalid_mask =
+        s_runtime.executor.track_assist_feedback_invalid_mask;
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        out->drive_last_command_kind[wheel] =
+            s_runtime.executor.drive_last_command_kind[wheel];
+        out->drive_last_enable_requested[wheel] =
+            s_runtime.executor.drive_last_enable_requested[wheel];
+        out->drive_last_current_10ma[wheel] =
+            s_runtime.executor.drive_last_current_10ma[wheel];
+    }
+    out->drive_group_complete_count =
+        s_runtime.executor.drive_group_complete_count;
+    out->drive_group_failure_count =
+        s_runtime.executor.drive_group_failure_count;
     out->presteer_mode =
         s_runtime.executor.presteer_mode;
     out->presteer_missing_axis_mask =
@@ -798,6 +824,16 @@ void ecu_task_can2_motion_step(uint32_t now_ms)
     (void)vehicle_command_executor_flush_can2_motion(&s_runtime.executor,
                                                      &s_runtime.can2_motion_canopen,
                                                      now_ms);
+    bool zero_calibration_active =
+        s_runtime.executor.steer_zero_calibration_state !=
+            (uint8_t)MOTION_STEER_ZERO_CAL_IDLE;
+    /* Homing setup and rollback are the only intentional runtime SDO write
+     * workflow on CAN2.  Suspend optional cyclic uploads while it owns CAN2;
+     * an upload already in flight is allowed to finish, after which queued
+     * calibration downloads have strict priority in the CANopen service. */
+    canopen_master_service_set_periodic_sdo_enabled(
+        &s_runtime.can2_motion_canopen,
+        !zero_calibration_active);
     for (uint8_t pass = 0U;
          pass < ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES;
          ++pass) {
@@ -807,9 +843,11 @@ void ecu_task_can2_motion_step(uint32_t now_ms)
     }
     canopen_master_service_process_background(&s_runtime.can2_motion_canopen,
                                               now_ms);
-    commissioning_debug_scan_can2(&s_runtime.commissioning_debug,
-                                  &s_runtime.can2_motion_canopen,
-                                  now_ms);
+    if (!zero_calibration_active) {
+        commissioning_debug_scan_can2(&s_runtime.commissioning_debug,
+                                      &s_runtime.can2_motion_canopen,
+                                      now_ms);
+    }
     refresh_can2_feedback();
 }
 

@@ -68,7 +68,10 @@ void four_wheel_kinematics_build_spin(float speed_mps,
                                       float spin_angle_deg,
                                       four_wheel_kinematics_output_t *out);
 
-/* Build crab targets with the same steering angle and speed on every wheel. */
+/* Build one physical crab rolling line using per-leg equivalent +/- angles.
+ * Wheel-speed signs are adjusted with the selected equivalent angle so the
+ * complete vehicle still follows the requested lateral speed direction.
+ */
 void four_wheel_kinematics_build_crab(float speed_mps,
                                       float steer_deg,
                                       four_wheel_kinematics_output_t *out);

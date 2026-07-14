@@ -8,6 +8,10 @@
 #include "ecu_types.h"
 
 #define REMOTE_DISCRETE_DEBOUNCE_MS       (80U)
+/* B1/CH10 is a momentary maintenance button.  It needs a shorter debounce
+ * than the three-position selectors or a normal quick press can disappear
+ * before the generic 80 ms selector debounce accepts either endpoint. */
+#define ECU_REMOTE_B1_EDGE_DEBOUNCE_MS    (20U)
 #define REMOTE_LINK_QUALIFY_MS          (1000U)
 #define REMOTE_NEUTRAL_QUALIFY_MS        (300U)
 #define REMOTE_FAILSAFE_TIMEOUT_MS       (100U)
@@ -273,7 +277,20 @@
  */
 #define ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS (50U)
 #define ECU_CANOPEN_STEER_LIMIT_INPUT_GATING_ENABLED (0)
-#define ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS (1000)
+/* CH3 is a one-sided throttle.  Use hysteresis after calibrated SBUS mapping so
+ * receiver endpoint noise cannot repeatedly enter and leave traction motion.
+ * The active output is not rescaled: at the start threshold it represents a
+ * small but mechanically useful 0.025 m/s with the 0.50 m/s remote ceiling.
+ */
+#define ECU_REMOTE_THROTTLE_START_PER_MILLE (50)
+#define ECU_REMOTE_THROTTLE_STOP_PER_MILLE  (25)
+/* These values describe three different contracts and must remain separate:
+ * command zero rejection, meaningful PDO target change, and minimum progress
+ * of the integer trajectory calculation.
+ */
+#define ECU_CANOPEN_DRIVE_COMMAND_ZERO_DEADBAND_UNITS (80000)
+#define ECU_CANOPEN_DRIVE_PDO_CHANGE_THRESHOLD_UNITS  (5000)
+#define ECU_CANOPEN_DRIVE_RAMP_MIN_STEP_UNITS          (1000)
 #define ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE      (3.0f)
 #define ECU_CAN2_ZERO_SPEED_VELOCITY_UNITS \
     ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
@@ -337,14 +354,16 @@
     (ECU_BUILD_PROFILE_WHOLE_VEHICLE_MOTION)
 #endif
 #define ECU_CANOPEN_CAN2_MOTION_NODE_COUNT             (8U)
-/* Drive velocity is ramped in a few discrete commissioning-friendly bands.
- * Reversal is intentionally the slowest path so a D/R sign change first eases
- * through zero instead of commanding an abrupt torque step.
+/* Drive group acceleration is selected from the largest four-axis velocity
+ * error. Error thresholds and rates are intentionally different quantities.
+ * Reversal first ramps the complete group to zero at the conservative rate.
  */
-#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_SMALL_UNITS_PER_SEC    (600000)
-#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_MEDIUM_UNITS_PER_SEC   (1200000)
-#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_LARGE_UNITS_PER_SEC    (2000000)
-#define ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_REVERSAL_UNITS_PER_SEC (500000)
+#define ECU_CANOPEN_DRIVE_ERROR_SMALL_UNITS                         (250000)
+#define ECU_CANOPEN_DRIVE_ERROR_MEDIUM_UNITS                        (1000000)
+#define ECU_CANOPEN_DRIVE_ACCEL_SMALL_UNITS_PER_SEC                 (600000)
+#define ECU_CANOPEN_DRIVE_ACCEL_MEDIUM_UNITS_PER_SEC                (1200000)
+#define ECU_CANOPEN_DRIVE_ACCEL_LARGE_UNITS_PER_SEC                 (2000000)
+#define ECU_CANOPEN_DRIVE_ACCEL_REVERSAL_UNITS_PER_SEC              (500000)
 #define ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS (1000)
 /* Steering joystick following is transmitted by RPDO at a fixed, moderate
  * cadence.  The vehicle/control layer owns target generation; the CAN2 motion
@@ -353,7 +372,7 @@
  * bursts while the raw remote target is still refreshed by the 5 ms vehicle
  * control path.
  */
-#define ECU_CANOPEN_STEER_PDO_PERIOD_MS  (20U)
+#define ECU_CANOPEN_STEER_PDO_PERIOD_MS  (50U)
 /* A single profile-position steering update is an ordered group:
  * four arm RPDOs, SYNC, four trigger RPDOs, SYNC.  The CAN2 task may call the
  * realtime PDO pump multiple times inside one 2 ms scheduler tick so a freshly
@@ -363,24 +382,36 @@
 #define ECU_CANOPEN_REALTIME_PDO_PUMP_PASSES (4U)
 #define ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS (1000)
 #define ECU_CANOPEN_STEER_POSITION_NEUTRAL_DEADBAND_COUNTS  (1500)
-/* Steering target smoothing is a trajectory layer:
- * - steer_latest_target_counts is the raw target from the latest remote sample.
- * - steer_commanded_target_counts is the accel/velocity-limited target sent by
- *   PDO.
- * Small errors use low velocity/acceleration so hand jitter is not amplified;
- * large errors use the profile values proven with the CAN analyzer.
+/* Ackermann steering follows one coherent four-axis trajectory. The largest
+ * axis error selects one of four discrete bands. Values in this block are
+ * position count/s and count/s^2, not the drive's 0.1-count/s velocity-object
+ * units. 500000 count/s^2 is the established 50 motor-rps^2 ceiling.
  */
-#define ECU_CANOPEN_STEER_TARGET_ERROR_NEAR_COUNTS                 (25000)
-#define ECU_CANOPEN_STEER_TARGET_ERROR_SMALL_COUNTS                (150000)
-#define ECU_CANOPEN_STEER_TARGET_ERROR_MEDIUM_COUNTS               (450000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC    (120000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC   (350000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC  (1400000)
-#define ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (5000000)
-#define ECU_CANOPEN_STEER_TARGET_ACCEL_NEAR_COUNTS_PER_SEC2        (100000)
-#define ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2       (300000)
+#define ECU_CANOPEN_STEER_TARGET_HOLD_COUNTS                       (750)
+#define ECU_CANOPEN_STEER_TARGET_ERROR_FINE_COUNTS                 (20000)
+#define ECU_CANOPEN_STEER_TARGET_ERROR_SMALL_COUNTS                (100000)
+#define ECU_CANOPEN_STEER_TARGET_ERROR_MEDIUM_COUNTS               (340000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_FINE_COUNTS_PER_SEC          (120000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_SMALL_COUNTS_PER_SEC         (300000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_MEDIUM_COUNTS_PER_SEC        (450000)
+#define ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC         (500000)
+#define ECU_CANOPEN_STEER_TARGET_ACCEL_FINE_COUNTS_PER_SEC2        (300000)
+#define ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2       (500000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2      (500000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2       (500000)
+#define ECU_CANOPEN_STEER_TARGET_DECEL_COUNTS_PER_SEC2             (350000)
+#define ECU_CANOPEN_STEER_SHAPER_MAX_ELAPSED_MS                    (60U)
+/* Runtime profile parameters are volatile drive settings, not PDO mapping or
+ * NVM writes. The CAN2 owner writes and reads them back once per steering node
+ * before allowing realtime RPDO output, so a previous maintenance tool cannot
+ * silently leave the machine limited to another speed.
+ * 0x6081 uses 0.1 count/s; 0x6083/0x6084 use count/s^2 on the installed drives.
+ */
+#define ECU_STEER_PROFILE_VELOCITY_UNITS                           (5000000)
+#define ECU_STEER_PROFILE_ACCEL_COUNTS_PER_SEC2                    (500000)
+#define ECU_STEER_PROFILE_DECEL_COUNTS_PER_SEC2                    (350000)
+#define ECU_STEER_PROFILE_SETUP_TIMEOUT_MS                         (1500U)
+#define ECU_STEER_PROFILE_SETUP_RETRY_BACKOFF_MS                   (500U)
 /* Fixed-posture transitions (spin/crab) are planned as one four-axis
  * trajectory from TPDO actual positions.  Keep the speed below the drive
  * profile velocity, but high enough that a 135 degree spin->crab axis does not
@@ -435,19 +466,13 @@
 #define ECU_REMOTE_B1_ZERO_CALIBRATION_WINDOW_MS              (2000U)
 #define ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS        (600U)
 #define ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS                 (20U)
+#define ECU_STEER_ZERO_PHASE_SETTLE_MS                        (50U)
 #define ECU_STEER_ZERO_SETUP_TIMEOUT_MS                       (30000U)
 #define ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (60000U)
 #define ECU_STEER_ZERO_RETURN_TIMEOUT_MS                      (35000U)
 #define ECU_STEER_ZERO_VERIFY_TIMEOUT_MS                      (2000U)
 #define ECU_STEER_ZERO_SDO_TIMEOUT_MS                         (1000U)
-/* Node6 and Node8 were measured to arrive late when changing from spin to crab
- * because they can travel roughly twice the steering distance of the other two
- * axes.  Keep this as a configuration mask so field tuning can change the
- * compensation without touching the planner logic.  bit1=Node6, bit3=Node8.
- */
-#define ECU_STEER_CRAB_FAST_AXIS_MASK                       ((uint8_t)0x0AU)
-#define ECU_STEER_CRAB_FAST_AXIS_PROGRESS_NUMERATOR         (2U)
-#define ECU_STEER_CRAB_FAST_AXIS_PROGRESS_DENOMINATOR       (1U)
+#define ECU_STEER_ZERO_SETUP_SDO_MAX_RETRIES                  (3U)
 /* Spin and crab are not safe to drive while the wheels are still slewing
  * toward their large steering angles.  The CAN2 motion adapter therefore keeps
  * drive RPDOs disabled until TPDO position feedback from all four steering
@@ -471,7 +496,7 @@
     ECU_STEER_REMOTE_COMMISSION_AXIS_MASK_ALL
 /* Device-level steering absolute-position clamp.  The normal Ackermann remote
  * limit is lower, but spin/crab require large fixed postures.  Crab mode must
- * be able to command four absolute +90 deg targets:
+ * be able to command four absolute +/-90 deg equivalent targets:
  * 2500-line encoder * 4x * 490:1 / 4 = 1,225,000 counts.
  */
 #define ECU_CANOPEN_STEER_MAX_POSITION_COUNTS               (1225000)
@@ -681,13 +706,19 @@ typedef enum {
 #define ECU_STEER_GEAR_REDUCTION                     (490.0f)
 #define ECU_STEER_COUNTS_PER_OUTPUT_REV \
     (ECU_CAN2_MOTION_ENCODER_COUNTS_PER_REV * ECU_STEER_GEAR_REDUCTION)
-#define ECU_STEER_POSITION_SPEED_UNITS               (5000000)
-/* Steering has a 490:1 reducer and was field-tested as too slow at the generic
- * old hydraulic-pump 2400 rpm commissioning limit.  CAN2 drive and steering
- * servos are allowed to use the field-confirmed 3000 rpm motor ceiling.
+#define ECU_STEER_MOTOR_MAX_RPM                      (3000.0f)
+/* Node5..8 have 10000 count/rev. Profile velocity objects use 0.1 count/s,
+ * while the ECU target trajectory integrates position count/s.
  */
-#if ECU_STEER_POSITION_SPEED_UNITS > ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
-#error ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM
+#define ECU_STEER_MAX_POSITION_COUNTS_PER_SEC        (500000)
+#define ECU_STEER_PROFILE_VELOCITY_UNITS_FROM_RPM    (5000000)
+#define ECU_STEER_POSITION_SPEED_UNITS \
+    ECU_STEER_PROFILE_VELOCITY_UNITS_FROM_RPM
+#if ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC > ECU_STEER_MAX_POSITION_COUNTS_PER_SEC
+#error ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC <= ECU_STEER_MAX_POSITION_COUNTS_PER_SEC
+#endif
+#if ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2 > 500000
+#error ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2 <= 500000
 #endif
 /* CAN3 lift calibration is separate from Node1..8/13 10000-count motor units.
  * Field measurement on the installed ground-clearance actuator:
@@ -779,12 +810,40 @@ typedef enum {
  * The four drive motors use RPDO3 current mode only after the track valve is
  * physically opened by the CAN3 hydraulic adapter.  Unit: 10 mA.
  *
- * Field setting: legs 1/4 stay at 7 A; legs 2/3 are raised to 10 A because
- * they still needed more assist under track-width load. */
-#define ECU_TRACK_ASSIST_LEG1_CURRENT_10MA           (700)
-#define ECU_TRACK_ASSIST_LEG2_CURRENT_10MA           (1000)
-#define ECU_TRACK_ASSIST_LEG3_CURRENT_10MA           (1000)
-#define ECU_TRACK_ASSIST_LEG4_CURRENT_10MA           (700)
+ * The values below are the first-motion thresholds measured with the chassis
+ * lifted on 2026-07-14.  They are deliberately per-axis: Node4 accelerated at
+ * 5 A while Nodes1/2/3 needed approximately 20/15/15 A.  A common 20 A value
+ * would over-drive an unloaded Node4. */
+#define ECU_TRACK_ASSIST_LEG1_CURRENT_10MA           (2000)
+#define ECU_TRACK_ASSIST_LEG2_CURRENT_10MA           (1500)
+#define ECU_TRACK_ASSIST_LEG3_CURRENT_10MA           (1500)
+#define ECU_TRACK_ASSIST_LEG4_CURRENT_10MA           (500)
+/* Software current slew is applied only while increasing torque.  Reducing or
+ * removing assist remains immediate.  Unit: 10 mA/s. */
+#define ECU_TRACK_ASSIST_CURRENT_SLEW_10MA_PER_SEC   (5000)
+/* Current mode does not regulate wheel speed.  Use fresh TPDO0 feedback to
+ * taper torque and latch it off if an unloaded wheel runs away. */
+#define ECU_TRACK_ASSIST_SLOWDOWN_RPM                 (150.0f)
+#define ECU_TRACK_ASSIST_OVERSPEED_RPM                (300.0f)
+#define ECU_TRACK_ASSIST_OVERSPEED_RESUME_RPM         (200.0f)
+#define ECU_TRACK_ASSIST_SLOWDOWN_VELOCITY_UNITS \
+    ((int32_t)((ECU_TRACK_ASSIST_SLOWDOWN_RPM * \
+                ECU_CAN2_MOTION_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_TRACK_ASSIST_OVERSPEED_VELOCITY_UNITS \
+    ((int32_t)((ECU_TRACK_ASSIST_OVERSPEED_RPM * \
+                ECU_CAN2_MOTION_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_TRACK_ASSIST_OVERSPEED_RESUME_VELOCITY_UNITS \
+    ((int32_t)((ECU_TRACK_ASSIST_OVERSPEED_RESUME_RPM * \
+                ECU_CAN2_MOTION_VELOCITY_UNITS_PER_RPM) + 0.5f))
+/* Track extension current signs for the crab-equivalent wheel posture below.
+ * Legs 3/4 are inverted from the former track-only posture because their
+ * steering target is now shifted by 180 degrees on the same rolling line.
+ * Retraction negates these signs in the command arbiter.
+ */
+#define ECU_TRACK_ASSIST_LEG1_OUTWARD_CURRENT_SIGN   (-1.0f)
+#define ECU_TRACK_ASSIST_LEG2_OUTWARD_CURRENT_SIGN   (1.0f)
+#define ECU_TRACK_ASSIST_LEG3_OUTWARD_CURRENT_SIGN   (-1.0f)
+#define ECU_TRACK_ASSIST_LEG4_OUTWARD_CURRENT_SIGN   (1.0f)
 #define ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS       (5000U)
 
 /* Commissioning scale factors.  BC/BC2 0x60FF and 0x606C use velocity units of
@@ -921,6 +980,21 @@ typedef enum {
 #define ECU_VEHICLE_MIN_TURN_RADIUS_MM    (1500.0f)
 #define ECU_MOTION_SPIN_STEER_DEG         (45.0f)
 #define ECU_MOTION_CRAB_STEER_DEG         (90.0f)
+/* A wheel line at +90 and -90 degrees is physically equivalent, but its
+ * rolling direction is reversed.  Selecting alternating equivalent angles
+ * lets every axis move only 45 degrees from the spin posture instead of
+ * making legs 2/4 take the 135-degree path.  The rolling signs preserve the
+ * operator's D/R lateral direction after that 180-degree representation
+ * change.  Track-width presteer uses these same steering signs.
+ */
+#define ECU_CRAB_LEG1_STEER_SIGN           (1.0f)
+#define ECU_CRAB_LEG2_STEER_SIGN           (-1.0f)
+#define ECU_CRAB_LEG3_STEER_SIGN           (1.0f)
+#define ECU_CRAB_LEG4_STEER_SIGN           (-1.0f)
+#define ECU_CRAB_LEG1_ROLL_SIGN            (1.0f)
+#define ECU_CRAB_LEG2_ROLL_SIGN            (-1.0f)
+#define ECU_CRAB_LEG3_ROLL_SIGN            (1.0f)
+#define ECU_CRAB_LEG4_ROLL_SIGN            (-1.0f)
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (10.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (490.0f)
 /* Operator command magnitude and diagnostic unit.  The lift device consumes

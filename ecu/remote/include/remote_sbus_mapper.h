@@ -29,6 +29,13 @@ typedef struct {
 
 typedef struct {
     remote_discrete_channel_t discrete_channels[ECU_SBUS_CHANNEL_COUNT];
+    /* CH10/B1 has a dedicated short-press filter.  Do not reuse the generic
+     * three-position switch debounce: B1 transitions are intentionally brief. */
+    remote_discrete_channel_t b1_button;
+    /* Stateful CH3 endpoint hysteresis. This filters receiver noise before it
+     * becomes a vehicle speed request; it is not a safety authorization flag.
+     */
+    bool throttle_active;
 } remote_sbus_mapper_t;
 
 void remote_sbus_mapper_init(remote_sbus_mapper_t *mapper, uint32_t now_ms);

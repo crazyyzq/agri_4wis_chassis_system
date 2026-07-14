@@ -7,6 +7,7 @@
 #include "canopen_master_service.h"
 #include "ecu_config.h"
 #include "ecu_types.h"
+#include "motion_setpoint_shaper.h"
 #include "steering_transition_planner.h"
 #include "vehicle_types.h"
 
@@ -53,6 +54,15 @@ typedef enum {
 } motion_drive_command_kind_t;
 
 typedef enum {
+    MOTION_STEER_PROFILE_WRITE_REQUEST = 0,
+    MOTION_STEER_PROFILE_WRITE_WAIT,
+    MOTION_STEER_PROFILE_READ_REQUEST,
+    MOTION_STEER_PROFILE_READ_WAIT,
+    MOTION_STEER_PROFILE_RETRY_BACKOFF,
+    MOTION_STEER_PROFILE_COMPLETE
+} motion_steer_profile_setup_state_t;
+
+typedef enum {
     MOTION_STEER_ZERO_CAL_IDLE = 0,
     MOTION_STEER_ZERO_CAL_SETUP,
     MOTION_STEER_ZERO_CAL_SEARCH_LEFT,
@@ -62,6 +72,7 @@ typedef enum {
     MOTION_STEER_ZERO_CAL_RETURN_MID,
     MOTION_STEER_ZERO_CAL_WRITE_ZERO,
     MOTION_STEER_ZERO_CAL_VERIFY_ZERO,
+    MOTION_STEER_ZERO_CAL_ABORTING,
     MOTION_STEER_ZERO_CAL_COMPLETE,
     MOTION_STEER_ZERO_CAL_FAULT
 } motion_steer_zero_calibration_state_t;
@@ -93,7 +104,18 @@ typedef struct {
     bool steer_safe_stop_pending;
     uint32_t steer_group_complete_count;
     uint32_t steer_group_failure_count;
+    motion_steer_profile_setup_state_t steer_profile_setup_state;
+    uint8_t steer_profile_setup_axis;
+    uint8_t steer_profile_setup_object;
+    uint8_t steer_profile_verified_mask;
+    uint8_t steer_profile_retry_count[ECU_WHEEL_COUNT];
+    uint32_t steer_profile_setup_start_ms;
+    uint32_t steer_profile_setup_success_before;
+    uint32_t steer_profile_setup_abort_before;
+    uint32_t steer_profile_setup_failure_count;
+    uint32_t steer_profile_readback[ECU_WHEEL_COUNT][3];
     bool steer_zero_calibration_requested;
+    bool steer_zero_calibration_domain_active;
     uint32_t steer_zero_calibration_request_count;
     uint32_t steer_zero_calibration_last_request_ms;
     motion_steer_zero_calibration_state_t steer_zero_calibration_state;
@@ -101,11 +123,18 @@ typedef struct {
     uint32_t steer_zero_calibration_last_pdo_ms;
     uint32_t steer_zero_calibration_active_group_sequence;
     bool steer_zero_calibration_group_active;
+    bool steer_zero_calibration_prepare_zero_queued;
+    bool steer_zero_calibration_verify_sync_sent;
+    uint32_t steer_zero_calibration_prepare_settle_start_ms;
     uint8_t steer_zero_calibration_done_mask;
     uint8_t steer_zero_calibration_fault_mask;
     uint8_t steer_zero_calibration_setup_node_index;
     uint8_t steer_zero_calibration_setup_step;
+    uint8_t steer_zero_calibration_setup_sdo_retry_count;
     uint8_t steer_zero_calibration_zero_write_index;
+    uint8_t steer_zero_calibration_zero_written_mask;
+    uint8_t steer_zero_calibration_abort_restore_index;
+    bool steer_zero_calibration_abort_zero_queued;
     bool steer_zero_calibration_sdo_active;
     uint8_t steer_zero_calibration_sdo_node_id;
     uint16_t steer_zero_calibration_sdo_index;
@@ -200,6 +229,8 @@ typedef struct {
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
     bool track_assist_steer_approximately_ready;
+    uint8_t track_assist_overspeed_mask;
+    uint8_t track_assist_feedback_invalid_mask;
     ecu_motion_mode_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
     uint8_t track_assist_missing_axis_mask;
@@ -210,6 +241,7 @@ typedef struct {
     uint32_t presteer_last_timeout_ms;
     uint32_t drive_group_complete_count;
     uint32_t drive_group_failure_count;
+    bool drive_reversal_through_zero;
     uint32_t drive_pdo_tx_error_count[ECU_WHEEL_COUNT];
     bool steer_pdo_configured[ECU_WHEEL_COUNT];
     bool steer_position_mode_ready[ECU_WHEEL_COUNT];
@@ -222,6 +254,8 @@ typedef struct {
     bool steer_commanded_target_valid[ECU_WHEEL_COUNT];
     int32_t steer_commanded_target_counts[ECU_WHEEL_COUNT];
     int32_t steer_commanded_velocity_counts_per_sec[ECU_WHEEL_COUNT];
+    int32_t steer_group_commanded_speed_counts_per_sec;
+    motion_steer_follow_band_t steer_follow_band;
     steering_transition_planner_t steer_transition_planner;
     bool steer_pending_target[ECU_WHEEL_COUNT];
     bool steer_last_commanded_position_valid[ECU_WHEEL_COUNT];
@@ -295,5 +329,6 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
                                                        canopen_master_service_t *canopen,
                                                        const ecu_hardware_config_t *config,
                                                        uint32_t now_ms);
+
 
 #endif /* MOTION_DEVICE_H */

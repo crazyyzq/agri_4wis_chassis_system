@@ -52,26 +52,6 @@ static int32_t interpolate_counts(int32_t start, int32_t target, uint32_t smooth
     return (int32_t)value;
 }
 
-static uint32_t axis_progress_q15(ecu_motion_mode_t mode,
-                                  uint32_t wheel,
-                                  uint32_t base_progress_q15)
-{
-    if (base_progress_q15 >= 32768U) {
-        return 32768U;
-    }
-
-    if (mode == ECU_MOTION_MODE_CRAB &&
-        (ECU_STEER_CRAB_FAST_AXIS_MASK & (uint8_t)(1U << wheel)) != 0U) {
-        uint64_t scaled =
-            ((uint64_t)base_progress_q15 *
-             (uint64_t)ECU_STEER_CRAB_FAST_AXIS_PROGRESS_NUMERATOR) /
-            (uint64_t)ECU_STEER_CRAB_FAST_AXIS_PROGRESS_DENOMINATOR;
-        return scaled > 32768ULL ? 32768U : (uint32_t)scaled;
-    }
-
-    return base_progress_q15;
-}
-
 static bool targets_changed(const steering_transition_planner_t *planner,
                             const int32_t requested_target_counts[ECU_WHEEL_COUNT])
 {
@@ -211,10 +191,8 @@ bool steering_transition_planner_update(
                             (uint32_t)(((uint64_t)elapsed_ms * 32768ULL) /
                                        planner->duration_ms);
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        uint32_t wheel_progress_q15 =
-            axis_progress_q15(mode, wheel, progress_q15);
-        uint32_t smooth_q15 = smoothstep_q15(wheel_progress_q15);
-        int32_t value = wheel_progress_q15 >= 32768U ?
+        uint32_t smooth_q15 = smoothstep_q15(progress_q15);
+        int32_t value = progress_q15 >= 32768U ?
             planner->requested_target_counts[wheel] :
             interpolate_counts(planner->start_counts[wheel],
                                planner->requested_target_counts[wheel],

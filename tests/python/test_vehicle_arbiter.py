@@ -178,6 +178,7 @@ def test_track_width_assist_is_presteered_and_valve_gated(root: pathlib.Path) ->
     motion_c = read(root, "ecu/devices/src/motion_device.c")
     remote_adjust_c = read(root, "ecu/remote/src/remote_adjust_fsm.c")
     config_h = read(root, "ecu/config/include/ecu_config.h")
+    config_c = read(root, "ecu/config/src/ecu_config.c")
 
     for token in [
         "ECU_REMOTE_TRACK_ASSIST_CENTER_EXIT_MS",
@@ -185,10 +186,14 @@ def test_track_width_assist_is_presteered_and_valve_gated(root: pathlib.Path) ->
         "ECU_TRACK_ASSIST_LEG2_CURRENT_10MA",
         "ECU_TRACK_ASSIST_LEG3_CURRENT_10MA",
         "ECU_TRACK_ASSIST_LEG4_CURRENT_10MA",
-        "#define ECU_TRACK_ASSIST_LEG1_CURRENT_10MA           (700)",
-        "#define ECU_TRACK_ASSIST_LEG2_CURRENT_10MA           (1000)",
-        "#define ECU_TRACK_ASSIST_LEG3_CURRENT_10MA           (1000)",
-        "#define ECU_TRACK_ASSIST_LEG4_CURRENT_10MA           (700)",
+        "#define ECU_TRACK_ASSIST_LEG1_CURRENT_10MA           (2000)",
+        "#define ECU_TRACK_ASSIST_LEG2_CURRENT_10MA           (1500)",
+        "#define ECU_TRACK_ASSIST_LEG3_CURRENT_10MA           (1500)",
+        "#define ECU_TRACK_ASSIST_LEG4_CURRENT_10MA           (500)",
+        "#define ECU_TRACK_ASSIST_LEG1_OUTWARD_CURRENT_SIGN   (-1.0f)",
+        "#define ECU_TRACK_ASSIST_LEG2_OUTWARD_CURRENT_SIGN   (1.0f)",
+        "#define ECU_TRACK_ASSIST_LEG3_OUTWARD_CURRENT_SIGN   (-1.0f)",
+        "#define ECU_TRACK_ASSIST_LEG4_OUTWARD_CURRENT_SIGN   (1.0f)",
         "ECU_TRACK_ASSIST_STEER_APPROX_TOLERANCE_COUNTS",
     ]:
         assert token in config_h, token
@@ -210,8 +215,23 @@ def test_track_width_assist_is_presteered_and_valve_gated(root: pathlib.Path) ->
         assert token in remote_adjust_c, token
 
     assert "ecu_track_adjust_config_default" in arbiter_c
+    for token in [
+        "ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG1_STEER_SIGN",
+        "ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG2_STEER_SIGN",
+        "ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG3_STEER_SIGN",
+        "ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG4_STEER_SIGN",
+        "ECU_TRACK_ASSIST_LEG1_OUTWARD_CURRENT_SIGN",
+        "ECU_TRACK_ASSIST_LEG2_OUTWARD_CURRENT_SIGN",
+        "ECU_TRACK_ASSIST_LEG3_OUTWARD_CURRENT_SIGN",
+        "ECU_TRACK_ASSIST_LEG4_OUTWARD_CURRENT_SIGN",
+    ]:
+        assert token in config_c, token
     assert "static void apply_track_adjust_steering_posture" in arbiter_c
     assert "static void apply_track_adjust_drive_assist" in arbiter_c
+    assert "motion_setpoint_shape_drive_current_group" in motion_c
+    assert "limit_track_assist_current_by_feedback" in motion_c
+    assert "ECU_TRACK_ASSIST_OVERSPEED_VELOCITY_UNITS" in motion_c
+    assert "track_assist_overspeed_mask" in motion_c
     adjust_fn = arbiter_c.split("static void apply_remote_adjust_command", 1)[1].split(
         "static void inhibit_can2_motion_in_adjust_domain", 1
     )[0]
@@ -306,6 +326,32 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
     assert "steer_deg" not in crab_block
     assert "CH1" not in crab_block
 
+    crab_impl = kin_c[kin_c.index("void four_wheel_kinematics_build_crab"):]
+    for token in [
+        "steer_deg * ECU_CRAB_LEG1_STEER_SIGN",
+        "steer_deg * ECU_CRAB_LEG2_STEER_SIGN",
+        "steer_deg * ECU_CRAB_LEG3_STEER_SIGN",
+        "steer_deg * ECU_CRAB_LEG4_STEER_SIGN",
+        "speed_mps * ECU_CRAB_LEG1_ROLL_SIGN",
+        "speed_mps * ECU_CRAB_LEG2_ROLL_SIGN",
+        "speed_mps * ECU_CRAB_LEG3_ROLL_SIGN",
+        "speed_mps * ECU_CRAB_LEG4_ROLL_SIGN",
+    ]:
+        assert token in crab_impl, token
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    for token in [
+        "#define ECU_CRAB_LEG1_STEER_SIGN           (1.0f)",
+        "#define ECU_CRAB_LEG2_STEER_SIGN           (-1.0f)",
+        "#define ECU_CRAB_LEG3_STEER_SIGN           (1.0f)",
+        "#define ECU_CRAB_LEG4_STEER_SIGN           (-1.0f)",
+        "#define ECU_CRAB_LEG1_ROLL_SIGN            (1.0f)",
+        "#define ECU_CRAB_LEG2_ROLL_SIGN            (-1.0f)",
+        "#define ECU_CRAB_LEG3_ROLL_SIGN            (1.0f)",
+        "#define ECU_CRAB_LEG4_ROLL_SIGN            (-1.0f)",
+    ]:
+        assert token in config_h, token
+
     for token in [
         "ECU_WHEEL_LEG1_FRONT_RIGHT",
         "ECU_WHEEL_LEG2_FRONT_LEFT",
@@ -335,7 +381,7 @@ def test_motion_control_generates_mode_specific_four_wheel_targets(root: pathlib
 
 
 def test_whole_vehicle_crab_keeps_full_90_degree_steering_range(root: pathlib.Path) -> None:
-    """Crab mode needs four absolute +90 deg targets, so device clamping must allow 1225000 counts."""
+    """Crab mode needs absolute +/-90 deg targets, so device clamping must allow 1225000 counts."""
     config_h = read(root, "ecu/config/include/ecu_config.h")
 
     max_range_block = config_h[
@@ -367,9 +413,9 @@ def test_fixed_posture_steering_transition_planner_is_isolated(root: pathlib.Pat
         assert token in planner_h, token
 
     assert "smoothstep" in planner_c
-    assert "axis_progress_q15" in planner_c
-    assert "ECU_STEER_CRAB_FAST_AXIS_MASK" in planner_c
-    assert "#define ECU_STEER_CRAB_FAST_AXIS_MASK" in read(root, "ecu/config/include/ecu_config.h")
+    assert "axis_progress_q15" not in planner_c
+    assert "ECU_STEER_CRAB_FAST_AXIS_MASK" not in planner_c
+    assert "#define ECU_STEER_CRAB_FAST_AXIS_MASK" not in read(root, "ecu/config/include/ecu_config.h")
     assert "transition_id" in planner_c
     assert "same_target" in planner_c
     assert "planner->completed && same_target" in planner_c
@@ -415,14 +461,14 @@ def test_motion_units_are_mps_and_realtime_smoothing_is_discrete(root: pathlib.P
         "ECU_DRIVE_MAX_SPEED_MPS",
         "ECU_DRIVE_COMMISSIONING_MAX_SPEED_MPS",
         "ECU_REMOTE_MAX_SPEED_MPS",
-        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_NEAR_COUNTS_PER_SEC",
-        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_SMALL_COUNTS_PER_SEC",
-        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_MEDIUM_COUNTS_PER_SEC",
-        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC",
-        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_SMALL_UNITS_PER_SEC",
-        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_MEDIUM_UNITS_PER_SEC",
-        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_LARGE_UNITS_PER_SEC",
-        "ECU_CANOPEN_DRIVE_VELOCITY_RATE_LIMIT_REVERSAL_UNITS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_FINE_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_SMALL_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_MEDIUM_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_ACCEL_SMALL_UNITS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_ACCEL_MEDIUM_UNITS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_ACCEL_LARGE_UNITS_PER_SEC",
+        "ECU_CANOPEN_DRIVE_ACCEL_REVERSAL_UNITS_PER_SEC",
         "ECU_CANOPEN_LEG1_DRIVE_DIRECTION_SIGN (1)",
         "ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN (-1)",
         "ECU_CANOPEN_LEG3_DRIVE_DIRECTION_SIGN (-1)",
@@ -441,10 +487,8 @@ def test_motion_units_are_mps_and_realtime_smoothing_is_discrete(root: pathlib.P
     assert "ECU_CANOPEN_LEG2_DRIVE_DIRECTION_SIGN" in config_c
 
     for token in [
-        "select_steer_rate_limit_counts_per_sec",
-        "select_drive_velocity_rate_limit_units_per_sec",
-        "requested < 0 && current > 0",
-        "requested > 0 && current < 0",
+        "motion_setpoint_shape_steering_group",
+        "motion_setpoint_shape_drive_group",
         "drive_direction_sign_is_valid",
         "config->drive_direction_sign[wheel]",
         "config->drive_speed_mps_to_counts_per_sec *",
@@ -456,6 +500,140 @@ def test_motion_units_are_mps_and_realtime_smoothing_is_discrete(root: pathlib.P
     assert "DRIVE_SPEED_MPS_TO_UNITS * DRIVE_DIRECTION_SIGNS[index]" in debug_py
     assert "drive_sign_from_node" in debug_py
     assert "speed_kph" not in debug_py
+
+
+def test_can2_motion_uses_one_coherent_four_axis_setpoint_shaper(root: pathlib.Path) -> None:
+    """Ackermann steering and traction must be shaped as coherent four-axis groups."""
+
+    shaper_h = read(root, "ecu/control/include/motion_setpoint_shaper.h")
+    shaper_c = read(root, "ecu/control/src/motion_setpoint_shaper.c")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+
+    for token in [
+        "motion_setpoint_shape_steering_group",
+        "motion_setpoint_shape_drive_group",
+        "MOTION_STEER_FOLLOW_BAND_HOLD",
+        "MOTION_STEER_FOLLOW_BAND_LARGE",
+        "max_abs_error",
+        "integer_sqrt_u64",
+        "reversal_through_zero",
+    ]:
+        assert token in shaper_h or token in shaper_c, token
+
+    assert "../../control/src/motion_setpoint_shaper.c" in cmake
+    assert "motion_setpoint_shape_steering_group" in motion_c
+    assert "motion_setpoint_shape_drive_group" in motion_c
+    assert "update_steer_commanded_target" not in motion_c
+    assert "rate_limit_velocity_units" not in motion_c
+
+
+def test_steering_follow_units_and_limits_are_explicit(root: pathlib.Path) -> None:
+    """3000 rpm steering uses position count/s while 0x6081 retains 0.1 count/s."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+
+    for token in [
+        "#define ECU_STEER_MOTOR_MAX_RPM                      (3000.0f)",
+        "ECU_STEER_MAX_POSITION_COUNTS_PER_SEC",
+        "ECU_STEER_PROFILE_VELOCITY_UNITS_FROM_RPM",
+        "ECU_CANOPEN_STEER_TARGET_HOLD_COUNTS",
+        "ECU_CANOPEN_STEER_TARGET_RATE_FINE_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC",
+        "ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_DECEL_COUNTS_PER_SEC2",
+        "ECU_STEER_PROFILE_DECEL_COUNTS_PER_SEC2",
+    ]:
+        assert token in config_h, token
+
+    assert "(5000000)" in config_h
+    assert "(500000)" in config_h
+    assert "(350000)" in config_h
+
+
+def test_steering_profile_is_asynchronously_written_and_read_back(root: pathlib.Path) -> None:
+    """CAN2 must verify volatile 6081/6083/6084 values before realtime steering."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    motion_h = read(root, "ecu/devices/include/motion_device.h")
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "MOTION_STEER_PROFILE_WRITE_REQUEST",
+        "MOTION_STEER_PROFILE_WRITE_WAIT",
+        "MOTION_STEER_PROFILE_READ_REQUEST",
+        "MOTION_STEER_PROFILE_READ_WAIT",
+        "MOTION_STEER_PROFILE_RETRY_BACKOFF",
+        "MOTION_STEER_PROFILE_COMPLETE",
+        "steer_profile_verified_mask",
+        "steer_profile_readback",
+    ]:
+        assert token in motion_h, token
+
+    for token in [
+        "ECU_STEER_PROFILE_VELOCITY_UNITS",
+        "ECU_STEER_PROFILE_ACCEL_COUNTS_PER_SEC2",
+        "ECU_STEER_PROFILE_DECEL_COUNTS_PER_SEC2",
+        "ECU_STEER_PROFILE_SETUP_TIMEOUT_MS",
+        "ECU_STEER_PROFILE_SETUP_RETRY_BACKOFF_MS",
+    ]:
+        assert token in config_h, token
+
+    setup = motion_c.split("static bool steer_profile_setup_step", 1)[1].split(
+        "static bool prepare_steer_axis_once", 1
+    )[0]
+    for token in [
+        "canopen_master_service_request_sdo_write",
+        "canopen_master_service_request_sdo_read",
+        "snapshot.last_sdo_value == (uint32_t)expected",
+        "steer_profile_setup_retry",
+    ]:
+        assert token in setup, token
+    assert "ECU_CANOPEN_OBJ_STORE_PARAMETERS" not in setup
+    assert "ECU_CANOPEN_OBJ_RPDO" not in setup
+    assert "profile[st=%u axis=%u obj=%u ok=0x%02x fail=%lu]" in monitor_c
+
+    axis_ready = motion_c.split("static bool steer_axis_realtime_ready", 1)[1].split(
+        "static bool all_steer_axes_realtime_ready", 1
+    )[0]
+    assert "steer_profile_verified_mask" not in axis_ready
+
+    flush = motion_c.split("motion_device_flush_realtime", 1)[1]
+    assert flush.index("can2_recovery_steer_sync_pending") < flush.index(
+        "state->steer_profile_setup_state != MOTION_STEER_PROFILE_COMPLETE"
+    )
+    profile_gate = flush.split("bool steer_profile_setup_incomplete", 1)[1].split(
+        "if (!state->steer_normal_pdo_allowed)", 1
+    )[0]
+    assert "!state->can2_recovery_steer_sync_pending" in profile_gate
+    assert "force_can2_drive_zero_intent(state, setup_zero_enable_requested)" in profile_gate
+    assert "force_can2_drive_safe_stop_intent(state)" not in profile_gate
+
+
+def test_drive_zero_filter_and_group_ramp_are_separate_contracts(root: pathlib.Path) -> None:
+    """Throttle noise, PDO change detection, and ramp increments are not one deadband."""
+
+    config_h = read(root, "ecu/config/include/ecu_config.h")
+    mapper_h = read(root, "ecu/remote/include/remote_sbus_mapper.h")
+    mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
+    shaper_c = read(root, "ecu/control/src/motion_setpoint_shaper.c")
+
+    for token in [
+        "ECU_REMOTE_THROTTLE_START_PER_MILLE",
+        "ECU_REMOTE_THROTTLE_STOP_PER_MILLE",
+        "ECU_CANOPEN_DRIVE_COMMAND_ZERO_DEADBAND_UNITS",
+        "ECU_CANOPEN_DRIVE_PDO_CHANGE_THRESHOLD_UNITS",
+        "ECU_CANOPEN_DRIVE_RAMP_MIN_STEP_UNITS",
+    ]:
+        assert token in config_h, token
+
+    assert "throttle_active" in mapper_h
+    assert "apply_throttle_hysteresis" in mapper_c
+    assert "ECU_REMOTE_THROTTLE_START_PER_MILLE" in mapper_c
+    assert "ECU_REMOTE_THROTTLE_STOP_PER_MILLE" in mapper_c
+    assert "reversal_through_zero" in shaper_c
+    assert "effective_requested[wheel] = 0" in shaper_c
 
 
 def test_four_wheel_ackermann_kinematics_uses_vehicle_geometry(root: pathlib.Path) -> None:

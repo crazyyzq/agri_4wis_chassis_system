@@ -78,9 +78,10 @@ static void build_crab_targets(float speed_mps,
                                vehicle_actuator_command_t *out)
 {
     four_wheel_kinematics_output_t kinematics;
-    /* Crab mode uses one fixed steering posture: all four wheels at +90 deg.
-     * D/R select the lateral travel direction by changing the sign of the four
-     * drive wheel velocity commands, not by flipping the steering angle.
+    /* Crab mode uses one fixed physical rolling line.  The kinematics layer
+     * selects +/-90-degree equivalent targets and matching wheel-speed signs
+     * so all four axes take the short path from spin without changing the
+     * operator's D/R lateral direction.
      */
     four_wheel_kinematics_build_crab(speed_mps,
                                      ECU_MOTION_CRAB_STEER_DEG,

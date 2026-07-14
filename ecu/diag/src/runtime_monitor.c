@@ -298,7 +298,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s "
            "estop=%s diag=%s "
            "remote[steer=%d thr=%d clr=%d trk=%d ch10=%u ch14=%u "
-           "b1_cnt=%u b1_lat=%s zero_raw=%s zero_req=%s zero_blk=%s]\r\n",
+           "b1_cnt=%u b1_lat=%s zero_raw=%s zero_req=%s zero_blk=%s "
+           "zero_state=%u zero_runs=%lu]\r\n",
            (unsigned long)snapshot->now_ms,
            (unsigned long)snapshot->executor_sequence,
            status_led_pattern_text(snapshot->status_led_pattern),
@@ -325,7 +326,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            bool_text(snapshot->b1_zero_calibration_pressed_latched),
            bool_text(snapshot->b1_zero_calibration_raw_request),
            bool_text(snapshot->steer_zero_calibration_request),
-           bool_text(snapshot->b1_zero_calibration_gate_blocked));
+           bool_text(snapshot->b1_zero_calibration_gate_blocked),
+           (unsigned int)snapshot->steer_zero_calibration_state,
+           (unsigned long)snapshot->steer_zero_calibration_request_count);
 
     /* Keep one compact command line outside verbose mode.  During vehicle
      * commissioning this is the minimum evidence needed to distinguish a
@@ -397,7 +400,10 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "exp=%u done=%u fail=%u inflight=%u last_fail[g=%lu cob=0x%03x n=%u e=%ld] "
            "fresh[d=0x%02x s=0x%02x] hb[d=0x%02x s=0x%02x] fault[d=0x%02x s=0x%02x] "
            "steer_gate[allow=%s inh=%u/%s] "
+           "profile[st=%u axis=%u obj=%u ok=0x%02x fail=%lu] "
            "presteer[hold=%s ready=%s track_ready=%s miss=0x%02x] "
+           "assist[k=%u/%u/%u/%u en=%u/%u/%u/%u cmd=%d/%d/%d/%d act=%d/%d/%d/%d "
+           "ov=0x%02x fb_bad=0x%02x grp=%lu/%lu] "
            "recover=%lu consec_fail=%lu last_recover_ms=%lu "
            "node_recover=0x%02x stale=0x%02x partial=%s steer_resync=%s partial_ok=%lu\r\n",
            (unsigned long)snapshot->can2_canopen_snapshot.pdo_queued_count,
@@ -423,10 +429,35 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
             bool_text(snapshot->steer_normal_pdo_allowed),
             (unsigned int)snapshot->steer_inhibit_reason,
             steer_inhibit_reason_short(snapshot->steer_inhibit_reason),
+            (unsigned int)snapshot->steer_profile_setup_state,
+            (unsigned int)snapshot->steer_profile_setup_axis,
+            (unsigned int)snapshot->steer_profile_setup_object,
+            (unsigned int)snapshot->steer_profile_verified_mask,
+            (unsigned long)snapshot->steer_profile_setup_failure_count,
             bool_text(snapshot->presteer_drive_hold_active),
             bool_text(snapshot->presteer_target_reached),
             bool_text(snapshot->track_assist_steer_approximately_ready),
            (unsigned int)snapshot->presteer_missing_axis_mask,
+           (unsigned int)snapshot->drive_last_command_kind[0],
+           (unsigned int)snapshot->drive_last_command_kind[1],
+           (unsigned int)snapshot->drive_last_command_kind[2],
+           (unsigned int)snapshot->drive_last_command_kind[3],
+           snapshot->drive_last_enable_requested[0] ? 1U : 0U,
+           snapshot->drive_last_enable_requested[1] ? 1U : 0U,
+           snapshot->drive_last_enable_requested[2] ? 1U : 0U,
+           snapshot->drive_last_enable_requested[3] ? 1U : 0U,
+           (int)snapshot->drive_last_current_10ma[0],
+           (int)snapshot->drive_last_current_10ma[1],
+           (int)snapshot->drive_last_current_10ma[2],
+           (int)snapshot->drive_last_current_10ma[3],
+           (int)snapshot->can2_canopen_snapshot.node_feedback[ECU_CANOPEN_DRIVE_FR_NODE_ID].actual_current_raw,
+           (int)snapshot->can2_canopen_snapshot.node_feedback[ECU_CANOPEN_DRIVE_FL_NODE_ID].actual_current_raw,
+           (int)snapshot->can2_canopen_snapshot.node_feedback[ECU_CANOPEN_DRIVE_RL_NODE_ID].actual_current_raw,
+           (int)snapshot->can2_canopen_snapshot.node_feedback[ECU_CANOPEN_DRIVE_RR_NODE_ID].actual_current_raw,
+           (unsigned int)snapshot->track_assist_overspeed_mask,
+           (unsigned int)snapshot->track_assist_feedback_invalid_mask,
+           (unsigned long)snapshot->drive_group_complete_count,
+           (unsigned long)snapshot->drive_group_failure_count,
            (unsigned long)snapshot->can2_realtime_transient_recovery_count,
            (unsigned long)snapshot->can2_realtime_consecutive_failure_count,
            (unsigned long)snapshot->can2_realtime_last_recovery_ms,

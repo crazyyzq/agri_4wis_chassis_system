@@ -64,21 +64,24 @@ def test_steering_remote_follow_uses_latest_target_trajectory_not_raw_jitter(roo
     config_h = read(root, "ecu/config/include/ecu_config.h")
     motion_h = read(root, "ecu/devices/include/motion_device.h")
     motion_c = read(root, "ecu/devices/src/motion_device.c")
+    shaper_h = read(root, "ecu/control/include/motion_setpoint_shaper.h")
+    shaper_c = read(root, "ecu/control/src/motion_setpoint_shaper.c")
 
     for token in [
         "steer_latest_target_counts",
         "steer_commanded_target_counts",
         "steer_commanded_velocity_counts_per_sec",
-        "update_steer_commanded_target",
-        "select_steer_accel_limit_counts_per_sec2",
+        "steer_group_commanded_speed_counts_per_sec",
+        "motion_setpoint_shape_steering_group",
     ]:
-        assert token in motion_h or token in motion_c, token
+        assert token in motion_h or token in motion_c or token in shaper_h or token in shaper_c, token
     for token in [
-        "ECU_CANOPEN_STEER_TARGET_ACCEL_NEAR_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_ACCEL_FINE_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_SMALL_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2",
-        "ECU_CANOPEN_STEER_TARGET_RATE_LIMIT_LARGE_COUNTS_PER_SEC   (5000000)",
+        "ECU_CANOPEN_STEER_TARGET_DECEL_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC         (500000)",
     ]:
         assert token in config_h, token
     cache_fn = motion_c.split("static bool cache_latest_steer_target", 1)[1].split(
@@ -534,6 +537,8 @@ def test_python_can_analyzer_and_modbus_tools_are_safe_by_default(root: pathlib.
         "CANOPEN_STORE_SAVE_SIGNATURE",
         "0x221C",
         "stop_all_axes",
+        "best_effort_safe_shutdown",
+        "require_fresh_feedback",
         "set_current_position_zero",
         "steer_zero_calibration.json",
         "midpoint_counts_by_node",
@@ -569,6 +574,8 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
     config_h = read(root, "ecu/config/include/ecu_config.h")
     remote_h = read(root, "ecu/remote/include/remote_types.h")
     remote_c = read(root, "ecu/remote/src/remote_manager.c")
+    remote_mapper_h = read(root, "ecu/remote/include/remote_sbus_mapper.h")
+    remote_mapper_c = read(root, "ecu/remote/src/remote_sbus_mapper.c")
     arbiter_c = read(root, "ecu/vehicle/src/command_arbiter.c")
     motion_c = read(root, "ecu/devices/src/motion_device.c")
     motion_h = read(root, "ecu/devices/include/motion_device.h")
@@ -592,10 +599,17 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
         "ECU_STEER_ZERO_LEG4_LEFT_SIGN                         (-1)",
         "ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS        (600U)",
         "ECU_STEER_ZERO_VELOCITY_PDO_PERIOD_MS                 (20U)",
+        "ECU_STEER_ZERO_PHASE_SETTLE_MS                        (50U)",
         "ECU_STEER_ZERO_SEARCH_TIMEOUT_MS                      (60000U)",
         "ECU_STEER_ZERO_SDO_TIMEOUT_MS                         (1000U)",
+        "ECU_STEER_ZERO_SETUP_SDO_MAX_RETRIES                  (3U)",
     ]:
         assert token in config_h, token
+    assert "ECU_REMOTE_B1_EDGE_DEBOUNCE_MS    (20U)" in config_h
+    assert "remote_discrete_channel_t b1_button;" in remote_mapper_h
+    assert "b1_transition_from_channel" in remote_mapper_c
+    assert "candidate != REMOTE_POS_LOW && candidate != REMOTE_POS_HIGH" in remote_mapper_c
+    assert "ECU_REMOTE_B1_EDGE_DEBOUNCE_MS" in remote_mapper_c
     assert "ECU_STEER_ZERO_STALL_IMMEDIATE_CURRENT_10MA           (1500)" not in config_h
 
     assert "bool steer_zero_calibration_request;" in remote_h
@@ -604,6 +618,9 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
     assert "ECU_REMOTE_B1_ZERO_CALIBRATION_PRESS_COUNT" in remote_c
     assert "Count every debounced CH10 state transition as one short press" in remote_c
     assert "manager->b1_zero_calibration_press_latched = input->b1_changed" in remote_c
+    assert "b1_zero_calibration_input_initialized" in remote_c
+    assert "That synchronization sample" in remote_c
+    assert "if (!gate_open)" in remote_c
     assert "steer_zero_calibration_request_hold_active" in remote_c
     assert "ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS" in remote_c
     assert "b1_zero_calibration_press_latched" in remote_c
@@ -617,6 +634,14 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
     assert "remote->steer_zero_calibration_request" in arbiter_c
     assert "command->steer_zero_calibration_request" in motion_c
     assert "steer_zero_calibration_requested = true" in motion_c
+    assert "bool steer_zero_calibration_domain_active;" in read(
+        root, "ecu/vehicle/include/vehicle_types.h"
+    )
+    assert "MOTION_STEER_ZERO_CAL_ABORTING" in motion_h
+    assert "steer_zero_begin_abort" in motion_c
+    assert "steer_zero_abort_step" in motion_c
+    assert "canopen_master_service_request_calibration_position_restore" in motion_c
+    assert "steer_profile_setup_reset(state);" in motion_c
     for token in [
         "MOTION_STEER_ZERO_CAL_SETUP",
         "MOTION_STEER_ZERO_CAL_SEARCH_LEFT",
@@ -630,6 +655,8 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
     for token in [
         "steer_zero_calibration_step",
         "ECU_CANOPEN_OBJ_ACTUAL_POSITION",
+        "ECU_CANOPEN_OBJ_BC_INTERPOLATION_OPTION",
+        "ECU_CANOPEN_OBJ_COMMAND_CURRENT_RAMP",
         "canopen_master_service_request_sdo_write",
         "build_steer_zero_velocity_rpdo_request",
         "ECU_STEER_ZERO_PROTECTION_CURRENT_10MA",
@@ -639,6 +666,8 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
         "steer_zero_prepare_velocity_phase",
         "steer_zero_calibration_return_last_error_counts",
         "steer_zero_verify_zero",
+        "steer_zero_calibration_prepare_zero_queued",
+        "steer_zero_calibration_verify_sync_sent",
     ]:
         assert token in motion_c, token
     assert "NMT_COMMAND_RESET_NODE" not in motion_c
@@ -648,6 +677,45 @@ def test_steering_zero_calibration_uses_two_stage_limit_and_three_stage_return(r
     )[0]
     assert "Never redefine an arbitrary timeout position" in return_mid
     assert "steer_zero_calibration_midpoint_counts[wheel] =" not in return_mid
+    assert "ECU_STEER_ZERO_STALL_ARM_DELAY_MS" in motion_c
+    assert "axis_stopped_now" in motion_c
+    verify_zero = motion_c.split("static bool steer_zero_verify_zero", 1)[1].split(
+        "static ecu_device_apply_result_t steer_zero_calibration_step", 1
+    )[0]
+    assert "steer_zero_queue_velocity_group" in verify_zero
+    write_zero = motion_c.split("static bool steer_zero_write_zero_step", 1)[1].split(
+        "static bool steer_zero_verify_zero", 1
+    )[0]
+    assert "SERVO_DRIVE_CONTROL_FAULT_RESET" not in write_zero
+
+    canopen_service_c = read(
+        root, "ecu/drivers/canopen/src/canopen_master_service.c"
+    )
+    allowed_sdo = canopen_service_c.split(
+        "static bool canopen_master_sdo_write_allowed", 1
+    )[1].split("static bool canopen_master_sdo_write_requires_order", 1)[0]
+    assert "ECU_CANOPEN_OBJ_COMMAND_CURRENT_RAMP" in allowed_sdo
+    assert "A failure here is therefore a local" in motion_c
+    setup_step = motion_c.split("static bool steer_zero_setup_step", 1)[1].split(
+        "static bool steer_zero_queue_velocity_group", 1
+    )[0]
+    assert "steer_zero_calibration_setup_sdo_retry_count" in setup_step
+    assert "ECU_STEER_ZERO_SETUP_SDO_MAX_RETRIES" in setup_step
+    assert setup_step.index("download_completed") < setup_step.index(
+        "steer_zero_calibration_setup_step++"
+    )
+    queue_tail = setup_step.split("steer_zero_queue_sdo", 1)[1]
+    assert "steer_zero_calibration_setup_step++" not in queue_tail
+
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+    can2_task = tasks_c.split("void ecu_task_can2_motion_step", 1)[1].split(
+        "void ecu_task_remote_manager_step", 1
+    )[0]
+    assert "MOTION_STEER_ZERO_CAL_IDLE" in can2_task
+    assert "!zero_calibration_active" in can2_task
+    assert can2_task.index("canopen_master_service_set_periodic_sdo_enabled") < (
+        can2_task.index("canopen_master_service_process_background")
+    )
 
 
 def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path) -> None:
@@ -780,7 +848,8 @@ def test_motion_device_separates_servo_setup_from_realtime_targets(root: pathlib
     for token in [
         "ECU_CANOPEN_MOTION_TARGET_MIN_INTERVAL_MS",
         "ECU_CANOPEN_DRIVE_VELOCITY_REFRESH_MS",
-        "ECU_CANOPEN_DRIVE_VELOCITY_DEADBAND_UNITS",
+        "ECU_CANOPEN_DRIVE_COMMAND_ZERO_DEADBAND_UNITS",
+        "ECU_CANOPEN_DRIVE_PDO_CHANGE_THRESHOLD_UNITS",
         "ECU_CANOPEN_STEER_POSITION_DEADBAND_COUNTS",
     ]:
         assert token in config_h, token
@@ -1037,7 +1106,14 @@ def test_steering_realtime_coalesces_against_last_command_not_feedback_error(roo
 
     assert "steer_last_commanded_position_valid" in build_fn
     assert "steer_last_commanded_position_counts" in build_fn
-    assert "steer_last_position_counts" not in build_fn
+    # Fresh measured position is allowed only to seed a previously uninitialized
+    # trajectory. Ongoing group-change coalescing remains command-based.
+    assert "if (!state->steer_commanded_target_valid[wheel])" in build_fn
+    assert build_fn.index("steer_last_position_counts") < build_fn.index(
+        "if (!state->steer_last_commanded_position_valid[wheel]"
+    )
+    coalesce = build_fn.split("if (!state->steer_last_commanded_position_valid[wheel]", 1)[1]
+    assert "steer_last_position_counts" not in coalesce
 
     ready_fn = motion_c.split("static bool steer_axis_realtime_ready", 1)[1].split(
         "static bool all_steer_axes_realtime_ready", 1
@@ -1468,11 +1544,13 @@ def test_steer_only_commissioning_uses_direct_steer_targets(root: pathlib.Path) 
 
     assert "#define ECU_COMMISSIONING_STEER_ONLY_MODE (1U)" in config_h
     assert "#define ECU_REMOTE_MAX_STEER_DEG          (50.0f)" in config_h
-    assert "#define ECU_STEER_POSITION_SPEED_UNITS               (5000000)" in config_h
+    assert "#define ECU_STEER_MOTOR_MAX_RPM                      (3000.0f)" in config_h
+    assert "#define ECU_STEER_MAX_POSITION_COUNTS_PER_SEC        (500000)" in config_h
+    assert "#define ECU_STEER_PROFILE_VELOCITY_UNITS_FROM_RPM    (5000000)" in config_h
     assert "#define ECU_SERVO_MOTION_MAX_RPM                     (3000.0f)" in config_h
     assert "#define ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2       (500000)" in config_h
     assert "#define ECU_DRIVE_MOTOR_MAX_RPM                      ECU_SERVO_MOTION_MAX_RPM" in config_h
-    assert "ECU_STEER_POSITION_SPEED_UNITS <= ECU_SERVO_MOTION_MAX_VELOCITY_UNITS_FROM_RPM" in config_h
+    assert "ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC <= ECU_STEER_MAX_POSITION_COUNTS_PER_SEC" in config_h
     assert "#define ECU_DRIVE_GEAR_REDUCTION                     (86.6f)" in config_h
     assert "#define ECU_STEER_GEAR_REDUCTION                     (490.0f)" in config_h
     assert "apply_commissioning_steer_only_direct_targets" in command_arbiter_c
@@ -3030,7 +3108,7 @@ def test_home_center_hydraulic_valve_mapping_uses_confirmed_functions(root: path
         "apply_can3_safe_default",
         "vehicle_actuator_command_safe_default(&safe_command)",
         "ECU_CAN3_COMMAND_STALE_TIMEOUT_MS",
-        "now_ms - command_timestamp_ms",
+        "command_snapshot_timestamp_is_fresh",
     ]:
         assert token in executor_c or token in config_h, token
     assert "ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)" in config_h
@@ -3477,6 +3555,15 @@ def test_cpu0_control_snapshot_freshness_handles_newer_publisher_timestamp(
     )[0]
     assert "int32_t signed_age_ms" in helper
     assert "future_skew_ms" in helper
+
+    executor_c = read(root, "ecu/vehicle/src/vehicle_command_executor.c")
+    assert "command_snapshot_timestamp_is_fresh" in executor_c
+    command_helper = executor_c.split(
+        "static bool command_snapshot_timestamp_is_fresh", 1
+    )[1].split("\n}", 1)[0]
+    assert "int32_t signed_age_ms" in command_helper
+    assert "ECU_CONTROL_SNAPSHOT_MAX_FUTURE_SKEW_MS" in command_helper
+    assert executor_c.count("command_snapshot_timestamp_is_fresh(") >= 3
     assert "ECU_CONTROL_SNAPSHOT_MAX_FUTURE_SKEW_MS" in tasks_c
     assert tasks_c.count("control_snapshot_timestamp_is_fresh(") >= 5
     assert "(uint32_t)(now_ms - remote_timestamp_ms)" not in tasks_c

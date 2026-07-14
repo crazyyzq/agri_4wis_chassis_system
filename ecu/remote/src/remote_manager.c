@@ -3,7 +3,8 @@
 #include "remote_manager.h"
 
 static bool remote_manager_update_b1_zero_calibration_request(remote_manager_t *manager,
-                                                              const remote_input_snapshot_t *input)
+                                                              const remote_input_snapshot_t *input,
+                                                              bool gate_open)
 {
     if (manager == 0 || input == 0) {
         return false;
@@ -11,6 +12,32 @@ static bool remote_manager_update_b1_zero_calibration_request(remote_manager_t *
 
     manager->b1_zero_calibration_last_raw_request = false;
     manager->b1_zero_calibration_last_gate_blocked = false;
+    manager->b1_zero_calibration_press_latched = false;
+
+    /* A maintenance gesture must be formed entirely while all safety gates are
+     * valid.  Do not carry partial click counts or the 600 ms request hold
+     * across a link/arm/estop/gear/HOME boundary. */
+    if (!gate_open) {
+        manager->b1_zero_calibration_press_count = 0U;
+        manager->b1_zero_calibration_window_start_ms = input->now_ms;
+        manager->b1_zero_calibration_last_request_ms = 0U;
+        manager->b1_zero_calibration_input_initialized = false;
+        /* Report the current gate state, not only the rare cycle on which a
+         * blocked B1 edge happened. This makes zero_blk actionable on COM9. */
+        manager->b1_zero_calibration_last_gate_blocked = true;
+        return false;
+    }
+
+    /* The mapper reports a state transition when the first valid receiver
+     * sample establishes CH10's stable endpoint.  That synchronization sample
+     * is a baseline, not an operator click; otherwise startup begins at
+     * b1_cnt=1 and only two real transitions can start steering calibration. */
+    if (!manager->b1_zero_calibration_input_initialized) {
+        manager->b1_zero_calibration_input_initialized = true;
+        manager->b1_zero_calibration_press_count = 0U;
+        manager->b1_zero_calibration_window_start_ms = input->now_ms;
+        return false;
+    }
 
     /* Field operation requirement: B1/CH10 is a maintenance gesture button.
      * Count every debounced CH10 state transition as one short press, regardless
@@ -97,22 +124,21 @@ void remote_manager_update(remote_manager_t *manager,
     remote_power_fsm_update(&manager->power, input, &derived, config);
     remote_authority_fsm_update(&manager->authority, input, &derived);
     remote_lights_fsm_update(&manager->lights, input, derived.estop_latched || derived.a_class_fault);
-    (void)remote_manager_update_b1_zero_calibration_request(manager, input);
-    bool steer_zero_calibration_request_hold_active =
-        manager->b1_zero_calibration_last_request_ms != 0U &&
-        (uint32_t)(input->now_ms - manager->b1_zero_calibration_last_request_ms) <=
-            ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS;
-    bool steer_zero_calibration_raw_event =
-        manager->b1_zero_calibration_last_raw_request;
     bool steer_zero_calibration_gate_open =
         manager->link.state == REMOTE_LINK_ONLINE &&
         manager->arm.state == REMOTE_ARM_READY &&
         manager->estop.state == REMOTE_ESTOP_CLEAR &&
         manager->gear.active_gear == ECU_GEAR_REQUEST_P &&
         input->home == REMOTE_POS_CENTER;
-    manager->b1_zero_calibration_last_gate_blocked =
-        steer_zero_calibration_request_hold_active && !steer_zero_calibration_gate_open;
-
+    (void)remote_manager_update_b1_zero_calibration_request(manager,
+                                                            input,
+                                                            steer_zero_calibration_gate_open);
+    bool steer_zero_calibration_request_hold_active =
+        manager->b1_zero_calibration_last_request_ms != 0U &&
+        (uint32_t)(input->now_ms - manager->b1_zero_calibration_last_request_ms) <=
+            ECU_REMOTE_B1_ZERO_CALIBRATION_REQUEST_HOLD_MS;
+    bool steer_zero_calibration_raw_event =
+        manager->b1_zero_calibration_last_raw_request;
     manager->request.link_state = manager->link.state;
     manager->request.arm_state = manager->arm.state;
     manager->request.estop_state = manager->estop.state;

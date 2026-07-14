@@ -62,6 +62,9 @@ CONTROLWORD_FAULT_RESET = 0x0080
 CONTROLWORD_SHUTDOWN = 0x0006
 CONTROLWORD_SWITCH_ON = 0x0007
 CONTROLWORD_ENABLE_OPERATION = 0x000F
+CONTROLWORD_DISABLE_VOLTAGE = 0x0000
+
+FEEDBACK_MAX_AGE_S = 0.25
 
 CANOPEN_STORE_PARAMETERS_OBJECT = 0x1010
 CANOPEN_STORE_APPLICATION_SUBINDEX = 0x01
@@ -105,17 +108,23 @@ class SteerZeroCalibration:
         self.adapter = ControlCanAdapter()
         self.events: list[dict[str, object]] = []
         self.feedback: dict[int, AxisFeedback] = {node: AxisFeedback() for node in STEER_NODES}
+        self.adapter_open = False
+        self.motion_commanded = False
 
     def __enter__(self) -> "SteerZeroCalibration":
         self.log_dir.mkdir(parents=True, exist_ok=True)
         if not self.dry_run:
             self.adapter.open([self.bus], 1_000_000)
+            self.adapter_open = True
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        if self.adapter_open:
+            self.best_effort_safe_shutdown("normal exit" if exc_type is None else "exception exit")
         self.write_json("events.json", self.events)
-        if not self.dry_run:
+        if self.adapter_open:
             self.adapter.close()
+            self.adapter_open = False
 
     def event(self, kind: str, **fields: object) -> None:
         record = {"time_s": time.time(), "kind": kind}
@@ -203,13 +212,25 @@ class SteerZeroCalibration:
     def sdo_upload_i32(self, node: int, index: int, subindex: int, note: str) -> int:
         self.send(self.sdo_upload_frame(node, index, subindex), f"Node{node} SDO read {note}")
         frame = self.receive_expected(0x580 + node)
+        if len(frame.data) != 8:
+            raise RuntimeError(f"Node{node} short SDO upload response for {note}")
         if frame.data[0] == 0x80:
             abort_code = int.from_bytes(frame.data[4:8], "little")
             raise RuntimeError(
                 f"Node{node} SDO abort read {note} "
                 f"0x{index:04X}:{subindex} abort=0x{abort_code:08X}"
             )
-        return int.from_bytes(frame.data[4:8], "little", signed=True)
+        if frame.data[1:4] != bytes([index & 0xFF, (index >> 8) & 0xFF, subindex]):
+            raise RuntimeError(
+                f"Node{node} mismatched SDO upload response for {note}: "
+                f"{frame.data.hex(' ').upper()}"
+            )
+        upload_size = {0x4F: 1, 0x4B: 2, 0x47: 3, 0x43: 4}.get(frame.data[0])
+        if upload_size is None:
+            raise RuntimeError(
+                f"Node{node} unsupported SDO upload command 0x{frame.data[0]:02X} for {note}"
+            )
+        return int.from_bytes(frame.data[4:4 + upload_size], "little", signed=True)
 
     @staticmethod
     def velocity_rpdo0_payload(controlword: int, velocity_raw: int) -> bytes:
@@ -219,15 +240,27 @@ class SteerZeroCalibration:
             + int(velocity_raw).to_bytes(4, "little", signed=True)
         )
 
-    def send_velocity(self, node: int, velocity_raw: int) -> None:
+    def send_velocity(
+        self,
+        node: int,
+        velocity_raw: int,
+        controlword: int = CONTROLWORD_ENABLE_OPERATION,
+    ) -> None:
         self.send(
-            CanFrame(0x200 + node, self.velocity_rpdo0_payload(CONTROLWORD_ENABLE_OPERATION, velocity_raw)),
-            f"Node{node} RPDO0 velocity={velocity_raw}",
+            CanFrame(0x200 + node, self.velocity_rpdo0_payload(controlword, velocity_raw)),
+            f"Node{node} RPDO0 cw=0x{controlword:04X} velocity={velocity_raw}",
         )
+        if velocity_raw != 0:
+            self.motion_commanded = True
 
-    def send_velocity_group(self, velocity_by_node: dict[int, int], note: str) -> None:
+    def send_velocity_group(
+        self,
+        velocity_by_node: dict[int, int],
+        note: str,
+        controlword: int = CONTROLWORD_ENABLE_OPERATION,
+    ) -> None:
         for node in STEER_NODES:
-            self.send_velocity(node, velocity_by_node.get(node, 0))
+            self.send_velocity(node, velocity_by_node.get(node, 0), controlword)
         self.sync(note=note)
 
     def sync(self, note: str = "SYNC") -> None:
@@ -243,6 +276,16 @@ class SteerZeroCalibration:
         """Clear faults and enter profile-velocity mode with an explicit CiA-402 sequence."""
         self.nmt_operational(node)
         time.sleep(0.02)
+        latched_fault = self.sdo_upload_i32(node, 0x2183, 0x00, "latched fault") & 0xFFFFFFFF
+        if latched_fault != 0:
+            self.sdo_download(
+                node,
+                0x2183,
+                0x00,
+                4,
+                latched_fault,
+                "acknowledge latched fault",
+            )
         self.sdo_download(node, 0x6040, 0x00, 2, CONTROLWORD_FAULT_RESET, "fault reset")
         time.sleep(0.02)
         self.sdo_download(node, 0x2300, 0x00, 2, 0x001E, "control source CANopen")
@@ -254,6 +297,11 @@ class SteerZeroCalibration:
         self.sdo_download(node, 0x6040, 0x00, 2, CONTROLWORD_SHUTDOWN, "shutdown")
         self.sdo_download(node, 0x6040, 0x00, 2, CONTROLWORD_SWITCH_ON, "switch on")
         self.sdo_download(node, 0x6040, 0x00, 2, CONTROLWORD_ENABLE_OPERATION, "enable operation")
+        mode_display = self.sdo_upload_i32(node, 0x6061, 0x00, "mode display") & 0xFF
+        if mode_display != MODE_PROFILE_VELOCITY:
+            raise RuntimeError(
+                f"Node{node} mode verification failed: 0x6061={mode_display}, expected 3"
+            )
 
     def configure_all_velocity_mode(self, profile_velocity: int, profile_accel: int, note: str) -> None:
         self.event("configure_velocity_phase", note=note)
@@ -316,6 +364,23 @@ class SteerZeroCalibration:
         time.sleep(0.002)
         self.drain_feedback_nonblocking()
 
+    def require_fresh_feedback(self, node: int, now_s: float | None = None) -> AxisFeedback:
+        now_s = time.monotonic() if now_s is None else now_s
+        feedback = self.feedback[node]
+        position_age = now_s - feedback.last_position_time_s
+        current_age = now_s - feedback.last_current_time_s
+        if (
+            feedback.position_counts is None
+            or feedback.current_10ma is None
+            or position_age > FEEDBACK_MAX_AGE_S
+            or current_age > FEEDBACK_MAX_AGE_S
+        ):
+            raise RuntimeError(
+                f"Node{node} feedback stale/missing: position_age={position_age:.3f}s "
+                f"current_age={current_age:.3f}s"
+            )
+        return feedback
+
     def latest_position_or_sdo(self, node: int) -> int:
         self.request_sync_feedback()
         position = self.feedback[node].position_counts
@@ -328,6 +393,21 @@ class SteerZeroCalibration:
     def stop_all_axes(self, note: str) -> None:
         self.send_velocity_group({node: 0 for node in STEER_NODES}, note)
         self.event("safe_stop", nodes=list(STEER_NODES), note=note)
+
+    def best_effort_safe_shutdown(self, note: str) -> None:
+        """Leave no cached nonzero velocity active if the tool exits unexpectedly."""
+        try:
+            zeros = {node: 0 for node in STEER_NODES}
+            self.send_velocity_group(zeros, f"{note}: zero velocity")
+            time.sleep(0.02)
+            self.send_velocity_group(
+                zeros,
+                f"{note}: disable voltage",
+                controlword=CONTROLWORD_DISABLE_VOLTAGE,
+            )
+            self.event("safe_disable", nodes=list(STEER_NODES), note=note)
+        except Exception as shutdown_error:  # noqa: BLE001 - do not mask the original fault.
+            self.event("safe_disable_failed", note=note, error=str(shutdown_error))
 
     @staticmethod
     def abs_current_10ma(feedback: AxisFeedback) -> int:
@@ -377,15 +457,13 @@ class SteerZeroCalibration:
 
             self.request_sync_feedback()
             velocity_by_node: dict[int, int] = {}
+            stop_group_now = False
             for node in STEER_NODES:
                 if node in done:
                     velocity_by_node[node] = 0
                     continue
 
-                fb = self.feedback[node]
-                if fb.position_counts is None:
-                    velocity_by_node[node] = 0
-                    continue
+                fb = self.require_fresh_feedback(node, now_s)
 
                 travel = abs(fb.position_counts - start_positions[node])
                 if travel > max_travel_counts:
@@ -404,6 +482,7 @@ class SteerZeroCalibration:
                     result.peak_current_10ma_by_node[node] = peak_current[node]
                     done.add(node)
                     velocity_by_node[node] = 0
+                    stop_group_now = True
                     self.event(
                         "limit_axis_done",
                         direction=direction_name,
@@ -423,6 +502,7 @@ class SteerZeroCalibration:
                         result.peak_current_10ma_by_node[node] = peak_current[node]
                         done.add(node)
                         velocity_by_node[node] = 0
+                        stop_group_now = True
                         self.event(
                             "limit_axis_done",
                             direction=direction_name,
@@ -437,10 +517,16 @@ class SteerZeroCalibration:
                 else:
                     dwell_start_s[node] = None
 
+                if fb.latched_fault:
+                    self.stop_all_axes(f"{direction_name}: unexpected Node{node} fault stop")
+                    raise RuntimeError(
+                        f"Node{node} fault 0x{fb.latched_fault:08X} before a valid stall decision"
+                    )
+
                 speed = limit_slow_velocity if travel >= limit_stage2_start_counts else limit_fast_velocity
                 velocity_by_node[node] = sign_by_node[node] * speed
 
-            if time.monotonic() >= next_tx_s:
+            if stop_group_now or time.monotonic() >= next_tx_s:
                 self.send_velocity_group(velocity_by_node, f"{direction_name}: velocity group")
                 next_tx_s = time.monotonic() + 0.05
 
@@ -494,10 +580,12 @@ class SteerZeroCalibration:
                     velocity_by_node[node] = 0
                     continue
 
-                pos = self.feedback[node].position_counts
-                if pos is None:
-                    velocity_by_node[node] = 0
-                    continue
+                feedback = self.require_fresh_feedback(node, now_s)
+                pos = feedback.position_counts
+                assert pos is not None
+                if feedback.latched_fault:
+                    self.stop_all_axes(f"return: unexpected Node{node} fault stop")
+                    raise RuntimeError(f"Node{node} fault 0x{feedback.latched_fault:08X} during return")
 
                 error = midpoints[node] - pos
                 state = axis_state[node]

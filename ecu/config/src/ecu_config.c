@@ -61,14 +61,25 @@ static const ecu_config_t s_default_config = {
  * Current-mode RPDO3 writes this table directly to each drive node's 0x2340
  * target-current object; it is not multiplied by drive_direction_sign.  With
  * the steering posture below, field commissioning shows that track-width
- * extension pushes correctly with negative current on legs 1/4 and positive
- * current on legs 2/3.  Retraction negates this table in the command arbiter.
- * Keep the signs here rather than in the actuator logic so a later
- * plumbing/posture change is a configuration edit.
+ * extension current signs correspond to the crab-equivalent posture.  A
+ * steering representation change of 180 degrees requires the associated
+ * rolling-current sign to change as well.  Retraction negates this table in
+ * the command arbiter.  Keep the signs here rather than in the actuator logic
+ * so a later plumbing/posture change remains a configuration edit.
  */
 static const track_adjust_config_t s_track_adjust_config = {
-    .steer_target_deg = { 90.0f, -90.0f, -90.0f, 90.0f },
-    .assist_torque_sign = { -1.0f, 1.0f, 1.0f, -1.0f },
+    .steer_target_deg = {
+        ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG1_STEER_SIGN,
+        ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG2_STEER_SIGN,
+        ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG3_STEER_SIGN,
+        ECU_MOTION_CRAB_STEER_DEG * ECU_CRAB_LEG4_STEER_SIGN
+    },
+    .assist_torque_sign = {
+        ECU_TRACK_ASSIST_LEG1_OUTWARD_CURRENT_SIGN,
+        ECU_TRACK_ASSIST_LEG2_OUTWARD_CURRENT_SIGN,
+        ECU_TRACK_ASSIST_LEG3_OUTWARD_CURRENT_SIGN,
+        ECU_TRACK_ASSIST_LEG4_OUTWARD_CURRENT_SIGN
+    },
     .assist_current_10ma = {
         ECU_TRACK_ASSIST_LEG1_CURRENT_10MA,
         ECU_TRACK_ASSIST_LEG2_CURRENT_10MA,

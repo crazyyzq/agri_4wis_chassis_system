@@ -384,6 +384,14 @@ bool canopen_master_service_request_calibration_position_zero(
     canopen_master_service_t *service,
     uint8_t node_id);
 
+/* Calibration rollback path.  This remains deliberately narrower than the
+ * generic SDO API: it can only restore ECU_CANOPEN_OBJ_ACTUAL_POSITION after
+ * an interrupted steering zero-calibration transaction. */
+bool canopen_master_service_request_calibration_position_restore(
+    canopen_master_service_t *service,
+    uint8_t node_id,
+    int32_t position_counts);
+
 /* Queue one SDO upload through CANopenNode.
  *
  * The latest completed upload is exposed in canopen_master_snapshot_t. Callers

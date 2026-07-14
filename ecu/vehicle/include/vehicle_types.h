@@ -47,6 +47,9 @@ typedef struct {
     bool steer_commission_interlock_ok;
     bool steer_commission_steering_neutral;
     bool steer_zero_calibration_request;
+    /* True only while HOME remains in the adjustment domain.  The CAN2 owner
+     * uses its falling edge to abort an in-progress calibration safely. */
+    bool steer_zero_calibration_domain_active;
     bool high_voltage_enable;
     bool high_voltage_disable_request;
     /* True only after the power task has observed validated BMS contactor
@@ -106,6 +109,11 @@ typedef struct {
     uint32_t steer_safety_inhibit_count;
     uint32_t steer_last_allowed_to_inhibited_ms;
     bool steer_safe_stop_pending;
+    uint8_t steer_profile_setup_state;
+    uint8_t steer_profile_setup_axis;
+    uint8_t steer_profile_setup_object;
+    uint8_t steer_profile_verified_mask;
+    uint32_t steer_profile_setup_failure_count;
     uint8_t steer_commission_state;
     uint8_t steer_commission_axis_mask;
     uint8_t steer_commission_nmt_sent_mask;
@@ -127,6 +135,13 @@ typedef struct {
     bool presteer_drive_hold_active;
     bool presteer_target_reached;
     bool track_assist_steer_approximately_ready;
+    uint8_t track_assist_overspeed_mask;
+    uint8_t track_assist_feedback_invalid_mask;
+    uint8_t drive_last_command_kind[ECU_WHEEL_COUNT];
+    bool drive_last_enable_requested[ECU_WHEEL_COUNT];
+    int16_t drive_last_current_10ma[ECU_WHEEL_COUNT];
+    uint32_t drive_group_complete_count;
+    uint32_t drive_group_failure_count;
     uint8_t presteer_mode;
     uint8_t presteer_missing_axis_mask;
     uint32_t presteer_timeout_count;
