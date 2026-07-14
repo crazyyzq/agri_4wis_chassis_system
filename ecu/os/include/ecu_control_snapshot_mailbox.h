@@ -8,8 +8,10 @@
 #include "vehicle_types.h"
 
 /* Single-writer, multi-reader double buffers for CPU0 control handoffs.
- * A preempting reader always sees the previous complete slot until the writer
- * publishes the new sequence with release ordering.
+ * Writers publish a complete inactive slot with release ordering. Readers copy
+ * the selected small snapshot in a bounded task critical section because the
+ * 1 ms safety publisher may otherwise preempt every lower-priority retry.
+ * No ISR writes these mailboxes.
  */
 typedef struct {
     volatile uint32_t publish_sequence;

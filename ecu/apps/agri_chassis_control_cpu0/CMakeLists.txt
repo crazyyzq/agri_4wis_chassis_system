@@ -46,10 +46,20 @@ target_include_directories(${HPM_SDK_LIB_ITF} BEFORE INTERFACE "${CMAKE_CURRENT_
 # Core firmware feature definitions.  CANopenNode is enabled as the only
 # CANopen stack; application code talks to it through canopen_master_service and
 # servo_drive_canopen instead of hand-built CANopen frames.
+#
+# CPU0 publishes PDOs to remote drives and observes their TPDO feedback through
+# its bus-owned master service.  It has no local RPDO consumers (OD_CNT_RPDO is
+# zero), so keep CANopenNode's local receive-PDO implementation out of this
+# master build.  Besides saving unused receive filters and processing, this
+# prevents the vendor's zero-count RPDO loops from producing SEGGER -Wextra
+# type-limit diagnostics.
+set(ECU_CANOPEN_MASTER_PDO_CONFIG
+    "(CO_CONFIG_TPDO_ENABLE | CO_CONFIG_TPDO_TIMERS_ENABLE | CO_CONFIG_PDO_SYNC_ENABLE | CO_CONFIG_PDO_OD_IO_ACCESS | CO_CONFIG_GLOBAL_RT_FLAG_CALLBACK_PRE | CO_CONFIG_GLOBAL_FLAG_TIMERNEXT | CO_CONFIG_GLOBAL_FLAG_OD_DYNAMIC)")
 sdk_compile_definitions(-DUSE_NONVECTOR_MODE=1)
 sdk_compile_definitions(-DDISABLE_IRQ_PREEMPTIVE=1)
 sdk_compile_definitions(-DECU_ENABLE_CANOPENNODE=1)
 sdk_compile_definitions(-DCONFIG_CANOPEN_MASTER=1)
+sdk_compile_definitions("-DCO_CONFIG_PDO=${ECU_CANOPEN_MASTER_PDO_CONFIG}")
 sdk_compile_definitions("-DCO_CONFIG_FIFO=(CO_CONFIG_FIFO_ENABLE)")
 sdk_compile_definitions("-DCO_CONFIG_NMT=0x3002")
 sdk_compile_definitions("-DCO_CONFIG_SDO_CLI=(CO_CONFIG_SDO_CLI_ENABLE|CO_CONFIG_SDO_CLI_SEGMENTED)")

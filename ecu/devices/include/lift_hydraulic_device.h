@@ -43,6 +43,7 @@ typedef struct {
     uint32_t lift_interpolation_reject_count;
     uint32_t lift_interpolation_failure_count;
     uint32_t lift_interpolation_recovery_count;
+    uint32_t lift_running_spread_warning_count;
     uint32_t lift_hold_count;
     uint32_t pump_group_sequence;
     uint32_t pump_active_group_sequence;
@@ -91,6 +92,8 @@ typedef struct {
     int32_t lift_stream_planned_delta_counts;
     int32_t lift_stream_total_distance_counts;
     int32_t lift_stream_velocity_counts_per_sec;
+    int32_t lift_running_spread_counts;
+    int32_t lift_max_running_spread_counts;
     int32_t last_pump_velocity_units;
     int32_t pump_active_velocity_units;
     int32_t pump_actual_velocity_units;

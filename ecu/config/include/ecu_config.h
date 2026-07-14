@@ -60,6 +60,11 @@
 #define ECU_CAN2_COMMAND_STALE_TIMEOUT_MS (50U)
 #define ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS (50U)
 #define ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS (10U)
+/* A lower-priority task captures its step time before it can be preempted by
+ * the 1 ms safety publisher.  Accept only this small scheduler-induced future
+ * skew; a larger future timestamp remains invalid.
+ */
+#define ECU_CONTROL_SNAPSHOT_MAX_FUTURE_SKEW_MS (10U)
 
 #ifndef ECU_ENABLE_DEBUG_MONITOR
 #define ECU_ENABLE_DEBUG_MONITOR         (1)
@@ -733,6 +738,13 @@ typedef enum {
  */
 #define ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
+/* Running spread is an observability/recovery threshold, not a stop limit.
+ * The four-axis stream keeps applying bounded feedback correction when this
+ * value is exceeded. Only the separate final 3 mm contract above permits the
+ * axes to disable and engage their brakes.
+ */
+#define ECU_LIFT_RUNNING_SPREAD_WARNING_COUNTS \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 10.0f))
 /* Normal remote-center confirmation while lift interpolation is already
  * running. This filters SBUS threshold chatter only; safety-source stops,
  * high-voltage loss, CAN faults and non-remote commands still stop immediately.

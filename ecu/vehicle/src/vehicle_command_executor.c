@@ -252,8 +252,14 @@ static void update_executor_lift_hydraulic_diagnostics(vehicle_executor_state_t 
         s_runtime.lift_hydraulic.lift_interpolation_failure_count;
     executor->lift_interpolation_recovery_count =
         s_runtime.lift_hydraulic.lift_interpolation_recovery_count;
+    executor->lift_running_spread_warning_count =
+        s_runtime.lift_hydraulic.lift_running_spread_warning_count;
     executor->lift_stream_planned_delta_counts =
         s_runtime.lift_hydraulic.lift_stream_planned_delta_counts;
+    executor->lift_running_spread_counts =
+        s_runtime.lift_hydraulic.lift_running_spread_counts;
+    executor->lift_max_running_spread_counts =
+        s_runtime.lift_hydraulic.lift_max_running_spread_counts;
     memcpy(executor->lift_actual_position_counts,
            s_runtime.lift_hydraulic.lift_actual_position_counts,
            sizeof(executor->lift_actual_position_counts));

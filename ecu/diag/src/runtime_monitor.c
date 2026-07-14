@@ -450,7 +450,7 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "valve_block=0x%08lx pump[state=%u fb=%s vel=%ld timeout=%lu] "
            "pump_tpdo[fresh=%s t0=%lu/%lu t1=%lu/%lu sw=0x%04x flt=0x%08lx] "
            "lift[state=%u req=%d active=%d fresh=0x%02x fault=0x%02x pre=%u q=%lu rej=%lu fail=%lu rec=%lu "
-           "delta=%ld a0=%ld t0=%ld e0=%ld] "
+           "delta=%ld spread=%ld max_spread=%ld spread_warn=%lu a0=%ld t0=%ld e0=%ld] "
            "can3[tx=%lu err=%lu q=%lu drop=%lu st=%u grp=%lu done=%u fail=%u] "
            "res[lift=%u io=%u]\r\n",
            bool_text(snapshot->hydraulic_enable),
@@ -480,6 +480,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->lift_interpolation_failure_count,
            (unsigned long)snapshot->lift_interpolation_recovery_count,
            (long)snapshot->lift_stream_planned_delta_counts,
+           (long)snapshot->lift_running_spread_counts,
+           (long)snapshot->lift_max_running_spread_counts,
+           (unsigned long)snapshot->lift_running_spread_warning_count,
            (long)snapshot->lift_actual_position_counts[0],
            (long)snapshot->lift_target_position_counts[0],
            (long)lift_axis0_error_counts,

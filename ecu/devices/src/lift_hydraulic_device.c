@@ -526,6 +526,8 @@ static bool begin_lift_interpolation_setup(lift_hydraulic_device_state_t *state,
     state->last_lift_setup_request_ms = now_ms;
     state->lift_requested_direction = (int8_t)direction;
     state->lift_active_direction = (int8_t)LIFT_INTERP_DIRECTION_HOLD;
+    state->lift_running_spread_counts = 0;
+    state->lift_max_running_spread_counts = 0;
     state->lift_preload_points_completed = 0U;
     state->lift_preload_group_pending = false;
     state->lift_progress_initialized = false;
@@ -629,6 +631,49 @@ static int32_t lift_interpolation_delta_counts(lift_hydraulic_device_state_t *st
                                        remaining_counts,
                                        now_ms);
     return step_counts;
+}
+
+/* Record four-axis synchronization quality without interrupting a healthy
+ * interpolation stream.
+ *
+ * The running 10 mm threshold is deliberately diagnostic-only. Field tests
+ * showed that disabling/reconfiguring the drives for a transient spread turns
+ * a recoverable tracking difference into visible stop/restart jerking. The
+ * normal per-axis bounded correction continues to pull the four axes together.
+ * Final brake engagement remains guarded by the stricter 3 mm target/spread
+ * check in lift_positions_at_target().
+ */
+static void update_lift_running_spread_diagnostics(
+    lift_hydraulic_device_state_t *state)
+{
+    int32_t low;
+    int32_t high;
+    int32_t spread;
+
+    if (state == 0) {
+        return;
+    }
+
+    low = state->lift_actual_position_counts[0];
+    high = low;
+    for (uint32_t leg = 1U; leg < ECU_WHEEL_COUNT; ++leg) {
+        const int32_t position = state->lift_actual_position_counts[leg];
+        if (position < low) {
+            low = position;
+        }
+        if (position > high) {
+            high = position;
+        }
+    }
+
+    spread = high - low;
+    state->lift_running_spread_counts = spread;
+    if (spread > state->lift_max_running_spread_counts) {
+        state->lift_max_running_spread_counts = spread;
+    }
+    if (spread > ECU_LIFT_RUNNING_SPREAD_WARNING_COUNTS) {
+        state->lift_running_spread_warning_count++;
+    }
 }
 
 static void lift_progress_watchdog_rebaseline(
@@ -968,6 +1013,7 @@ static void reset_lift_motion_state(lift_hydraulic_device_state_t *state,
     state->lift_progress_initialized = false;
     state->lift_feedback_missing_since_ms = 0U;
     state->lift_active_direction = (int8_t)LIFT_INTERP_DIRECTION_HOLD;
+    state->lift_running_spread_counts = 0;
     state->lift_preload_points_completed = 0U;
     state->lift_preload_group_pending = false;
     state->lift_at_target_disabled = false;
@@ -1082,6 +1128,8 @@ static bool queue_lift_interpolation_group(lift_hydraulic_device_state_t *state,
         }
         return true;
     }
+
+    update_lift_running_spread_diagnostics(state);
 
     if (lift_positions_at_target(state, command_target_position_counts)) {
         /* Keep streaming the final absolute point until measured feedback has

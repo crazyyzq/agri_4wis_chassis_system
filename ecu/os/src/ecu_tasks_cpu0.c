@@ -70,6 +70,25 @@ typedef struct {
 
 static ecu_runtime_context_t s_runtime;
 
+/* Periodic task wrappers timestamp a step at entry. A higher-priority
+ * publisher can run while the consumer is preparing its input, so a coherent
+ * mailbox snapshot may legitimately be a few milliseconds newer than the
+ * consumer's saved now_ms. Plain unsigned subtraction turns that case into a
+ * near-UINT32_MAX age and falsely trips the fail-safe path.
+ */
+static bool control_snapshot_timestamp_is_fresh(uint32_t now_ms,
+                                                uint32_t timestamp_ms,
+                                                uint32_t stale_timeout_ms)
+{
+    int32_t signed_age_ms = (int32_t)(now_ms - timestamp_ms);
+    if (signed_age_ms >= 0) {
+        return (uint32_t)signed_age_ms <= stale_timeout_ms;
+    }
+
+    uint32_t future_skew_ms = timestamp_ms - now_ms;
+    return future_skew_ms <= ECU_CONTROL_SNAPSHOT_MAX_FUTURE_SKEW_MS;
+}
+
 /* Keep this table in ecu_cpu0_task_id_t order.  ecu_cpu0_task_descriptor()
  * indexes it directly when main_cpu0.c creates FreeRTOS tasks.  Priorities are
  * intentionally not sorted here.  Safety is always highest; CAN2 motion owns
@@ -536,8 +555,14 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.lift_interpolation_failure_count;
     out->lift_interpolation_recovery_count =
         s_runtime.executor.lift_interpolation_recovery_count;
+    out->lift_running_spread_warning_count =
+        s_runtime.executor.lift_running_spread_warning_count;
     out->lift_stream_planned_delta_counts =
         s_runtime.executor.lift_stream_planned_delta_counts;
+    out->lift_running_spread_counts =
+        s_runtime.executor.lift_running_spread_counts;
+    out->lift_max_running_spread_counts =
+        s_runtime.executor.lift_max_running_spread_counts;
     memcpy(out->lift_actual_position_counts,
            s_runtime.executor.lift_actual_position_counts,
            sizeof(out->lift_actual_position_counts));
@@ -726,8 +751,10 @@ void ecu_task_safety_supervisor_step(uint32_t now_ms)
                             &s_runtime.remote_request_mailbox,
                             &remote_request,
                             &remote_timestamp_ms) &&
-                        (uint32_t)(now_ms - remote_timestamp_ms) <=
-                            ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS;
+                        control_snapshot_timestamp_is_fresh(
+                            now_ms,
+                            remote_timestamp_ms,
+                            ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS);
     if (!remote_fresh) {
         memset(&remote_request, 0, sizeof(remote_request));
         remote_request.link_state = REMOTE_LINK_OFFLINE;
@@ -810,8 +837,10 @@ void ecu_task_remote_manager_step(uint32_t now_ms)
     if (!safety_snapshot_mailbox_read(&s_runtime.safety_snapshot_mailbox,
                                       &safety_snapshot,
                                       &safety_timestamp_ms) ||
-        (uint32_t)(now_ms - safety_timestamp_ms) >
-            ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS) {
+        !control_snapshot_timestamp_is_fresh(
+            now_ms,
+            safety_timestamp_ms,
+            ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS)) {
         memset(&safety_snapshot, 0, sizeof(safety_snapshot));
         safety_snapshot.a_class_fault = true;
         safety_snapshot.estop_latched = true;
@@ -850,14 +879,18 @@ void ecu_task_vehicle_control_step(uint32_t now_ms)
                             &s_runtime.remote_request_mailbox,
                             &remote_request,
                             &remote_timestamp_ms) &&
-                        (uint32_t)(now_ms - remote_timestamp_ms) <=
-                            ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS;
+                        control_snapshot_timestamp_is_fresh(
+                            now_ms,
+                            remote_timestamp_ms,
+                            ECU_REMOTE_REQUEST_STALE_TIMEOUT_MS);
     bool safety_valid = safety_snapshot_mailbox_read(
                             &s_runtime.safety_snapshot_mailbox,
                             &safety_snapshot,
                             &safety_timestamp_ms) &&
-                        (uint32_t)(now_ms - safety_timestamp_ms) <=
-                            ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS;
+                        control_snapshot_timestamp_is_fresh(
+                            now_ms,
+                            safety_timestamp_ms,
+                            ECU_SAFETY_SNAPSHOT_STALE_TIMEOUT_MS);
     if (!remote_valid) {
         memset(&remote_request, 0, sizeof(remote_request));
         remote_request.estop_state = REMOTE_ESTOP_LATCHED;

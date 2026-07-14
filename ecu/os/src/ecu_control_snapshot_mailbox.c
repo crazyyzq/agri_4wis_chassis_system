@@ -1,5 +1,8 @@
 #include <stddef.h>
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include "ecu_control_snapshot_mailbox.h"
 
 #define DEFINE_DOUBLE_BUFFER_MAILBOX(prefix, mailbox_type, value_type)                 \
@@ -25,17 +28,24 @@
         if (mailbox == NULL || value == NULL || timestamp_ms == NULL) {                \
             return false;                                                              \
         }                                                                              \
-        uint32_t before = __atomic_load_n(&mailbox->publish_sequence,                  \
-                                           __ATOMIC_ACQUIRE);                          \
-        if (before == 0U) {                                                            \
+        /* The 1 ms safety publisher has higher priority than both consumers.         \
+         * A retry-only seqlock reader can therefore be preempted on every retry and  \
+         * falsely report a missing safety snapshot.  Copy the small fixed-size      \
+         * snapshot in one bounded critical section.  No ISR publishes these         \
+         * mailboxes, and the section contains no calls, loops or blocking work.      \
+         */                                                                            \
+        taskENTER_CRITICAL();                                                          \
+        uint32_t sequence = __atomic_load_n(&mailbox->publish_sequence,                \
+                                             __ATOMIC_ACQUIRE);                        \
+        if (sequence == 0U) {                                                          \
+            taskEXIT_CRITICAL();                                                       \
             return false;                                                              \
         }                                                                              \
-        uint32_t slot = before & 1U;                                                   \
+        uint32_t slot = sequence & 1U;                                                 \
         *value = mailbox->value[slot];                                                 \
         *timestamp_ms = mailbox->timestamp_ms[slot];                                   \
-        uint32_t after = __atomic_load_n(&mailbox->publish_sequence,                   \
-                                          __ATOMIC_ACQUIRE);                           \
-        return before == after;                                                        \
+        taskEXIT_CRITICAL();                                                           \
+        return true;                                                                   \
     }
 
 DEFINE_DOUBLE_BUFFER_MAILBOX(remote_request_mailbox,

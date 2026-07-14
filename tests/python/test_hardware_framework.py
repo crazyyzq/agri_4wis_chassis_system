@@ -294,6 +294,19 @@ def test_canopennode_ds301_od_and_build_switch(root: pathlib.Path) -> None:
         assert token in config_h, token
 
 
+def test_canopen_master_build_disables_unused_local_rpdo_consumers(root: pathlib.Path) -> None:
+    """The ECU is a PDO producer for remote drives, not a local RPDO consumer."""
+
+    cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
+    od_h = read(root, "ecu/protocol/canopen/od/ds301/OD.h")
+
+    assert "#define OD_CNT_RPDO 0" in od_h
+    assert "ECU_CANOPEN_MASTER_PDO_CONFIG" in cmake
+    assert "CO_CONFIG_RPDO_ENABLE" not in cmake.split(
+        "ECU_CANOPEN_MASTER_PDO_CONFIG", 1
+    )[1].split("sdk_compile_definitions", 1)[0]
+
+
 def test_canopennode_hpm_tx_path_is_nonblocking(root: pathlib.Path) -> None:
     cmake = read(root, "ecu/apps/agri_chassis_control_cpu0/CMakeLists.txt")
     wrapper_c = read(root, "ecu/drivers/canopen/src/hpm_can_send_nonblocking_wrap.c")
@@ -906,7 +919,8 @@ def test_can2_node_feedback_loss_and_partial_group_failure_self_recover_safely(
     partial = motion_c.split("static void service_can2_partial_group_recovery", 1)[1].split(
         "static void reset_can2_realtime_motion_state", 1
     )[0]
-    assert "drive_safe_stop_required(state)" in partial
+    assert "can2_recovery_zero_enable_permitted(state)" in partial
+    assert "drive_zero_intent_completed(state, recovery_enable_requested)" in partial
     assert "can2_all_motion_nodes_operation_enabled_fresh(canopen)" in partial
     assert "state->steer_group_degraded = false" in partial
     assert "state->can2_recovery_steer_sync_pending = true" in partial
@@ -924,6 +938,68 @@ def test_can2_node_feedback_loss_and_partial_group_failure_self_recover_safely(
     assert "state->can2_recovery_steer_sync_pending = false" in finish
 
     assert "ECU_CANOPEN_OBJ_FAULT_LATCHED" in service_c
+
+
+def test_can2_recovery_holds_zero_speed_operation_enabled_without_replaying_motion(
+    root: pathlib.Path,
+) -> None:
+    """Recovery must not disable the same nodes whose enabled feedback it awaits."""
+
+    motion_c = read(root, "ecu/devices/src/motion_device.c")
+
+    for token in [
+        "can2_zero_speed_operation_enable_permitted",
+        "can2_recovery_zero_enable_permitted",
+        "force_can2_drive_recovery_zero_intent",
+        "drive_zero_intent_completed",
+    ]:
+        assert token in motion_c, token
+
+    permission = motion_c.split(
+        "static bool can2_zero_speed_operation_enable_permitted", 1
+    )[1].split("static bool", 1)[0]
+    assert "command->high_voltage_enable" in permission
+    assert "command->high_voltage_feedback_ready" in permission
+    assert "!command->high_voltage_disable_request" in permission
+    assert "command_source_allows_motion_output(command->source)" in permission
+
+    apply_fn = motion_c.split(
+        "ecu_device_apply_result_t motion_device_apply", 1
+    )[1].split("ecu_device_apply_result_t motion_device_flush_realtime", 1)[0]
+    assert (
+        "drive_enable_requested =\n"
+        "        can2_zero_speed_operation_enable_permitted(command)"
+    ) in apply_fn
+    assert "velocity_units = 0" in apply_fn
+    assert "can2_recovery_allows_drive" in apply_fn
+
+    flush_fn = motion_c.split(
+        "ecu_device_apply_result_t motion_device_flush_realtime", 1
+    )[1]
+    node_recovery = flush_fn.split(
+        "if (state->can2_node_recovery_pending_mask != 0U)", 1
+    )[1].split("if (state->can2_partial_group_recovery_active)", 1)[0]
+    assert "force_can2_drive_recovery_zero_intent(state)" in node_recovery
+    assert "drive_zero_intent_completed" in node_recovery
+
+    partial_recovery = flush_fn.split(
+        "if (state->can2_partial_group_recovery_active)", 1
+    )[1].split("if (state->can2_recovery_steer_sync_pending", 1)[0]
+    assert "force_can2_drive_recovery_zero_intent(state)" in partial_recovery
+
+    drive_flush = motion_c.split(
+        "static ecu_device_apply_result_t flush_drive_velocity_realtime", 1
+    )[1].split("static void request_can2_motion_nodes_operational", 1)[0]
+    recovery_zero = drive_flush.split(
+        "if (recovery_zero_intent_active)", 1
+    )[1].split("if (!all_drive_axes_realtime_ready", 1)[0]
+    assert "int32_t zero_velocity[ECU_WHEEL_COUNT] = {0}" in recovery_zero
+    assert "int16_t zero_current[ECU_WHEEL_COUNT] = {0}" in recovery_zero
+    assert "queue_drive_group" in recovery_zero
+    assert "build_drive_group_targets" not in recovery_zero
+
+    assert "state->last_motion_command.source = command->source" in apply_fn
+    assert "state->last_motion_command.diagnostic = command->diagnostic" in apply_fn
 
 
 def test_can2_steering_startup_enables_position_mode_before_tpdo_gate(root: pathlib.Path) -> None:
@@ -2471,6 +2547,8 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
     assert "    (75000)" in config_h
     assert "ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS \\" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 3.0f)" in config_h
+    assert "ECU_LIFT_RUNNING_SPREAD_WARNING_COUNTS \\" in config_h
+    assert "(ECU_LIFT_MM_TO_COUNTS * 10.0f)" in config_h
     assert "ECU_LIFT_REMOTE_NEUTRAL_STOP_CONFIRM_MS" in config_h
     assert "lift_remote_neutral_stop_confirmed" in lift_c
     assert "command->source != COMMAND_SOURCE_REMOTE" in lift_c
@@ -2484,6 +2562,17 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
     assert "ECU_LIFT_SYNC_RUNNING_TOLERANCE_COUNTS" not in running_sync
     assert "ECU_LIFT_SYNC_RECOVERY_TOLERANCE_COUNTS" not in running_sync
     assert "ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS" in final_sync
+    assert "update_lift_running_spread_diagnostics" in running_sync
+    spread_diagnostics = lift_c.split(
+        "static void update_lift_running_spread_diagnostics", 1
+    )[1].split("static bool lift_positions_at_target", 1)[0]
+    assert "ECU_LIFT_RUNNING_SPREAD_WARNING_COUNTS" in spread_diagnostics
+    assert "LIFT_INTERPOLATION_STATE_STOPPING" not in spread_diagnostics
+    assert "LIFT_INTERPOLATION_STATE_FAULT" not in spread_diagnostics
+    assert "recover_lift_" not in spread_diagnostics
+    assert "lift_running_spread_counts" in lift_h
+    assert "lift_max_running_spread_counts" in lift_h
+    assert "lift_running_spread_warning_count" in lift_h
     assert "lift_level_target_for_direction" not in lift_c
     assert "lift_level_target_position_counts" not in lift_h
     assert "LIFT_INTERPOLATION_STATE_LEVELING" not in lift_c
@@ -3351,6 +3440,47 @@ def test_cpu0_remote_and_safety_handoffs_are_coherent_and_stale_safe(root: pathl
     assert "ecu_control_snapshot_mailbox.c" in cmake
     assert "remote_request.estop_state = REMOTE_ESTOP_LATCHED" in tasks_c
     assert "safety_snapshot.controlled_stop_active = true" in tasks_c
+
+
+def test_cpu0_remote_and_safety_mailbox_read_is_atomic_against_task_preemption(
+    root: pathlib.Path,
+) -> None:
+    """A safety-task publication race must not become a false A-class fault."""
+
+    mailbox_c = read(root, "ecu/os/src/ecu_control_snapshot_mailbox.c")
+
+    reader = mailbox_c.split("bool prefix##_read", 1)[1].split(
+        "DEFINE_DOUBLE_BUFFER_MAILBOX", 1
+    )[0]
+    assert '#include "FreeRTOS.h"' in mailbox_c
+    assert '#include "task.h"' in mailbox_c
+    assert "taskENTER_CRITICAL();" in reader
+    assert "taskEXIT_CRITICAL();" in reader
+    assert reader.index("taskENTER_CRITICAL();") < reader.index("*value = mailbox->value[slot]")
+    assert reader.index("*timestamp_ms = mailbox->timestamp_ms[slot]") < reader.rindex("taskEXIT_CRITICAL();")
+    assert "ECU_CONTROL_SNAPSHOT_MAILBOX_READ_ATTEMPTS" not in mailbox_c
+    assert "for (uint32_t attempt" not in reader
+    assert "return true" in reader
+    assert "return false" in reader
+
+
+def test_cpu0_control_snapshot_freshness_handles_newer_publisher_timestamp(
+    root: pathlib.Path,
+) -> None:
+    """A preempting publisher may timestamp a snapshot after the step's now_ms."""
+
+    tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
+
+    assert "control_snapshot_timestamp_is_fresh" in tasks_c
+    helper = tasks_c.split("static bool control_snapshot_timestamp_is_fresh", 1)[1].split(
+        "\n}", 1
+    )[0]
+    assert "int32_t signed_age_ms" in helper
+    assert "future_skew_ms" in helper
+    assert "ECU_CONTROL_SNAPSHOT_MAX_FUTURE_SKEW_MS" in tasks_c
+    assert tasks_c.count("control_snapshot_timestamp_is_fresh(") >= 5
+    assert "(uint32_t)(now_ms - remote_timestamp_ms)" not in tasks_c
+    assert "(uint32_t)(now_ms - safety_timestamp_ms)" not in tasks_c
 
 
 def test_cpu0_preconditions_are_feedback_driven(root: pathlib.Path) -> None:

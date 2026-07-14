@@ -731,6 +731,16 @@ static bool command_source_allows_motion_output(ecu_command_source_t source)
            source == COMMAND_SOURCE_CPU1;
 }
 
+static bool can2_zero_speed_operation_enable_permitted(
+    const vehicle_actuator_command_t *command)
+{
+    return command != NULL &&
+           command->high_voltage_enable &&
+           command->high_voltage_feedback_ready &&
+           !command->high_voltage_disable_request &&
+           command_source_allows_motion_output(command->source);
+}
+
 static bool node5_steer_contract_allows(const ecu_hardware_config_t *config,
                                         const canopen_master_pdo_request_t *request)
 {
@@ -2951,6 +2961,23 @@ static bool drive_safe_stop_required(const motion_device_state_t *state)
     return false;
 }
 
+static bool drive_zero_intent_completed(const motion_device_state_t *state,
+                                        bool enable_requested)
+{
+    if (state == NULL) {
+        return false;
+    }
+    for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        if (!state->drive_last_velocity_valid[wheel] ||
+            state->drive_last_velocity_units[wheel] != 0 ||
+            state->drive_last_current_10ma[wheel] != 0 ||
+            state->drive_last_enable_requested[wheel] != enable_requested) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool queue_drive_safe_stop(motion_device_state_t *state,
                                   canopen_master_service_t *canopen,
                                   const ecu_hardware_config_t *config,
@@ -2980,38 +3007,64 @@ static bool queue_drive_safe_stop(motion_device_state_t *state,
     return true;
 }
 
-static void force_can2_drive_safe_stop_intent(motion_device_state_t *state)
+static void force_can2_drive_zero_intent(motion_device_state_t *state,
+                                         bool enable_requested)
 {
     if (state == NULL) {
         return;
     }
 
-    /* A CAN2 recovery always starts by replacing every cached traction
-     * command with an explicit zero/disabled snapshot.  Never re-pend the
-     * nonzero command that was active when feedback or transport failed: it
-     * may be arbitrarily old by the time the node comes back. */
-    bool new_safe_stop_required = drive_safe_stop_required(state);
+    /* Always discard the cached nonzero command.  Recovery may keep the servo
+     * Operation Enabled at zero speed so its own TPDO gate can become true;
+     * actual safety shutdown still requests disabled output. */
+    bool new_zero_intent_required =
+        !drive_zero_intent_completed(state, enable_requested);
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
-        new_safe_stop_required =
-            new_safe_stop_required ||
+        new_zero_intent_required =
+            new_zero_intent_required ||
             state->drive_latest_velocity_units[wheel] != 0 ||
             state->drive_latest_current_10ma[wheel] != 0 ||
-            state->drive_latest_enable_requested[wheel];
+            state->drive_latest_enable_requested[wheel] != enable_requested;
     }
-    state->drive_safe_stop_pending =
-        state->drive_safe_stop_pending || new_safe_stop_required;
+    if (enable_requested) {
+        state->drive_safe_stop_pending = false;
+    } else {
+        state->drive_safe_stop_pending =
+            state->drive_safe_stop_pending || new_zero_intent_required;
+    }
     state->drive_next_group_valid = false;
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         state->drive_latest_velocity_units[wheel] = 0;
         state->drive_latest_current_10ma[wheel] = 0;
         state->drive_latest_command_kind[wheel] =
             MOTION_DRIVE_COMMAND_VELOCITY;
-        state->drive_latest_enable_requested[wheel] = false;
+        state->drive_latest_enable_requested[wheel] = enable_requested;
         state->drive_latest_velocity_valid[wheel] = true;
-        if (new_safe_stop_required) {
+        if (new_zero_intent_required) {
             state->drive_pending_velocity[wheel] = true;
         }
     }
+}
+
+static void force_can2_drive_safe_stop_intent(motion_device_state_t *state)
+{
+    force_can2_drive_zero_intent(state, false);
+}
+
+static bool can2_recovery_zero_enable_permitted(
+    const motion_device_state_t *state)
+{
+    return state != NULL && state->last_motion_command_valid &&
+           can2_zero_speed_operation_enable_permitted(
+               &state->last_motion_command);
+}
+
+static void force_can2_drive_recovery_zero_intent(
+    motion_device_state_t *state)
+{
+    force_can2_drive_zero_intent(
+        state,
+        can2_recovery_zero_enable_permitted(state));
 }
 
 static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state,
@@ -3414,11 +3467,13 @@ static void service_can2_partial_group_recovery(
      * traction zero has completed locally, no node-level repair remains, and
      * all eight nodes have continuously reported operation-enabled feedback.
      */
+    bool recovery_enable_requested =
+        can2_recovery_zero_enable_permitted(state);
     bool recovery_ready =
         state->can2_node_recovery_pending_mask == 0U &&
         !state->drive_group_active &&
         !state->steer_group_active &&
-        !drive_safe_stop_required(state) &&
+        drive_zero_intent_completed(state, recovery_enable_requested) &&
         canopen_master_service_realtime_pdo_idle(canopen) &&
         can2_all_motion_nodes_operation_enabled_fresh(canopen);
     if (!recovery_ready) {
@@ -3652,6 +3707,45 @@ static ecu_device_apply_result_t flush_drive_velocity_realtime(
                           ECU_CANOPEN_DRIVE_PDO_PERIOD_MS :
                           (uint32_t)(now_ms - state->drive_realtime_last_flush_ms);
     state->drive_realtime_last_flush_ms = now_ms;
+
+    bool recovery_zero_intent_active =
+        state->can2_node_recovery_pending_mask != 0U ||
+        state->can2_partial_group_recovery_active ||
+        state->can2_recovery_steer_sync_pending;
+    if (recovery_zero_intent_active) {
+        bool enable_requested_value =
+            can2_recovery_zero_enable_permitted(state);
+        if (drive_zero_intent_completed(state, enable_requested_value)) {
+            return ECU_DEVICE_APPLY_OK;
+        }
+        if (canopen_pdo_lane_busy_for_other_group(canopen,
+                                                  state->drive_active_group_sequence)) {
+            return ECU_DEVICE_APPLY_OK;
+        }
+
+        /* Recovery zero is an immediate safety target, not an ordinary motion
+         * trajectory.  Bypass the normal velocity rate limiter so no fragment
+         * of the pre-fault nonzero command can be replayed while nodes recover. */
+        int32_t zero_velocity[ECU_WHEEL_COUNT] = {0};
+        int16_t zero_current[ECU_WHEEL_COUNT] = {0};
+        bool enable_requested[ECU_WHEEL_COUNT] = {
+            enable_requested_value,
+            enable_requested_value,
+            enable_requested_value,
+            enable_requested_value,
+        };
+        if (!queue_drive_group(canopen,
+                               config,
+                               state,
+                               zero_velocity,
+                               zero_current,
+                               MOTION_DRIVE_COMMAND_VELOCITY,
+                               enable_requested,
+                               now_ms)) {
+            return ECU_DEVICE_APPLY_REJECTED;
+        }
+        return ECU_DEVICE_APPLY_OK;
+    }
 
     if (!all_drive_axes_realtime_ready(state, canopen, config)) {
         state->drive_safe_stop_pending =
@@ -4423,6 +4517,8 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
         command->high_voltage_disable_request;
     state->last_motion_command.high_voltage_feedback_ready =
         command->high_voltage_feedback_ready;
+    state->last_motion_command.source = command->source;
+    state->last_motion_command.diagnostic = command->diagnostic;
 
     bool steer_allowed = motion_device_update_steer_safety_gate(state,
                                                                 canopen,
@@ -4513,11 +4609,7 @@ ecu_device_apply_result_t motion_device_apply(motion_device_state_t *state,
                                     drive_allowed_by_safety,
                                     now_ms);
     bool drive_enable_requested =
-        command->high_voltage_feedback_ready &&
-        !command->high_voltage_disable_request &&
-        steer_allowed &&
-        can2_recovery_allows_drive &&
-        command->source != COMMAND_SOURCE_SAFETY;
+        can2_zero_speed_operation_enable_permitted(command);
     bool track_assist_current_allowed =
         command->track_assist_requested &&
         command->track_assist_active &&
@@ -4652,14 +4744,16 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
             }
             state->can2_node_recovery_entry_mask = 0U;
         }
-        force_can2_drive_safe_stop_intent(state);
+        force_can2_drive_recovery_zero_intent(state);
+        bool recovery_enable_requested =
+            can2_recovery_zero_enable_permitted(state);
         ecu_device_apply_result_t stop_result =
             flush_drive_velocity_realtime(state, canopen, config, now_ms);
         if (stop_result == ECU_DEVICE_APPLY_REJECTED) {
             return stop_result;
         }
         if (!state->drive_group_active &&
-            !drive_safe_stop_required(state) &&
+            drive_zero_intent_completed(state, recovery_enable_requested) &&
             canopen_master_service_realtime_pdo_idle(canopen)) {
             service_can2_node_recovery(state, canopen, now_ms);
         }
@@ -4667,7 +4761,7 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
     }
 
     if (state->can2_partial_group_recovery_active) {
-        force_can2_drive_safe_stop_intent(state);
+        force_can2_drive_recovery_zero_intent(state);
         ecu_device_apply_result_t stop_result =
             flush_drive_velocity_realtime(state, canopen, config, now_ms);
         if (stop_result == ECU_DEVICE_APPLY_REJECTED) {
@@ -4677,9 +4771,11 @@ ecu_device_apply_result_t motion_device_flush_realtime(motion_device_state_t *st
         return ECU_DEVICE_APPLY_OK;
     }
 
+    bool recovery_enable_requested =
+        can2_recovery_zero_enable_permitted(state);
     if (state->can2_recovery_steer_sync_pending &&
-        (state->drive_group_active || state->drive_safe_stop_pending ||
-         drive_safe_stop_required(state))) {
+        (state->drive_group_active ||
+         !drive_zero_intent_completed(state, recovery_enable_requested))) {
         /* Complete the explicit traction-zero group before using the CAN2
          * realtime lane for the steering resynchronization group. */
         return flush_drive_velocity_realtime(state, canopen, config, now_ms);

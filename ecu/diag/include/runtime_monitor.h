@@ -134,7 +134,10 @@ typedef struct {
     uint32_t lift_interpolation_reject_count;
     uint32_t lift_interpolation_failure_count;
     uint32_t lift_interpolation_recovery_count;
+    uint32_t lift_running_spread_warning_count;
     int32_t lift_stream_planned_delta_counts;
+    int32_t lift_running_spread_counts;
+    int32_t lift_max_running_spread_counts;
     int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
     bool steer_normal_pdo_allowed;
