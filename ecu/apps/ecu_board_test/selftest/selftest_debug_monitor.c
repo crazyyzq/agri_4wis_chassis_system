@@ -96,6 +96,10 @@ bool selftest_debug_monitor(void)
     SELFTEST_ASSERT_EQ(ECU_DEBUG_VIEW_NONE, g_ecu_debug_monitor.view);
     SELFTEST_ASSERT_EQ(200U, g_ecu_debug_monitor.period_ms);
     SELFTEST_ASSERT_EQ(0U, fake_do_mask);
+    SELFTEST_ASSERT_EQ(0U, g_ecu_debug_mos.enable);
+    SELFTEST_ASSERT_EQ(0U, g_ecu_debug_mos.request_mask);
+    SELFTEST_ASSERT_EQ(0U, g_ecu_debug_mos.applied_mask);
+    SELFTEST_ASSERT_TRUE(g_ecu_debug_mos.write_count >= 1U);
 
     g_ecu_debug_monitor.enable = 1U;
     g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_ADC;
@@ -131,6 +135,7 @@ bool selftest_debug_monitor(void)
     g_ecu_debug_monitor.do_mask = 0x00000005UL;
     ecu_debug_monitor_poll();
     SELFTEST_ASSERT_EQ(0x00000005UL, fake_do_mask);
+    SELFTEST_ASSERT_EQ(0x00000005UL, g_ecu_debug_mos.applied_mask);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "mask=0x005") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX_OUT1=1") != NULL);
     SELFTEST_ASSERT_TRUE(strstr(fake_last_line, "EX_OUT2=0") != NULL);
@@ -141,6 +146,28 @@ bool selftest_debug_monitor(void)
     g_ecu_debug_monitor.do_mask = 0x00000FFFUL;
     ecu_debug_monitor_poll();
     SELFTEST_ASSERT_EQ(0U, fake_do_mask);
+    SELFTEST_ASSERT_EQ(0U, g_ecu_debug_mos.applied_mask);
+
+    fake_now_ms = 900U;
+    g_ecu_debug_mos.enable = 1U;
+    g_ecu_debug_mos.request_mask = 0x0000000AUL;
+    g_ecu_debug_monitor.do_enable = 1U;
+    g_ecu_debug_monitor.do_mask = 0x00000005UL;
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_EQ(0x0000000AUL, fake_do_mask);
+    SELFTEST_ASSERT_EQ(0x0000000AUL, g_ecu_debug_mos.applied_mask);
+    SELFTEST_ASSERT_EQ(900U, g_ecu_debug_mos.last_write_ms);
+
+    fake_now_ms = 950U;
+    g_ecu_debug_mos.request_mask = 0x00001FFFUL;
+    ecu_debug_monitor_poll();
+    SELFTEST_ASSERT_EQ(0x00000FFFUL, fake_do_mask);
+    SELFTEST_ASSERT_EQ(0x00000FFFUL, g_ecu_debug_mos.applied_mask);
+
+    g_ecu_debug_mos.enable = 0U;
+    g_ecu_debug_mos.request_mask = 0U;
+    g_ecu_debug_monitor.do_enable = 0U;
+    g_ecu_debug_monitor.do_mask = 0U;
 
     fake_now_ms = 1000U;
     g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_ADC;
@@ -164,9 +191,12 @@ bool selftest_debug_monitor(void)
     g_ecu_debug_monitor.view = ECU_DEBUG_VIEW_DI;
     g_ecu_debug_monitor.do_enable = 1U;
     g_ecu_debug_monitor.do_mask = 0x00000003UL;
+    g_ecu_debug_mos.enable = 1U;
+    g_ecu_debug_mos.request_mask = 0x0000000FUL;
     ecu_debug_monitor_suspend();
     ecu_debug_monitor_poll();
     SELFTEST_ASSERT_EQ(0U, fake_do_mask);
+    SELFTEST_ASSERT_EQ(0U, g_ecu_debug_mos.applied_mask);
     uint32_t lines_before_resume = fake_line_count;
     fake_now_ms = 1600U;
     ecu_debug_monitor_poll();

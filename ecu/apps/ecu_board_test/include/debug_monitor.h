@@ -21,9 +21,33 @@ typedef struct {
     volatile uint32_t view;
     volatile uint32_t channel;
     volatile uint32_t period_ms;
+    /* Legacy serial-monitor DO path. Prefer g_ecu_debug_mos for JLink live control. */
     volatile uint32_t do_enable;
     volatile uint32_t do_mask;
 } ecu_debug_monitor_t;
+
+typedef struct {
+    /*
+     * JLink/SEGGER live MOS output control register block.
+     *
+     * Watch/edit these fields directly:
+     *   enable       = 1 lets this block own EX_OUT1..EX_OUT12.
+     *   request_mask = bit0..bit11 request EX_OUT1..EX_OUT12 ON.
+     *
+     * Read these fields to confirm what firmware actually applied:
+     *   applied_mask  = last sanitized mask written to board_ecu_output_write().
+     *   write_count   = increments after every monitor poll write.
+     *   last_write_ms = backend timestamp of the last write.
+     *
+     * When enable is 0, the old g_ecu_debug_monitor.do_enable/do_mask path still
+     * works for compatibility with serial monitor tests.
+     */
+    volatile uint32_t enable;
+    volatile uint32_t request_mask;
+    volatile uint32_t applied_mask;
+    volatile uint32_t write_count;
+    volatile uint32_t last_write_ms;
+} ecu_debug_mos_t;
 
 typedef struct {
     uint32_t (*now_ms)(void);
@@ -35,6 +59,7 @@ typedef struct {
 } ecu_debug_monitor_backend_t;
 
 extern volatile ecu_debug_monitor_t g_ecu_debug_monitor;
+extern volatile ecu_debug_mos_t g_ecu_debug_mos;
 
 void ecu_debug_monitor_init(void);
 void ecu_debug_monitor_poll(void);

@@ -7,6 +7,7 @@
 #include "debug_monitor.h"
 #include "hpm_adc16_drv.h"
 #include "hpm_clock_drv.h"
+#include "hpm_common.h"
 #include "hpm_mchtmr_drv.h"
 #include "sbus_service.h"
 
@@ -16,6 +17,10 @@
 
 volatile ecu_debug_monitor_t g_ecu_debug_monitor = {
     0U, ECU_DEBUG_VIEW_NONE, 0U, ECU_DEBUG_MONITOR_DEFAULT_PERIOD_MS, 0U, 0U
+};
+
+ATTR_PLACE_AT_NONCACHEABLE_BSS volatile ecu_debug_mos_t g_ecu_debug_mos = {
+    0U, 0U, 0U, 0U, 0U
 };
 
 static uint32_t default_now_ms(void);
@@ -55,6 +60,31 @@ static uint32_t normalized_period_ms(void)
 static bool selected(uint8_t index)
 {
     return g_ecu_debug_monitor.channel == 0U || g_ecu_debug_monitor.channel == index;
+}
+
+static uint32_t normalize_do_mask(uint32_t mask)
+{
+    return mask & ECU_DEBUG_MONITOR_DO_MASK_ALL;
+}
+
+static uint32_t requested_do_mask(void)
+{
+    if (g_ecu_debug_mos.enable != 0U) {
+        return normalize_do_mask(g_ecu_debug_mos.request_mask);
+    }
+    if (g_ecu_debug_monitor.do_enable != 0U) {
+        return normalize_do_mask(g_ecu_debug_monitor.do_mask);
+    }
+    return 0U;
+}
+
+static void apply_do_mask(const ecu_debug_monitor_backend_t *backend, uint32_t mask, uint32_t now_ms)
+{
+    uint32_t applied_mask = normalize_do_mask(mask);
+    backend->write_do_mask(applied_mask);
+    g_ecu_debug_mos.applied_mask = applied_mask;
+    g_ecu_debug_mos.last_write_ms = now_ms;
+    ++g_ecu_debug_mos.write_count;
 }
 
 static void append_text(char *line, size_t capacity, const char *text)
@@ -133,8 +163,13 @@ static void print_sbus(const ecu_debug_monitor_backend_t *backend)
 
 static void print_do(const ecu_debug_monitor_backend_t *backend, uint32_t applied_mask)
 {
-    char line[192];
-    (void)snprintf(line, sizeof(line), "DO mask=0x%03lX", (unsigned long)applied_mask);
+    char line[256];
+    (void)snprintf(line, sizeof(line),
+                   "DO mask=0x%03lX live_en=%lu live_req=0x%03lX writes=%lu",
+                   (unsigned long)applied_mask,
+                   (unsigned long)g_ecu_debug_mos.enable,
+                   (unsigned long)normalize_do_mask(g_ecu_debug_mos.request_mask),
+                   (unsigned long)g_ecu_debug_mos.write_count);
     for (uint8_t ch = 1U; ch <= 12U; ++ch) {
         if (!selected(ch)) continue;
         char fragment[20];
@@ -155,25 +190,29 @@ void ecu_debug_monitor_init(void)
     g_ecu_debug_monitor.period_ms = ECU_DEBUG_MONITOR_DEFAULT_PERIOD_MS;
     g_ecu_debug_monitor.do_enable = 0U;
     g_ecu_debug_monitor.do_mask = 0U;
+    g_ecu_debug_mos.enable = 0U;
+    g_ecu_debug_mos.request_mask = 0U;
+    g_ecu_debug_mos.applied_mask = 0U;
+    g_ecu_debug_mos.write_count = 0U;
+    g_ecu_debug_mos.last_write_ms = 0U;
     s_last_print_ms = (uint32_t)(0U - normalized_period_ms());
-    backend->write_do_mask(0U);
+    apply_do_mask(backend, 0U, 0U);
 }
 
 void ecu_debug_monitor_poll(void)
 {
     const ecu_debug_monitor_backend_t *backend = active_backend();
+    uint32_t now = backend->now_ms();
     if (s_suspended) {
-        backend->write_do_mask(0U);
+        apply_do_mask(backend, 0U, now);
         return;
     }
-    uint32_t applied_mask = g_ecu_debug_monitor.do_enable ?
-                            (g_ecu_debug_monitor.do_mask & ECU_DEBUG_MONITOR_DO_MASK_ALL) : 0U;
-    backend->write_do_mask(applied_mask);
+    uint32_t applied_mask = requested_do_mask();
+    apply_do_mask(backend, applied_mask, now);
     if (g_ecu_debug_monitor.enable == 0U || g_ecu_debug_monitor.view == ECU_DEBUG_VIEW_NONE) {
         return;
     }
 
-    uint32_t now = backend->now_ms();
     if ((uint32_t)(now - s_last_print_ms) < normalized_period_ms()) return;
     s_last_print_ms = now;
 
@@ -205,7 +244,7 @@ void ecu_debug_monitor_suspend(void)
 {
     const ecu_debug_monitor_backend_t *backend = active_backend();
     s_suspended = true;
-    backend->write_do_mask(0U);
+    apply_do_mask(backend, 0U, backend->now_ms());
 }
 
 void ecu_debug_monitor_resume(void)
