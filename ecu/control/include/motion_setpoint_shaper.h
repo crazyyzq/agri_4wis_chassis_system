@@ -24,18 +24,24 @@ typedef enum {
  *
  * All position and velocity values use Node5..8 encoder position counts:
  *   position: count
- *   group_speed: count/s of the axis with the largest remaining error
+ *   velocity: signed count/s for each axis
+ *   group_speed: maximum absolute axis velocity, for diagnostics
  *
- * Every output axis advances by the same fraction of its own current error.
- * `elapsed_ms` is bounded internally so a delayed scheduler tick cannot create
- * one large target jump.
+ * One coherent requested vector is consumed and one coherent output vector is
+ * produced per call. The desired axis velocities are proportional to the same
+ * four-axis error snapshot, while each saved axis velocity is acceleration
+ * limited across target changes. A requested reversal therefore crosses zero
+ * instead of reusing a positive speed instantaneously in the negative
+ * direction. `elapsed_ms` is bounded internally so a delayed scheduler tick
+ * cannot create one large target jump.
  */
 bool motion_setpoint_shape_steering_group(
     const int32_t current_counts[ECU_WHEEL_COUNT],
     const int32_t requested_counts[ECU_WHEEL_COUNT],
-    int32_t current_group_speed_counts_per_sec,
+    const int32_t current_velocity_counts_per_sec[ECU_WHEEL_COUNT],
     uint32_t elapsed_ms,
     int32_t output_counts[ECU_WHEEL_COUNT],
+    int32_t output_velocity_counts_per_sec[ECU_WHEEL_COUNT],
     int32_t *output_group_speed_counts_per_sec,
     motion_steer_follow_band_t *output_band);
 

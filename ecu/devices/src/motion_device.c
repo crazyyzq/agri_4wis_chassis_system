@@ -1203,6 +1203,16 @@ static bool motion_device_update_steer_safety_gate(
         state->steer_next_group_valid = false;
         state->steer_safe_stop_pending = true;
         if (was_allowed) {
+            /* Normal PDO production stops at this boundary, so the saved
+             * target-trajectory velocity can no longer describe confirmed
+             * actuator progress.  Start any later re-authorization from zero
+             * virtual velocity; retaining the pre-inhibit direction would
+             * create a delayed steering kick after estop/disarm recovery. */
+            state->steer_group_commanded_speed_counts_per_sec = 0;
+            state->steer_follow_band = MOTION_STEER_FOLLOW_BAND_HOLD;
+            for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+                state->steer_commanded_velocity_counts_per_sec[wheel] = 0;
+            }
             state->steer_last_allowed_to_inhibited_ms = now_ms;
         }
         if (was_allowed || old_reason != reason) {
@@ -1579,6 +1589,7 @@ static bool build_steer_group_targets(motion_device_state_t *state,
 
     int32_t current_targets[ECU_WHEEL_COUNT];
     int32_t requested_targets[ECU_WHEEL_COUNT];
+    int32_t shaped_velocity[ECU_WHEEL_COUNT] = {0};
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         if (!state->steer_latest_target_valid[wheel]) {
@@ -1615,9 +1626,10 @@ static bool build_steer_group_targets(motion_device_state_t *state,
     } else if (!motion_setpoint_shape_steering_group(
                    current_targets,
                    requested_targets,
-                   state->steer_group_commanded_speed_counts_per_sec,
+                   state->steer_commanded_velocity_counts_per_sec,
                    elapsed_ms,
                    out_targets,
+                   shaped_velocity,
                    &state->steer_group_commanded_speed_counts_per_sec,
                    &state->steer_follow_band)) {
         return false;
@@ -1626,7 +1638,10 @@ static bool build_steer_group_targets(motion_device_state_t *state,
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
         int32_t previous = state->steer_commanded_target_counts[wheel];
         state->steer_commanded_target_counts[wheel] = out_targets[wheel];
-        if (elapsed_ms != 0U) {
+        if (!fixed_posture_path) {
+            state->steer_commanded_velocity_counts_per_sec[wheel] =
+                shaped_velocity[wheel];
+        } else if (elapsed_ms != 0U) {
             int64_t velocity =
                 ((int64_t)out_targets[wheel] - (int64_t)previous) * 1000LL /
                 (int64_t)elapsed_ms;
@@ -3559,6 +3574,11 @@ static bool recover_or_latch_can2_transient_failure(motion_device_state_t *state
     force_can2_drive_safe_stop_intent(state);
 
     for (uint32_t wheel = 0U; wheel < ECU_WHEEL_COUNT; ++wheel) {
+        /* A recovered steering group is rebuilt from fresh feedback and a new
+         * coherent target. Never carry virtual target velocity across a
+         * transport failure, because its direction no longer describes a
+         * physically confirmed trajectory. */
+        state->steer_commanded_velocity_counts_per_sec[wheel] = 0;
         if (state->steer_latest_target_valid[wheel]) {
             state->steer_pending_target[wheel] = true;
         }

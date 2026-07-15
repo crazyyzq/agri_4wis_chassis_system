@@ -401,6 +401,15 @@
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2      (500000)
 #define ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2       (500000)
 #define ECU_CANOPEN_STEER_TARGET_DECEL_COUNTS_PER_SEC2             (350000)
+/* A moving joystick target may reverse before the previous target has been
+ * reached. Keep a separately named limit so reversal always crosses zero with
+ * bounded acceleration instead of reusing a positive speed in the opposite
+ * direction. The value remains within the verified drive profile deceleration.
+ */
+#define ECU_CANOPEN_STEER_TARGET_REVERSAL_DECEL_COUNTS_PER_SEC2    (350000)
+/* Below this virtual target-velocity magnitude, settling to exact zero cannot
+ * create a meaningful position step at the 50 ms PDO cadence. */
+#define ECU_CANOPEN_STEER_TARGET_VELOCITY_SETTLE_COUNTS_PER_SEC    (1000)
 #define ECU_CANOPEN_STEER_SHAPER_MAX_ELAPSED_MS                    (60U)
 /* Runtime profile parameters are volatile drive settings, not PDO mapping or
  * NVM writes. The CAN2 owner writes and reads them back once per steering node
@@ -720,6 +729,12 @@ typedef enum {
 #endif
 #if ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2 > 500000
 #error ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2 <= 500000
+#endif
+#if ECU_CANOPEN_STEER_TARGET_REVERSAL_DECEL_COUNTS_PER_SEC2 > ECU_STEER_PROFILE_DECEL_COUNTS_PER_SEC2
+#error ECU_CANOPEN_STEER_TARGET_REVERSAL_DECEL_COUNTS_PER_SEC2 <= ECU_STEER_PROFILE_DECEL_COUNTS_PER_SEC2
+#endif
+#if ECU_CANOPEN_STEER_TARGET_HOLD_COUNTS >= ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS
+#error ECU_CANOPEN_STEER_TARGET_HOLD_COUNTS < ECU_CANOPEN_STEER_POSITION_TRIGGER_THRESHOLD_COUNTS
 #endif
 /* CAN3 lift calibration is separate from Node1..8/13 10000-count motor units.
  * Installed 2026-07 reducer measurement:

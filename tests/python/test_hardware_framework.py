@@ -81,6 +81,8 @@ def test_steering_remote_follow_uses_latest_target_trajectory_not_raw_jitter(roo
         "ECU_CANOPEN_STEER_TARGET_ACCEL_MEDIUM_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_DECEL_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_REVERSAL_DECEL_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_VELOCITY_SETTLE_COUNTS_PER_SEC",
         "ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC         (500000)",
     ]:
         assert token in config_h, token
@@ -91,6 +93,16 @@ def test_steering_remote_follow_uses_latest_target_trajectory_not_raw_jitter(roo
     assert cache_fn.index("state->steer_latest_target_counts[wheel] = position_counts;") < cache_fn.index(
         "state->steer_pending_target[wheel] = true;"
     )
+    assert "current_velocity_counts_per_sec" in shaper_c
+    assert "output_velocity_counts_per_sec" in shaper_c
+    assert "approach_nonnegative" not in shaper_c
+    assert "*output_group_speed_counts_per_sec = 0;" not in shaper_c
+    assert "bool axis_settled" in shaper_c
+    assert "band == MOTION_STEER_FOLLOW_BAND_HOLD" not in shaper_c
+    steer_gate_fn = motion_c.split(
+        "static bool motion_device_update_steer_safety_gate", 1
+    )[1].split("static bool command_changed", 1)[0]
+    assert "state->steer_commanded_velocity_counts_per_sec[wheel] = 0" in steer_gate_fn
 
 
 def test_can2_drive_velocity_does_not_queue_conflicting_group_while_steering_active(root: pathlib.Path) -> None:
@@ -947,6 +959,7 @@ def test_can2_realtime_transient_pdo_failure_recovers_without_latching(root: pat
     assert "canopen_master_service_cancel_realtime_pdo(canopen)" in recover_fn
     assert "canopen_master_service_recover_transport(canopen)" in recover_fn
     assert "state->steer_pending_target[wheel] = true" in recover_fn
+    assert "state->steer_commanded_velocity_counts_per_sec[wheel] = 0" in recover_fn
     assert "force_can2_drive_safe_stop_intent(state)" in recover_fn
     assert "state->steer_group_degraded = latch_required" in recover_fn
 

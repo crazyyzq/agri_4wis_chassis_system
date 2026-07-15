@@ -517,6 +517,12 @@ def test_can2_motion_uses_one_coherent_four_axis_setpoint_shaper(root: pathlib.P
         "MOTION_STEER_FOLLOW_BAND_LARGE",
         "max_abs_error",
         "integer_sqrt_u64",
+        "current_velocity_counts_per_sec",
+        "output_velocity_counts_per_sec",
+        "signs_are_opposite",
+        "approach_signed",
+        "scale_axis_acceleration",
+        "ECU_CANOPEN_STEER_TARGET_REVERSAL_DECEL_COUNTS_PER_SEC2",
         "reversal_through_zero",
     ]:
         assert token in shaper_h or token in shaper_c, token
@@ -542,6 +548,8 @@ def test_steering_follow_units_and_limits_are_explicit(root: pathlib.Path) -> No
         "ECU_CANOPEN_STEER_TARGET_RATE_LARGE_COUNTS_PER_SEC",
         "ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2",
         "ECU_CANOPEN_STEER_TARGET_DECEL_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_REVERSAL_DECEL_COUNTS_PER_SEC2",
+        "ECU_CANOPEN_STEER_TARGET_VELOCITY_SETTLE_COUNTS_PER_SEC",
         "ECU_STEER_PROFILE_DECEL_COUNTS_PER_SEC2",
     ]:
         assert token in config_h, token
