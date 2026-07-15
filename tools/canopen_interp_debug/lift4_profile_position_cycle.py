@@ -510,9 +510,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--speed-mm-s", type=float, default=1.0)
     parser.add_argument("--accel-mm-s2", type=float, default=0.5)
     parser.add_argument("--tracking-window-mm", type=float, default=1.0)
-    parser.add_argument("--short-mm", type=float, default=0.0)
+    parser.add_argument("--short-mm", type=float, default=10.0)
     parser.add_argument("--long-mm", type=float, default=490.0)
-    parser.add_argument("--safe-min-mm", type=float, default=0.0)
+    parser.add_argument("--safe-min-mm", type=float, default=10.0)
     parser.add_argument("--safe-max-mm", type=float, default=490.0)
     parser.add_argument("--cycles", type=int, default=2)
     parser.add_argument(

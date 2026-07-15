@@ -28,7 +28,15 @@ typedef enum {
     LIFT_INTERPOLATION_STATE_TRIGGERING,
     LIFT_INTERPOLATION_STATE_RUNNING,
     LIFT_INTERPOLATION_STATE_STOPPING,
-    LIFT_INTERPOLATION_STATE_FAULT
+    LIFT_INTERPOLATION_STATE_FAULT,
+    /* Cold configuration remains SDO-based, but the final CiA-402 switch-on
+     * and enable transitions are synchronous four-axis RPDO1 groups. */
+    LIFT_INTERPOLATION_STATE_READY_TO_SWITCH_ON,
+    LIFT_INTERPOLATION_STATE_SWITCHING_ON,
+    LIFT_INTERPOLATION_STATE_ENABLING_OPERATION,
+    /* Operator neutral keeps interpolation active until all four legs have
+     * converged to one safe common height and reached zero speed. */
+    LIFT_INTERPOLATION_STATE_LEVELING
 } lift_interpolation_state_t;
 
 typedef struct {
@@ -45,6 +53,10 @@ typedef struct {
     uint32_t lift_interpolation_recovery_count;
     uint32_t lift_running_spread_warning_count;
     uint32_t lift_hold_count;
+    uint32_t lift_leveling_entry_count;
+    uint32_t lift_leveling_complete_count;
+    uint32_t lift_range_direction_reject_count;
+    uint32_t lift_sync_enable_count;
     uint32_t pump_group_sequence;
     uint32_t pump_active_group_sequence;
     uint32_t pump_group_complete_count;
@@ -84,7 +96,9 @@ typedef struct {
     uint32_t last_pump_velocity_ms;
     uint32_t lift_progress_timestamp_ms[ECU_WHEEL_COUNT];
     int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_actual_velocity_units[ECU_WHEEL_COUNT];
     int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_level_velocity_counts_per_sec[ECU_WHEEL_COUNT];
     int32_t lift_stream_origin_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_progress_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_settle_reference_position_counts[ECU_WHEEL_COUNT];
@@ -94,6 +108,7 @@ typedef struct {
     int32_t lift_stream_velocity_counts_per_sec;
     int32_t lift_running_spread_counts;
     int32_t lift_max_running_spread_counts;
+    int32_t lift_level_target_position_counts;
     int32_t last_pump_velocity_units;
     int32_t pump_active_velocity_units;
     int32_t pump_actual_velocity_units;
@@ -102,8 +117,13 @@ typedef struct {
     uint8_t pump_speed_ready_samples;
     uint8_t lift_preload_points_completed;
     uint8_t lift_target_stable_samples;
+    uint8_t lift_level_stable_samples;
+    uint8_t lift_below_safe_range_mask;
+    uint8_t lift_above_safe_range_mask;
+    uint8_t lift_mechanical_range_invalid_mask;
     int8_t lift_requested_direction;
     int8_t lift_active_direction;
+    int8_t lift_level_resume_direction;
     hydraulic_pump_state_t pump_state;
     lift_interpolation_state_t lift_interpolation_state;
     bool pump_feedback_valid;
@@ -122,6 +142,9 @@ typedef struct {
     bool lift_setup_enable_operation;
     bool lift_preload_group_pending;
     bool lift_settle_initialized;
+    bool lift_level_target_valid;
+    bool lift_start_with_leveling;
+    bool lift_prepared_disabled;
     vehicle_actuator_command_t last_lift_command;
     ecu_device_apply_result_t last_result;
 } lift_hydraulic_device_state_t;

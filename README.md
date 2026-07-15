@@ -10,7 +10,7 @@ CAN3 抬升/液压、CAN1 电源、SBUS、Modbus ADC 和 DIO 的完整软件链�
 `devices` 层。
 
 当前代码已通过静态契约测试和目标构建，但整车运动、CAN2 自动恢复、转向找零、
-变地隙与液压仍必须按现行调试记录完成实车验证。软件构建成功不等于设备已接受
+变地隙回中找平与液压仍必须按现行调试记录完成实车验证。软件构建成功不等于设备已接受
 CANopen 命令，也不等于车辆已完成安全验收。
 
 已完成验证的板级功能包括：
@@ -85,11 +85,13 @@ tools/                       静态检查工具
 
 ## 当前工程文档
 
+- 文档统一入口：`doc/README.md`
 - 主控框架阅读指南：`docs/ecu-main-control-architecture.md`
 - 需求来源：`doc/ECU_Project_Implementation_v1.4.md`
 - 当前 PDO 映射契约：`doc/CANOPEN_PDO_MAPPING_RECORD_V1.md`
 - 遥控操作说明：`doc/ECU/遥控操作逻辑说明书.md`
 - 当前整车调试记录：`doc/ECU/整车调试记录_2026-07-07.md`
+- 工具与危险脚本说明：`tools/README.md`
 
 ## 可现场标定的配置
 

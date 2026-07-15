@@ -18,7 +18,8 @@
 *.bin
 *.map
 
-# Local Superpowers/browser state and isolated worktrees
+# Local agent/browser state and isolated worktrees
+/.agents/
 /.superpowers/
 /.worktrees/
 
@@ -33,6 +34,7 @@ __pycache__/
 *.jlinklog
 .vs/
 .idea/
+~$*
 Thumbs.db
 Desktop.ini
 .DS_Store

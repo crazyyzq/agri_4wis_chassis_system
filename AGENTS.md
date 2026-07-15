@@ -1,691 +1,309 @@
-# AGENTS.md — Agricultural 4WIS Chassis ECU Project
+# AGENTS.md — Agricultural 4WIS Chassis ECU
 
 This file applies to the repository root and all descendants unless a nearer
-`AGENTS.md` adds stricter rules. It is the operating contract for Codex in this
-repository.
+`AGENTS.md` is stricter. The project is safety-relevant embedded vehicle
+software; measured hardware evidence outranks assumptions.
 
-## 1. Project identity and non-negotiable intent
+## 1. Platform and architecture
 
-This repository is an embedded ECU project for an agricultural four-wheel-drive,
-four-wheel-steering chassis. It is safety-relevant hardware software, not a
-generic desktop application.
+- Windows 11 / PowerShell 7
+- HPM6750IVM, ZLG MR6750 minimum system
+- HPM SDK 1.11.0, FreeRTOS, CMake/Ninja, SEGGER Embedded Studio 8.28
+- CPU0 exclusively owns final safety decisions and actuator output. CPU1 may
+  publish non-critical snapshots but must not directly command actuators.
 
-Primary platform and toolchain:
-
-- Windows 11, PowerShell 7 (`pwsh`)
-- HPM6750-class dual-core ECU target
-- FreeRTOS, HPM SDK, CMake, Ninja, SEGGER Embedded Studio
-- CPU0 is the authoritative real-time control and safety core.
-- CPU1 is not permitted to directly own final actuator outputs unless the user
-  explicitly changes the architecture.
-
-The normal control flow is:
+Required command path:
 
 ```text
-SBUS / auto request
+SBUS / automatic request
   -> remote manager / producer
   -> command arbiter
   -> safety manager
   -> vehicle command executor
-  -> device adapters
-  -> CANopen / CAN / DIO / UART hardware services
+  -> device adapter
+  -> CANopen / CAN / DIO / UART service
 ```
 
-Never bypass this flow by sending a drive, steering, lift, brake, high-voltage,
-or warning-light command directly from a remote parser, UI/debug helper, or
-unrelated task.
+Never send motion, steering, lift, brake, hydraulic, high-voltage or warning
+output directly from a parser, UI/debug helper, diagnostic task or unrelated
+task.
 
-## 2. Repository boundaries and source-of-truth order
+## 2. Source of truth and repository boundaries
 
-Treat these as project-owned code and documents:
+Hardware/configuration truth, highest priority first:
+
+1. `ecu/config/include/ecu_config.h` and `ecu/config/src/ecu_config.c`
+2. board configuration and installed wiring
+3. vendor manuals in `doc/`
+4. saved analyzer/readback evidence
+5. explicitly labelled engineering assumptions
+
+Current document entry point: `doc/README.md`.
+
+Project-owned source:
 
 ```text
-ecu/apps/agri_chassis_control_cpu0/
-ecu/config/
-ecu/devices/
-ecu/diag/
-ecu/drivers/
-ecu/os/
-ecu/remote/
-ecu/vehicle/
-tests/python/
-doc/
-tools/
+ecu/apps/  ecu/config/  ecu/control/  ecu/devices/  ecu/diag/
+ecu/drivers/  ecu/ipc/  ecu/os/  ecu/protocol/  ecu/remote/  ecu/vehicle/
+tests/python/  tools/  doc/  docs/
 ```
 
-Do **not** modify the following unless the user explicitly requests an SDK or
-toolchain change:
+Do not modify `ecu/sdk_env_v1.11.0/`, `third_party/`, vendor SDK files or
+generated IDE/toolchain files unless the user explicitly requests a toolchain
+change. Generated `tmp/` and `out/` are not source of truth.
 
-```text
-ecu/sdk_env_v1.11.0/
-third_party/
-generated toolchain files
-vendor SDK files
-```
+When code, documentation and measured evidence conflict, preserve safe output,
+state the conflict and create a measured verification path. Do not invent a
+constant.
 
-For hardware parameters, do not invent constants. Use this source-of-truth
-order:
-
-1. `ecu/config/include/ecu_config.h`
-2. hardware configuration structures and board configuration
-3. vendor manuals already present in the repository / supplied by the user
-4. analyzer capture or measured hardware evidence
-5. clearly labeled engineering assumptions
-
-When documentation, code, and analyzer evidence disagree, do not silently pick
-one. State the conflict, preserve safety, and ask for or implement a measured
-verification path.
-
-## 3. Hardware topology that must not be casually changed
+## 3. Frozen vehicle topology and units
 
 ### CAN buses
 
 ```text
-CAN1: power/BMS network, 250 kbit/s, J1939-style extended frames
-CAN2: motion CANopen network, 1 Mbit/s
-CAN3: lift/hydraulic CANopen network, 1 Mbit/s
+CAN1: BMS/power network, 250 kbit/s, J1939-style extended frames
+CAN2: motion CANopen, 1 Mbit/s, standard frames
+CAN3: lift/hydraulic CANopen, 1 Mbit/s, standard frames
+CAN4: auxiliary/physical-test network, 500 kbit/s
 ```
 
-### CAN2 node allocation
+### Nodes and vehicle positions
 
 ```text
-Node 1: front-right drive
-Node 2: front-left drive
-Node 3: rear-left drive
-Node 4: rear-right drive
+CAN2
+1 front-right drive     5 front-right steering
+2 front-left drive      6 front-left steering
+3 rear-left drive       7 rear-left steering
+4 rear-right drive      8 rear-right steering
 
-Node 5: front-right steering
-Node 6: front-left steering
-Node 7: rear-left steering
-Node 8: rear-right steering
+CAN3
+9  front-right lift
+10 rear-right lift
+11 front-left lift
+12 rear-left lift
+13 hydraulic pump
 ```
 
-### CAN3 node allocation
+Installed encoder contracts:
 
 ```text
-Node 9 : front-right lift
-Node 10: rear-right lift
-Node 11: front-left lift
-Node 12: rear-left lift
-Node 13: pump / hydraulic auxiliary
+Node1..8:  10000 count/motor revolution
+Node9..12: 131072 count/motor revolution
+Node13:    10000 count/motor revolution
 ```
 
-### Encoder position-count contracts
+Lift geometry is currently `20 motor rev / 10 mm`, therefore Node9..12 use
+`262144 count/mm`. Extension moves absolute position negative. Normal remote
+range is 10–490 mm; mechanical plausibility range is 0–500 mm with the
+configured margin. Do not change or compensate the manually established drive
+zero offset in normal control.
 
-```text
-Node 1..8 : 10000 position counts per motor revolution
-Node 9..12: 131072 position counts per motor revolution
-Node 13   : 10000 position counts per motor revolution
-```
-
-These values are tied to installed node roles, not merely to the BC/BC2 family
-name. Never use the Node1–8/13 velocity or position conversion for Node9–12.
-Keep separate configuration symbols and focused tests for CAN2 motion, CAN3
-lift, and the Node13 hydraulic pump.
-
-Do not swap wheel order, node IDs, bus assignments, bitrate, standard versus
-extended CAN format, or physical-unit conversions without modifying the
-appropriate configuration and adding a focused test or explicit hardware
+Do not swap node order, bus, bitrate, standard/extended format or unit scale in
+local arithmetic. Change configuration and add a focused test plus hardware
 verification note.
 
-## 4. Task ownership, concurrency, and timing rules
+## 4. Current CANopen PDO contract
 
-Expected CPU0 ownership:
+The only normal runtime mapping is saved Node1–13 `current7 + sync1`:
 
 ```text
-safety supervisor: 1 ms
-CAN2 motion task:  2 ms
-remote manager:    5 ms
-vehicle control:   5 ms
-CAN1 power task:  10 ms
-CAN3 lift task:   10 ms
-IO task:          10 ms
-diagnostics:     100 ms
+RPDO0 0x200+node: 6040 + 6060 + 60FF, 7 bytes, type 1
+RPDO1 0x300+node: 6040 + 6060 + 607A, 7 bytes, type 1
+RPDO2 0x400+node: 60C1:01,             4 bytes, type 1
+RPDO3 0x500+node: 6040 + 6060 + 2340, 5 bytes, type 1
+TPDO0 0x180+node: 6064 + 606C,         8 bytes, type 1
+TPDO1 0x280+node: 2183 + 6041 + 221C, 8 bytes, configured type 10
 ```
 
-Mandatory ownership rules:
+Canonical mapping record: `doc/CANOPEN_PDO_MAPPING_RECORD_V1.md`.
 
-- The CAN2 task owns all realtime CAN2 PDO submission, CAN2 TX-complete
-  observation, CAN2 device initialization progress, and CAN2 transmission
-  state.
-- The CAN3 task owns the equivalent CAN3 lift/hydraulic state and traffic.
-- The vehicle task produces a coherent actuator-command snapshot. It must not
-  directly manipulate CAN TX queues or CAN2/CAN3 in-flight state.
-- Do not allow vehicle and CAN2 tasks to read/write a large
-  `motion_device_state_t` concurrently without a mailbox, sequence lock,
-  critical-section snapshot, or another explicitly correct synchronization
-  mechanism.
-- A command mailbox must carry a complete coherent command snapshot and a
-  monotonic sequence counter. Do not assemble one four-wheel PDO group from
-  mixed old/new wheel targets.
-- Keep ISR work short. ISRs may capture flags/counters and wake processing;
-  they must not perform blocking work, SDO workflows, logging, or policy logic.
-- Do not take `portMAX_DELAY` locks in a high-priority periodic control path
-  unless the lock order and bounded worst-case latency are documented.
+- `6060` stays inside RPDO0/RPDO1/RPDO3. `compact6` and `async255` are archived
+  experiments, not production proposals.
+- TPDO1 type-10 readback does not prove reduced bandwidth; the installed drives
+  may still transmit it on every SYNC. Use analyzer evidence.
+- TPDO2/TPDO3 remain zero-mapped.
+- Runtime firmware must not remap PDOs or save drive flash. Offline mapping uses
+  `tools/canopen_pdo_config/configure_all_nodes.py` with the ECU disconnected.
+- SDO is for configuration/readback/diagnosis, not high-rate motion.
+- Preserve CiA-402 controlword edges. Local queue or TX-complete success is not
+  proof that a remote drive accepted a command; require TPDO/readback/evidence.
 
-## 5. Safety rules — always higher priority than convenience
+### Ordered realtime groups
 
-Never weaken or bypass any of these without explicit user instruction and a
-documented reason:
+CAN2 steering update:
+
+```text
+Node5..8 arm -> SYNC -> Node5..8 trigger -> SYNC
+```
+
+CAN3 lift point:
+
+```text
+Node9,11,12,10 RPDO2 points -> one SYNC every 20 ms
+```
+
+Use one strict FIFO realtime lane per bus. A group is complete only after every
+expected frame completed and nothing remains in flight. Never interleave two
+steering groups or inject a second periodic SYNC into the lift window. A partial
+steering trigger is a motion safety fault: cancel unsent frames, command zero
+traction through the approved safety path, re-establish eight-node feedback,
+resynchronize steering and only then accept a newly published traction command.
+
+## 5. Task ownership and concurrency
+
+Expected CPU0 periods:
+
+```text
+safety 1 ms, CAN2 2 ms, remote 5 ms, vehicle 5 ms,
+CAN1 10 ms, CAN3 10 ms, IO 10 ms, diagnostics 100 ms
+```
+
+- CAN2 task exclusively owns CAN2 PDO submission/completion, initialization and
+  recovery state.
+- CAN3 task owns the equivalent Node9–13 state and traffic.
+- Vehicle task publishes one coherent complete command snapshot; it does not
+  manipulate CAN queues or in-flight state.
+- Cross-task multi-field data requires mailbox/sequence lock/critical snapshot,
+  not `volatile` alone. Command snapshots carry a monotonic sequence.
+- ISR work is flags/counters/wakeup only. No SDO, logging, blocking work or
+  policy in ISR.
+- No unbounded lock, busy wait, heap allocation or logging in periodic realtime
+  paths. Diagnostics must be rate-limited and lower priority than CAN tasks.
+
+## 6. Safety invariants
 
 - `ECU_COMMISSIONING_STEER_ONLY_MODE` remains enabled by default.
-- No real drive motion, brake release, hydraulic motion, high-voltage enable,
-  firmware download, or destructive NVM write is allowed merely to “test code.”
-- Never change a safety default from fail-safe to fail-open.
-- An emergency stop, SBUS failsafe, A-class fault, stale command, or critical
-  CANopen failure must produce explicit safe actuator intent. Do not merely
-  skip sending the latest command and leave a prior nonzero command active.
-- The final command arbiter/safety layer is authoritative. Device adapters may
-  reject unsafe output but may not independently make higher-level driving
-  decisions.
-- A partial steering trigger group is a motion safety fault. If one or more
-  trigger PDOs may already have reached drives while the rest failed, block
-  fresh steering groups, command drive speed to zero through the approved
-  safety path, and enter the defined automatic recovery path. Recovery may not
-  replay a cached nonzero drive command: it must re-establish eight-node
-  feedback, send one coherent four-steering-axis resynchronization group, and
-  only then permit a newly published traction command.
-- A watchdog, timeout, fault, or bus-off path must be observable through
-  diagnostics and must have deterministic recovery behavior.
-- Do not claim a remote device accepted a command only because it was inserted
-  into a software queue or accepted by a local CAN peripheral.
+- Never enable real drive, brake release, hydraulic motion, high voltage,
+  firmware download or destructive NVM writes merely to test code.
+- Estop, SBUS failsafe, A-class fault, stale command, critical CANopen failure
+  and loss of required high-voltage feedback must publish explicit safe actuator
+  intent. Never leave an old nonzero PDO active by only skipping new output.
+- Safety/arbiter output is authoritative. Device adapters may reject unsafe
+  output but cannot invent higher-level vehicle decisions.
+- Do not NMT-reset drives as routine recovery; steering reset loses reference.
+  Clear confirmed drive faults and rebuild the local state machine without
+  replaying cached nonzero commands.
+- Brake release and relay/MOS polarity are configuration-owned and fail safe.
+- A watchdog, timeout, bus-off or recovery path must be deterministic and
+  observable in diagnostics.
 
-## 6. CANopen rules
+## 7. Current lift and hydraulic behavior
 
-### General
+Ground-clearance lift is electric Node9–12 motion; it does not start Node13.
 
-- Use SDO for setup, mapping, configuration, diagnosis, and infrequent service
-  actions. Do not use SDO as a high-rate realtime actuator transport.
-- Use PDO for realtime motion only after the required setup sequence is
-  successfully verified.
-- NMT/SDO/PDO traffic for one bus must go through the bus-owned CANopen service.
-  Do not create a second raw CAN path that can overtake, reorder, or bypass the
-  service.
-- Preserve CiA-402 controlword transition order. Do not coalesce distinct
-  controlword edges such as enable/arm/trigger into only the final value.
-- Do not treat `hpm_can_send(...) == 0` as physical successful bus delivery.
-  It means submission to the local nonblocking TX path only.
-- Treat a successful local TX completion flag as local transmitter completion,
-  not proof that a remote application accepted the PDO. Remote acceptance
-  requires appropriate TPDO/stateword/SDO/readback or hardware evidence.
+- Normal trajectory: 6 mm/s, 8 mm/s^2, three stationary preload points, then
+  coherent four-axis RPDO2 + SYNC every 20 ms.
+- In HOME-center idle, drives may be configured while disabled. Switch-on and
+  operation-enable use separate four-axis RPDO1 groups plus SYNC, avoiding
+  sequential brake release.
+- Operator neutral is distinct from safety stop: smoothly decelerate, converge
+  all four legs toward a common measured height at the configured leveling
+  profile, confirm position/spread <=3 mm and zero speed for the configured
+  stable samples, then disable all axes so drive brakes hold.
+- Safety stop/high-voltage loss/stale command disables immediately; it does not
+  wait for leveling.
+- During motion, spread up to the running warning threshold is corrected rather
+  than treated as an automatic stop. Final disable still requires <=3 mm.
+- Below 10 mm, only extension toward the safe band is allowed. Above 490 mm,
+  only retraction is allowed. Normal bidirectional control returns once all legs
+  are inside 10–490 mm. Mixed low/high violations or mechanically implausible
+  feedback block ordinary common-direction motion and expose diagnostic masks.
+- Healthy BC/BC2 interpolation may report statusword `0x162F`. For this flow,
+  mapped vendor latch `0x2183` is the hard drive-fault source; clear the received
+  latch value without node reset.
+- Node13 pump is reverse-only: suspension uses 1500 rpm, track-width uses
+  2400 rpm, valves wait for fresh reverse-speed feedback above the configured
+  pressure-build threshold. Pump RPDO is command-on-change, not periodic.
+- Valve pairs 1/2, 3/4 and 5/6 are mutually exclusive and fail closed.
 
-### Current field PDO baseline
+## 8. Remote and power essentials
 
-The saved Node1–13 profile is `current7 + sync1` and is the only normal ECU
-runtime contract unless a new analyzer capture, readback, focused test and
-configuration change are supplied together:
+- Remote parsing produces requests, never actuator output.
+- Priority is safety > selected command source; remote/automatic/maintenance/
+  CPU1 resolution belongs in the arbiter.
+- Estop latches on any CH13 endpoint transition and clears only through the
+  defined intentional center hold.
+- Current channel roles and HOME/R1/R2/B1 behavior are maintained in
+  `doc/ECU/遥控操作逻辑说明书.md`; do not duplicate thresholds in FSM source.
+- CAN1 BMS/power traffic uses extended frames. High-voltage enable requires
+  fresh plausible BMS feedback; stale CAN1 data never authorizes power.
+- MOS6 is the battery-key/high-voltage relay output. Output polarity stays in
+  hardware configuration.
 
-```text
-RPDO0  0x200 + node: 6040 + 6060 + 60FF, 7 bytes, type 1
-RPDO1  0x300 + node: 6040 + 6060 + 607A, 7 bytes, type 1
-RPDO2  0x400 + node: 60C1:01,             4 bytes, type 1
-RPDO3  0x500 + node: 6040 + 6060 + 2340, 5 bytes, type 1
-TPDO0  0x180 + node: 6064 + 606C,         8 bytes, type 1
-TPDO1  0x280 + node: 2183 + 6041 + 221C, 8 bytes, configured type 10
-```
+## 9. Tools and evidence
 
-- `6060` remains inside RPDO0/RPDO1/RPDO3. Do not revive the historical
-  `compact6` production proposal without a complete remap and validation.
-- The tested BC/BC2 drives retain `0x1801:02 = 10`, but may still emit TPDO1
-  on every SYNC. Do not infer an actual TPDO1 bandwidth reduction merely from
-  an SDO readback; use an analyzer capture.
-- PDO mapping and flash save belong only to the offline maintenance tool while
-  the ECU is disconnected. Normal ECU firmware must not write mapping or save
-  objects at boot/runtime.
+Tool index: `tools/README.md`.
 
-### CAN2 steering realtime PDO
+- PDO mapping tool: offline only, ECU physically disconnected; dry-run default.
+- Motion/steering/lift scripts that require `--allow-motion` are hazardous bench
+  tools, not production control. Confirm wheels/legs are mechanically safe.
+- `steer4_zero_calibration_debug.py` is the reference for the ECU B1 triple-click
+  workflow; it writes `0x6064=0` only after validated limit/midpoint completion.
+- Preserve raw analyzer logs cited by documents. Historical logs prove only the
+  stated test boundary, not current whole-vehicle acceptance.
 
-The current steering direction uses the saved seven-byte `current7` RPDO1
-payload:
+## 10. Change discipline
 
-```text
-0x6040 controlword (16-bit) + 0x6060 mode=1 (8-bit) +
-0x607A target position (32-bit)
-```
-
-The exact COB-IDs, mapping, and controlword constants are configuration/vendor
-manual source-of-truth. Do not hardcode alternate mappings in random call sites.
-
-For a four-wheel arm/trigger group:
-
-- Queue a complete group atomically in software before beginning transmission.
-- Use one strict FIFO realtime TX lane; do not spill later frames into a second
-  hardware mailbox that can overtake an earlier frame.
-- Send at most one realtime PDO that is awaiting completion at a time unless a
-  verified hardware FIFO/ordering design explicitly proves otherwise.
-- Remove a frame from the software queue only after the designated TX-complete
-  event is observed.
-- Group completion requires all expected frames completed, zero failed frames,
-  and zero in-flight frames.
-- Do not begin trigger frames until every arm frame in that group completed.
-- On a frame retry/timeout/error, cancel all unsent frames in that same group.
-- Never interleave two steering groups.
-- Keep diagnostics for group sequence, expected/submitted/completed/failed
-  frames, phase, in-flight state, timestamps, and last failure.
-
-Expected analyzer pattern for one synchronous steering target update:
-
-```text
-Node5 arm, Node6 arm, Node7 arm, Node8 arm,
-SYNC,
-Node5 trigger, Node6 trigger, Node7 trigger, Node8 trigger
-SYNC
-```
-
-The analyzer must not show a later group inserted between those frames.
-
-### CANopen initialization
-
-“Queued locally” is not “configured remotely.”
-
-A motion node may be marked realtime-ready only after the required per-node
-state machine has confirmed, with SDO success/readback or equivalent verified
-feedback:
-
-```text
-Pre-operational as required
--> disable/modify PDO mapping safely
--> configure mapping and communication parameters
--> verify mapping/communication values
--> enter Operational
--> select operating mode
--> configure profile limits/velocity/acceleration as required
--> enable operation
--> verify mode display (0x6061), stateword (0x6041), and no relevant fault
--> realtime-ready
-```
-
-Do not globally infer Node5–8 readiness from an empty SDO queue or a fixed
-delay. Initialization state, timeout, retry count, last SDO result, and
-readback must be tracked per node.
-
-### SYNC / synchronous PDO
-
-The current saved field profile uses synchronous RPDO type 1. This is validated
-for the exact BC/BC2 network and must be preserved as an ordered transport:
-
-- Steering position: all four arm PDOs -> SYNC -> all four trigger PDOs ->
-  SYNC. Do not interleave a later group or a drive group into that sequence.
-- Lift interpolation: four RPDO2 points -> one SYNC every 20 ms, after the
-  explicit disable/clear-buffer/preload/enable/start sequence.
-- A partial trigger, TPDO0/required TPDO1 feedback loss, boot-up, CiA-402 fault
-  or heartbeat loss must be observable and recoverable without NMT node reset.
-- A successful `0x1801:02 = 10` write is configuration evidence only; it is not
-  permission to relax feedback supervision or assume a ten-SYNC TPDO cadence.
-
-### Bench tests without drives attached
-
-When drives are absent:
-
-- It is valid to validate ECU-originated frame ordering with an active CAN
-  analyzer that can acknowledge frames.
-- It is not valid to claim remote SDO/PDO acceptance, motor enable, mode
-  selection, or position motion.
-- Avoid noisy periodic commissioning scans during analyzer-only tests. Use a
-  bench-specific configuration switch or explicitly disabled scan path; never
-  silently change the normal production default.
-- A missing ACK / TX timeout during this test is a transport test condition, not
-  proof that the motor-side protocol is correct.
-
-## 7. Motion-control scope and future direction
-
-Current commissioning priority:
-
-```text
-1. Stable, safe steering PDO ordering and fault handling
-2. Per-node steering initialization/readback
-3. Hardware validation of steering position and limits
-4. Drive velocity PDO design and validation
-5. Integrated 4WD + 4WS motion
-6. CAN3 lift/hydraulic validation
-```
-
-Do not enable drive outputs while steering-only commissioning is active.
-
-For future drive PDO work:
-
-- Use one coherent four-wheel velocity group.
-- Define target units, zero-speed watchdog behavior, acceleration/deceleration,
-  reversal policy, brake release interlock, and TPDO feedback before enabling
-  real movement.
-- Do not reuse steering’s target-position trigger protocol for velocity mode.
-- Include measured wheel direction/sign conventions and per-wheel inversion in
-  configuration, not scattered arithmetic.
-
-For steering:
-
-- Keep per-axis sign, zero offset, mechanical range, software limits, profile
-  velocity, acceleration/deceleration, and feedback validity configurable.
-- Never use only a software “last commanded position” as if it were measured
-  actual position once real hardware feedback is available.
-- A calibration/homing workflow must be explicit and safe; do not auto-home
-  moving hardware on startup.
-
-## 8. CAN1, CAN3, DIO, remote, and diagnostics constraints
-
-### CAN1 / BMS
-
-- CAN1 BMS frames are extended/J1939-style. Do not treat them as standard
-  CANopen frames.
-- Preserve BMS source address, scaling, timeout, plausibility, and power-state
-  checks.
-- No high-voltage enable may be inferred from a stale or unvalidated BMS frame.
-
-### CAN3 lift/hydraulic
-
-- CAN3 must remain independently owned by its 10 ms task.
-- Lift/hydraulic commands must flow through the command arbiter and safety
-  manager.
-- Do not use direct blocking CAN/SDO calls from the vehicle task.
-- Node9–12 use `131072 count/rev`; the measured mechanism is `12 rev/10 mm`.
-  Normal remote targets are 10–490 mm and extension moves the absolute position
-  in the negative direction. Do not reuse the Node1–8/Node13 10000-count scale.
-- The verified lift stream is: SDO setup while not Operation Enabled, measured
-  post-enable settling, three stationary preload points, then exactly four
-  synchronous RPDO2 position frames followed by one SYNC every 20 ms. Do not
-  insert another periodic SYNC into this realtime window.
-- BC/BC2 lift drives may report statusword `0x162F` while healthy and movable in
-  interpolation mode. Treat the mapped vendor latch `0x2183` as the hard drive
-  fault source for this workflow, clear it by writing back the received value,
-  and never reset a node merely to recover interpolation.
-- Node13's synchronous pump RPDO is command-on-change (plus confirmed
-  speed-loss retry), not a periodic keepalive; periodic pump refresh can consume
-  a lift interpolation buffer point.
-- Define safe behavior for one lift axis fault, pump fault, position mismatch,
-  timeout, and loss of CAN3 before enabling real hydraulic hardware.
-
-### DIO / brakes / warning outputs
-
-- Treat DIO mappings and active level as hardware configuration. Do not reverse
-  polarity based on guesswork.
-- Brake release must be explicitly interlocked with safety state and must
-  default safe after reset/failsafe.
-- Warning outputs must not delay safety or CAN realtime tasks.
-
-### Remote and vehicle arbitration
-
-- Remote parsing produces requests, not final actuator outputs.
-- Keep gear, power, estop, and motion state machines explicit and testable.
-- Estop clear must be intentional and edge/condition validated; do not clear it
-  merely because one input sample looks healthy.
-- Preserve priority: safety overrides all; auto/remote/maintenance/CPU1 must be
-  resolved by the command arbiter, not by device adapters.
-
-### Diagnostics
-
-- Diagnostics must expose actionable state, not only counters.
-- Include: safety source, selected command source, actuator intent, CAN bus
-  state, CANopen group state, SDO failure details, per-node initialization
-  status, stale-data ages, fault latches, and recovery state.
-- Rate-limit diagnostic text. Do not flood serial logs from 1 ms/2 ms paths.
-- Never let logging, printf, dynamic allocation, or filesystem access block
-  realtime task execution.
-
-## 9. Coding and change discipline
-
-### Default work mode
-
-- Default to implementing the user’s requested change. Use plan-only mode only
-  when the user explicitly asks for a plan/review or when a change crosses
-  multiple safety-critical subsystems.
-- For a cross-subsystem/safety-critical change, provide a plan of at most
-  8 bullets before editing. The plan must name affected modules, hazards, and
-  test evidence.
-- For a narrow fix, inspect only the named file(s), direct callers/callees,
-  relevant headers/configuration, and focused tests. Do not scan or refactor
-  the whole repository.
-- Do not use subagents by default. Use at most two only for explicitly requested
-  independent audit tasks. Do not spend turns narrating subagent setup.
-
-### Scope control
-
-- Do not mix a P0 bug fix with unrelated P1/P2 refactoring.
-- Do not rename broad APIs, rewrite formatting, rearrange directories, or
-  “modernize” unrelated code unless explicitly requested.
-- Preserve existing public API names and test conventions unless the task
-  specifically requires an interface change.
-- When a wider problem is discovered, finish the requested safe scope and
-  report the discovery under `Remaining risks`; do not silently expand scope.
-- Do not add placeholder TODO code as a substitute for a required safe behavior.
-- Do not fake hardware success, mock a safety response as passing, or weaken
-  tests simply to make CI green.
-
-### C / FreeRTOS requirements
-
-- This is C firmware. Match existing C language level and HPM SDK conventions.
-- Avoid heap allocation after initialization in periodic control paths.
-- Check pointers, array bounds, unit conversion overflow, signedness, and CAN
-  DLC/index validity.
-- Use fixed-width integer types for protocol payloads.
-- Keep critical sections small. Do not call blocking SDK functions, logging, or
-  complex work inside a critical section.
-- No busy-wait loops in periodic tasks or ISRs for CAN/SDO completion.
-- Any timeout must have explicit state transition and recovery/failure behavior.
-- All new persistent state must have an initialization path and a diagnostic
-  path.
-- Do not assume `volatile` alone makes a multi-field cross-task structure safe.
-
-### Configuration and documentation
-
-- Put tunable hardware parameters in configuration, not magic literals in
-  device code.
-- Document physical units at each API boundary.
-- Update existing project documents only when the change affects architecture,
-  wiring, safety behavior, configuration, or test procedure.
-- Keep production documentation and historical analyzer evidence distinct. The
-  current PDO mapping source is `doc/CANOPEN_PDO_MAPPING_RECORD_V1.md`; remote
-  operation is `doc/ECU/遥控操作逻辑说明书.md`; current field outcomes are in
-  `doc/ECU/整车调试记录_2026-07-07.md`. Any older debug record that recommends a
-  superseded mapping, rate, mode, or safety path must carry an explicit archive
-  notice and a link to the current source. Do not silently retain an obsolete
-  “current/recommended/default” claim.
-- Do not delete raw analyzer logs merely because they are old when a project
-  document cites them as test evidence. Generated `out/` and `tmp/` contents
-  remain untracked; remove them only with a user-requested cleanup scope and
-  after preserving any specifically referenced evidence.
-- Do not create large review documents unless the user requested a document.
-- Chinese task/review documents intended for Windows users should be written as
-  UTF-8 with BOM unless the repository explicitly requires otherwise. Source
-  files should preserve their existing encoding.
-
-## 10. PowerShell and text encoding
-
-This is a Windows project containing Chinese Markdown/text.
-
-For any non-ASCII text file, always read with:
+- Inspect `git status --short --branch` before editing. Preserve unrelated and
+  user-owned changes.
+- For a narrow fix, inspect only direct configuration, callers/callees and
+  focused tests. Do not combine a P0 fix with unrelated refactoring.
+- Put tunable hardware values in configuration with physical units. Check fixed
+  width, signedness, bounds, DLC/index validity and conversion overflow.
+- Maintain dependency direction. Do not create project-local replacements for
+  CANopenNode or Agile Modbus.
+- Update current documents only for architecture, wiring, safety, configuration
+  or test-procedure changes. Historical records must begin with an archive
+  notice linking to `doc/README.md`; do not rewrite raw evidence as if it were a
+  current acceptance result.
+- Chinese Markdown/text is UTF-8. Read with:
 
 ```powershell
 Get-Content -LiteralPath '<path>' -Raw -Encoding utf8
 ```
 
-Rules:
+- Prefer `rg`/`rg --files`. Use `apply_patch` for edits.
+- Do not modify/delete user files, use destructive Git commands, or clean the
+  workspace. Commit, push, pull/merge/rebase, branch changes and destructive
+  file/history operations require explicit user approval.
 
-- Never use bare `Get-Content` to read Chinese task documents.
-- Do not spend a separate response reporting an encoding issue. Retry with
-  `-Encoding utf8` and continue the task.
-- Treat UTF-8 with BOM and UTF-8 without BOM as valid input.
-- Use `pwsh` / PowerShell 7 where available.
-- Prefer literal paths for Windows paths containing spaces or Chinese characters.
-- Do not modify system locale, registry encoding settings, or global shell
-  settings unless the user explicitly asks.
+## 11. Validation
 
-## 11. Testing and build policy
-
-### Default test runner
-
-The project’s default Python test entrypoint is:
+Default static runner:
 
 ```powershell
 python tests\python\run_tests.py
 ```
 
-Rules:
-
-- Do **not** run, install, recommend, or spend a separate response explaining
-  `pytest` unless the user explicitly asks for pytest.
-- `run_tests.py` is a no-dependency source-level contract/safety test runner.
-  It does not replace target compilation, CAN analyzer validation, or real
-  hardware validation.
-- Add or update focused tests when changing architecture contracts, mappings,
-  safety state transitions, APIs, configuration, or source-level invariants.
-- Do not claim a runtime/hardware property solely because a static Python test
-  passed.
-
-### Required validation by change type
-
-```text
-Markdown/docs only:
-  - read back changed document with UTF-8
-  - git diff --check
-
-Python tests only:
-  - python tests\python\run_tests.py
-  - git diff --check
-
-C / headers / CMake / FreeRTOS / CANopen / configuration:
-  - python tests\python\run_tests.py
-  - git diff --check
-  - CPU0 CMake/Ninja build when the local SDK/toolchain is available
-
-Hardware-facing behavior:
-  - all relevant static tests/build checks
-  - explicit analyzer / bench / hardware validation checklist
-  - do not claim it is verified until measured evidence exists
-```
-
-### Canonical CPU0 configure/build procedure
-
-Run from the repository root in PowerShell 7. Do not alter the SDK tree.
+For C/header/CMake/configuration changes also run `git diff --check` and the
+CPU0 target build when the bundled SDK exists:
 
 ```powershell
 $repo = (Get-Location).Path
-
 $env:HPM_SDK_BASE = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\hpm_sdk").Path
 $env:GNURISCV_TOOLCHAIN_PATH = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\toolchains\rv32imac_zicsr_zifencei_multilib_b_ext-win").Path
-
 $cmake = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\cmake\bin\cmake.exe").Path
 $ninja = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\ninja\ninja.exe").Path
 $py = (Resolve-Path "$repo\ecu\sdk_env_v1.11.0\tools\python3\python.exe").Path
-
 & $cmake -S "$repo\ecu\apps\agri_chassis_control_cpu0" `
-  -B "$repo\tmp\cmake_cpu0" `
-  -G Ninja `
-  -DCMAKE_MAKE_PROGRAM="$ninja" `
-  -Dpython_exec="$py" `
-  -DBOARD=ecu_isolation `
-  -DBOARD_SEARCH_PATH="$repo\ecu"
-
+  -B "$repo\tmp\cmake_cpu0" -G Ninja -DCMAKE_MAKE_PROGRAM="$ninja" `
+  -Dpython_exec="$py" -DBOARD=ecu_isolation -DBOARD_SEARCH_PATH="$repo\ecu"
 & $cmake --build "$repo\tmp\cmake_cpu0" --target all
 ```
 
-The SEGGER project is generated at:
+Generated SEGGER project:
 
 ```text
-tmp\cmake_cpu0\segger_embedded_studio\agri_chassis_control_cpu0.emProject
+tmp/cmake_cpu0/segger_embedded_studio/agri_chassis_control_cpu0.emProject
 ```
 
-Do not manually edit generated SEGGER project files as the source of truth.
-Regenerate them through CMake after relevant CMake/configuration changes.
+Static tests and successful compilation do not prove remote SDO/PDO acceptance,
+motor movement, hydraulic behavior or vehicle safety. Say “analyzer-verified” or
+“hardware-verified” only when saved measured evidence supports it.
 
-If the SDK/toolchain is unavailable, report that build was not run and why.
-Do not try to install a different compiler, Python package suite, or unrelated
-toolchain without explicit approval.
+## 12. Final report
 
-## 12. Git and file safety
-
-Allowed without special approval:
-
-```text
-git status --short --branch
-git diff
-git diff --check
-git log --oneline
-git show
-git grep
-```
-
-Require explicit user approval before doing any of the following:
-
-```text
-git commit
-git push
-git pull that can merge/rebase
-git switch / checkout another branch
-git reset --hard
-git clean
-git rebase
-git merge
-git cherry-pick
-git tag
-force push
-delete branch/file/history
-```
-
-Additional rules:
-
-- Never use `git clean -fdx` in this repository; it can remove local SDK/tool
-  environment assets and generated work the user may need.
-- Never overwrite a user’s uncommitted work to make a patch apply.
-- Before edits, inspect `git status --short --branch`.
-- Before final response, inspect `git diff --check`.
-- Do not commit generated build outputs, IDE state, analyzer captures, secrets,
-  personal paths, or SDK binaries unless the user explicitly requests them.
-
-## 13. Final response contract
-
-Do not give a long diary of commands, tool limitations, encoding details, or
-unavailable pytest. Report only what helps the user make the next decision.
-
-For implementation tasks, final response must contain:
-
-```text
-1. What changed
-2. Files changed
-3. Validation actually run and result
-4. Hardware/field validation still required
-5. Any blocking risk or assumption
-```
-
-For review-only tasks, final response must contain:
-
-```text
-1. Findings ordered P0 -> P3
-2. Evidence (file/function/config)
-3. Concrete recommended fix
-4. What was not verified
-```
-
-Use honest wording:
-
-- “Compiled successfully” only after the target build actually succeeded.
-- “Analyzer-verified” only after a supplied/observed capture supports it.
-- “Hardware-verified” only after real node/device evidence exists.
-- “Static test passed” means source-level contract only.
-
-Do not claim completion while silently leaving safety-critical behavior as a
-future task. Do not create fake certainty from queue success, comments, or
-test-token matching.
-
-## 14. Fast pre-flight checklist
-
-Before editing:
-
-```text
-[ ] Read task scope and current git status
-[ ] Identify the owning task/module and safety impact
-[ ] Read direct headers, configuration, callers/callees, and focused tests
-[ ] Preserve CPU0/CAN task ownership
-[ ] Avoid SDK and unrelated files
-```
-
-Before finishing:
-
-```text
-[ ] No unsafe direct actuator path introduced
-[ ] No mixed multi-wheel snapshot / PDO group interleaving introduced
-[ ] Units, node IDs, COB-IDs, and bus assignment remain configuration-driven
-[ ] Relevant static test runner executed
-[ ] git diff --check executed
-[ ] CPU0 build run when relevant and available
-[ ] Remaining analyzer/hardware validation clearly stated
-```
+Implementation reports state: what changed, files changed, validation actually
+run, remaining hardware validation, and risks/assumptions. Review reports list
+findings by severity with evidence and concrete fixes. Never claim completion
+while a required safety behavior is silently left as a TODO.

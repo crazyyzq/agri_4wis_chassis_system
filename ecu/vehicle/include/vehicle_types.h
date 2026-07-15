@@ -29,6 +29,17 @@ typedef struct {
     bool request_control;
 } auto_control_request_t;
 
+/* Ground-clearance intent must distinguish an operator's neutral request from
+ * a safety stop.  Both have zero height rate, but only operator neutral may
+ * keep the four lift axes enabled long enough to level before applying the
+ * brakes. */
+typedef enum {
+    VEHICLE_LIFT_REQUEST_SAFE_STOP = 0,
+    VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL,
+    VEHICLE_LIFT_REQUEST_EXTEND,
+    VEHICLE_LIFT_REQUEST_RETRACT
+} vehicle_lift_request_t;
+
 typedef struct {
     ecu_command_source_t source;
     ecu_motion_mode_t motion_mode;
@@ -38,6 +49,7 @@ typedef struct {
     float target_steer_deg[ECU_WHEEL_COUNT];
     float target_height_mm;
     float height_rate_mm_s;
+    vehicle_lift_request_t lift_request;
     float track_rate_mm_s;
     /* High-level permission to request a servo drive into a motion-capable
      * CiA-402 state.  This is not a PCB output level, not a 0x2194/OUT bit,
@@ -98,9 +110,18 @@ typedef struct {
     uint32_t lift_interpolation_failure_count;
     uint32_t lift_interpolation_recovery_count;
     uint32_t lift_running_spread_warning_count;
+    uint32_t lift_leveling_entry_count;
+    uint32_t lift_leveling_complete_count;
+    uint32_t lift_range_direction_reject_count;
+    uint32_t lift_sync_enable_count;
     int32_t lift_stream_planned_delta_counts;
     int32_t lift_running_spread_counts;
     int32_t lift_max_running_spread_counts;
+    int32_t lift_level_target_position_counts;
+    uint8_t lift_level_stable_samples;
+    uint8_t lift_below_safe_range_mask;
+    uint8_t lift_above_safe_range_mask;
+    uint8_t lift_mechanical_range_invalid_mask;
     int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_target_position_counts[ECU_WHEEL_COUNT];
     bool steer_normal_pdo_allowed;

@@ -19,6 +19,7 @@ void vehicle_actuator_command_safe_default(vehicle_actuator_command_t *out)
     }
     out->target_height_mm = 0.0f;
     out->height_rate_mm_s = 0.0f;
+    out->lift_request = VEHICLE_LIFT_REQUEST_SAFE_STOP;
     out->track_rate_mm_s = 0.0f;
     out->brake_release = false;
     out->steer_commission_interlock_ok = false;
@@ -351,6 +352,11 @@ static void apply_remote_adjust_command(const remote_control_request_t *remote,
         return;
     }
 
+    /* HOME-center neutral is an intentional level-and-hold request.  Safety
+     * overrides and leaving the adjustment domain retain SAFE_STOP from the
+     * complete command default instead. */
+    out->lift_request = VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL;
+
     if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
         remote->clearance_per_mille <= ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX) {
         /* Ground-clearance adjustment is an electric four-leg CAN3 servo
@@ -363,14 +369,16 @@ static void apply_remote_adjust_command(const remote_control_request_t *remote,
          *
          *   right stick up   -> extend legs toward 490 mm
          *   right stick down -> retract legs toward 10 mm
-         *   middle band      -> stop and let the drives hold/brake
+         *   middle band      -> decelerate, level all four legs, then brake
          */
         height_rate = ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
         out->target_height_mm = ECU_REMOTE_MAX_HEIGHT_TARGET_MM;
+        out->lift_request = VEHICLE_LIFT_REQUEST_EXTEND;
     } else if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
                remote->clearance_per_mille >= ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN) {
         height_rate = -ECU_REMOTE_MAX_HEIGHT_RATE_MM_S;
         out->target_height_mm = ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
+        out->lift_request = VEHICLE_LIFT_REQUEST_RETRACT;
     }
 
     uint32_t hydraulic_valve_mask =
@@ -499,6 +507,7 @@ void command_arbiter_update(const remote_control_request_t *remote,
         out->hydraulic_enable = false;
         out->hydraulic_valve_mask = 0U;
         out->height_rate_mm_s = 0.0f;
+        out->lift_request = VEHICLE_LIFT_REQUEST_SAFE_STOP;
         out->track_rate_mm_s = 0.0f;
 #endif
         return;

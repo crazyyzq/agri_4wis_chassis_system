@@ -2,7 +2,7 @@
 
 This file records project defaults that need final confirmation from vehicle wiring, supplier manuals, or calibration tests. Code symbols stay professional; uncertainty is tracked here.
 
-> Updated 2026-07-12. Items marked “measured” are implemented configuration
+> Updated 2026-07-15. Items marked “measured” are implemented configuration
 > baselines, not blanket vehicle acceptance. Current source-of-truth priority is
 > `ecu/config/include/ecu_config.h`, then board configuration, vendor manuals,
 > analyzer evidence and finally explicitly labeled calibration items.
@@ -32,8 +32,10 @@ This file records project defaults that need final confirmation from vehicle wir
 - Node9–12 lift: `131072 counts/rev`.
 - Node13 hydraulic pump: `10000 counts/rev`.
 
-These are implemented role contracts, not open calibration items. Linear lift
-geometry, steering zero and loaded-machine behavior remain calibration items.
+These are implemented role contracts, not open calibration items. The installed
+lift reducer is currently `20 motor rev/10 mm` (`262144 count/mm`), with manual
+mechanical zero retained by the drives. Loaded-machine behavior, steering zero
+repeatability and final sensor calibration remain field items.
 
 ## Items requiring vehicle calibration
 
@@ -49,7 +51,7 @@ geometry, steering zero and loaded-machine behavior remain calibration items.
 - DCDC12 command setpoints: current default is `13.8 V` and `100.0 A`, controlled by `ECU_DCDC12_DEFAULT_OUTPUT_VOLTAGE_DV` and `ECU_DCDC12_DEFAULT_OUTPUT_CURRENT_DA`; verify against the installed converter rating before enabling load.
 - DCAC output voltage: current default is `220.0 V`, controlled by `ECU_DCAC_DEFAULT_OUTPUT_VOLTAGE_DV`.
 - BC/BC2 PDO mapping is no longer open: Node1–13 use the saved `current7 + sync1` contract in `doc/CANOPEN_PDO_MAPPING_RECORD_V1.md`. Changes require an offline analyzer procedure, readback and focused tests.
-- Drive/steering/lift conversion scales are implemented from measured drivetrain data. Remaining work is vehicle-level calibration under load, especially steering zero repeatability, track-width sensor scaling and lift final geometry.
+- Drive/steering/lift conversion scales are implemented from measured drivetrain data. Lift normal control is 10–490 mm at 6 mm/s; out-of-band movement is permitted only toward the safe band. Remaining work is loaded vehicle validation of neutral leveling, synchronous enable, steering zero repeatability and track-width sensor scaling.
 - Relay/MOS output polarity is configured from current board wiring; each final relay/MOS mapping still needs an installation-specific electrical continuity check.
 - Hydraulic valve mapping and pairwise interlocks are implemented: 1/2 front suspension, 3/4 track width, 5/6 rear suspension. Final cylinder direction and sensor calibration still require loaded-machine validation.
 - ADC module channel order and final analog scaling per sensor. Current default follows the 8AI module: slave 1, 9600 baud, function 04, input registers 0..7, raw 0..65535 to 0..5000 mV.

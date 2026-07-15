@@ -23,6 +23,7 @@ void safety_manager_apply(const vehicle_safety_snapshot_t *safety,
             command->track_assist_current_10ma[wheel] = 0;
         }
         command->height_rate_mm_s = 0.0f;
+        command->lift_request = VEHICLE_LIFT_REQUEST_SAFE_STOP;
         command->track_rate_mm_s = 0.0f;
         command->hydraulic_enable = false;
         command->high_voltage_enable = false;

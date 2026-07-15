@@ -310,6 +310,7 @@
 #define ECU_CANOPEN_LIFT_INTERPOLATION_REFRESH_MS (20U)
 #define ECU_CANOPEN_LIFT_FEEDBACK_TIMEOUT_MS      (200U)
 #define ECU_CANOPEN_LIFT_SETUP_TIMEOUT_MS         (5000U)
+#define ECU_CANOPEN_LIFT_SYNC_ENABLE_TIMEOUT_MS   (1000U)
 #define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (3U)
 #define ECU_CANOPEN_LIFT_INTERPOLATION_MODE       (0)
 #define ECU_CANOPEN_LIFT_ENABLE_SETTLE_MS         (1500U)
@@ -721,22 +722,32 @@ typedef enum {
 #error ECU_CANOPEN_STEER_TARGET_ACCEL_LARGE_COUNTS_PER_SEC2 <= 500000
 #endif
 /* CAN3 lift calibration is separate from Node1..8/13 10000-count motor units.
- * Field measurement on the installed ground-clearance actuator:
- * 131072 count/motor-rev and 12 motor rev per 10 mm linear travel.
+ * Installed 2026-07 reducer measurement:
+ * 131072 count/motor-rev and 20 motor rev per 10 mm linear travel.
  */
 #define ECU_LIFT_ENCODER_COUNTS_PER_REV              (131072.0f)
-#define ECU_LIFT_MOTOR_REVS_PER_MM                   (1.2f)
+#define ECU_LIFT_MOTOR_REVS_PER_MM                   (2.0f)
 #define ECU_LIFT_MM_TO_COUNTS \
     (ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_LIFT_MOTOR_REVS_PER_MM)
 #define ECU_LIFT_SHORTEST_POSITION_COUNTS            (-10000)
 #define ECU_LIFT_LONGEST_POSITION_COUNTS \
     ((int32_t)(-(ECU_LIFT_MM_TO_COUNTS * 490.0f)))
 #define ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC \
-    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 5.0f))
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 6.0f))
 #define ECU_LIFT_INTERPOLATION_ACCEL_COUNTS_PER_SEC2 \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 8.0f))
+#define ECU_LIFT_LEVELING_SPEED_COUNTS_PER_SEC \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 2.0f))
+#define ECU_LIFT_LEVELING_ACCEL_COUNTS_PER_SEC2 \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 4.0f))
+#define ECU_LIFT_LEVELING_STABLE_SAMPLES             (10U)
+#define ECU_LIFT_MECHANICAL_MIN_HEIGHT_MM             (0.0f)
+#define ECU_LIFT_MECHANICAL_MAX_HEIGHT_MM             (500.0f)
+#define ECU_LIFT_MECHANICAL_PLAUSIBILITY_MARGIN_MM    (1.0f)
 /* Analyzer-derived full-stroke lift parameters, 2026-07-11:
- * 5.0 mm/s stream, 8.0 mm/s^2 stream ramp, 75000-count nominal target lead,
+ * The original analyzer run used 5.0 mm/s.  The installed higher-reduction
+ * gearbox now uses a 6.0 mm/s stream with the same 8.0 mm/s^2 physical ramp.
+ * 75000-count nominal target lead,
  * 24,000,000 vendor profile-velocity units and 500,000 vendor
  * profile-acceleration units. These two vendor object values are analyzer
  * tuned; do not derive them from the Node1..8 10000-count velocity scale.
@@ -775,7 +786,13 @@ typedef enum {
  * axes to disable and engage their brakes.
  */
 #define ECU_LIFT_RUNNING_SPREAD_WARNING_COUNTS \
-    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 10.0f))
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 15.0f))
+#define ECU_LIFT_VELOCITY_UNITS_PER_RPM \
+    ((ECU_LIFT_ENCODER_COUNTS_PER_REV * \
+      ECU_CANOPEN_VELOCITY_UNITS_PER_COUNT_PER_SEC) / 60.0f)
+#define ECU_LIFT_ZERO_SPEED_VELOCITY_UNITS \
+    ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
+                ECU_LIFT_VELOCITY_UNITS_PER_RPM) + 0.5f))
 /* Normal remote-center confirmation while lift interpolation is already
  * running. This filters SBUS threshold chatter only; safety-source stops,
  * high-voltage loss, CAN faults and non-remote commands still stop immediately.
@@ -786,6 +803,11 @@ typedef enum {
 #define ECU_LIFT_STALL_TIMEOUT_MS                   (5000U)
 #define ECU_LIFT_RECOVERY_BACKOFF_MS                (1000U)
 #define ECU_HYDRAULIC_PUMP_WORK_RPM                  (1500.0f)
+/* Track-width cylinders need the full validated pump speed.  Suspension
+ * valves retain the quieter 1500 rpm operating point above.  Both operating
+ * points are positive magnitudes here; the device adapter applies the
+ * mandatory reverse-only direction before building Node13 RPDO0. */
+#define ECU_HYDRAULIC_PUMP_TRACK_WIDTH_WORK_RPM      (2400.0f)
 #define ECU_HYDRAULIC_PUMP_MAX_REVERSE_RPM           (2400.0f)
 #define ECU_HYDRAULIC_PUMP_VALVE_OPEN_MIN_RPM        (800.0f)
 #define ECU_HYDRAULIC_PUMP_SPEED_READY_SAMPLES       (3U)
@@ -794,6 +816,9 @@ typedef enum {
 #define ECU_HYDRAULIC_VALVE_CHANGE_DEADTIME_MS       (10U)
 #define ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS \
     ((int32_t)((ECU_HYDRAULIC_PUMP_WORK_RPM * \
+                ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_HYDRAULIC_PUMP_TRACK_WIDTH_VELOCITY_UNITS \
+    ((int32_t)((ECU_HYDRAULIC_PUMP_TRACK_WIDTH_WORK_RPM * \
                 ECU_HYDRAULIC_PUMP_VELOCITY_UNITS_PER_RPM) + 0.5f))
 #define ECU_HYDRAULIC_PUMP_MIN_WORK_VELOCITY_UNITS \
     ECU_HYDRAULIC_PUMP_ENABLE_VELOCITY_UNITS
@@ -998,8 +1023,8 @@ typedef enum {
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (10.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (490.0f)
 /* Operator command magnitude and diagnostic unit.  The lift device consumes
- * only the sign and generates the analyzer-proven 5 mm/s trajectory below. */
-#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (5.0f)
+ * only the sign and generates the configured 6 mm/s trajectory below. */
+#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (6.0f)
 #define ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN     (778)
 #define ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX   (-778)
 #define ECU_REMOTE_MAX_TRACK_RATE_MM_S    (20.0f)

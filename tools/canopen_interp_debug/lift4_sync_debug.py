@@ -40,12 +40,12 @@ TPDO0_BASE = 0x180
 TPDO1_BASE = 0x280
 EMCY_BASE = 0x080
 LIFT_COUNTS_PER_MOTOR_REV = 131_072
-LIFT_MOTOR_REVS_PER_MM = 12.0 / 10.0
+LIFT_MOTOR_REVS_PER_MM = 20.0 / 10.0
 LIFT_COUNTS_PER_MM = LIFT_COUNTS_PER_MOTOR_REV * LIFT_MOTOR_REVS_PER_MM
-# Mechanical calibration: 490 mm * 12 rev / 10 mm * 131072 count / rev.
-# Keep the commissioning limit equal to the measured full stroke.  Callers
-# must not add an overshoot margin beyond this absolute endpoint.
-LIFT_MIN_POSITION_COUNTS = -77_070_336
+# Installed calibration: 490 mm * 20 rev / 10 mm * 131072 count / rev.
+# Keep the commissioning limit equal to the configured normal full stroke.
+# Callers must not add an overshoot margin beyond this absolute endpoint.
+LIFT_MIN_POSITION_COUNTS = -128_450_560
 LIFT_MAX_POSITION_COUNTS = 10_000
 LIFT_MAX_SYNC_SPREAD_MM = 3.0
 LIFT_LIMIT_MARGIN_COUNTS = round(LIFT_MAX_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM)

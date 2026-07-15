@@ -555,6 +555,24 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
         s_runtime.executor.lift_interpolation_failure_count;
     out->lift_interpolation_recovery_count =
         s_runtime.executor.lift_interpolation_recovery_count;
+    out->lift_leveling_entry_count =
+        s_runtime.executor.lift_leveling_entry_count;
+    out->lift_leveling_complete_count =
+        s_runtime.executor.lift_leveling_complete_count;
+    out->lift_range_direction_reject_count =
+        s_runtime.executor.lift_range_direction_reject_count;
+    out->lift_sync_enable_count =
+        s_runtime.executor.lift_sync_enable_count;
+    out->lift_level_target_position_counts =
+        s_runtime.executor.lift_level_target_position_counts;
+    out->lift_level_stable_samples =
+        s_runtime.executor.lift_level_stable_samples;
+    out->lift_below_safe_range_mask =
+        s_runtime.executor.lift_below_safe_range_mask;
+    out->lift_above_safe_range_mask =
+        s_runtime.executor.lift_above_safe_range_mask;
+    out->lift_mechanical_range_invalid_mask =
+        s_runtime.executor.lift_mechanical_range_invalid_mask;
     out->lift_running_spread_warning_count =
         s_runtime.executor.lift_running_spread_warning_count;
     out->lift_stream_planned_delta_counts =
@@ -756,6 +774,10 @@ static bool can3_lift_realtime_window_active(void)
     case LIFT_INTERPOLATION_STATE_PRELOADING:
     case LIFT_INTERPOLATION_STATE_TRIGGERING:
     case LIFT_INTERPOLATION_STATE_RUNNING:
+    case LIFT_INTERPOLATION_STATE_READY_TO_SWITCH_ON:
+    case LIFT_INTERPOLATION_STATE_SWITCHING_ON:
+    case LIFT_INTERPOLATION_STATE_ENABLING_OPERATION:
+    case LIFT_INTERPOLATION_STATE_LEVELING:
     case LIFT_INTERPOLATION_STATE_STOPPING:
         return true;
     default:

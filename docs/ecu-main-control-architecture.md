@@ -2,7 +2,7 @@
 
 This document explains how to read the ECU control code from `main()` outward. Keep it open while reviewing the source tree.
 
-> Updated 2026-07-12. This is a code-reading guide, not a substitute for the
+> Updated 2026-07-15. This is a code-reading guide, not a substitute for the
 > current PDO contract, remote operation manual, or hardware acceptance record.
 
 ## Current architecture
@@ -212,7 +212,7 @@ Device adapters:
 
 This layer is where current hardware mapping defaults live. SBUS UART1 is bound to HPM UART hardware. CAN2 is the CANopenNode BC/BC2 motion network, and CAN3 is the CANopenNode lift/hydraulic network. DIO service polarity conversion is connected to the 12 isolated board outputs through `dio_hw`. RS485_1/UART11 is bound to a Modbus master transport service for the 8-channel analog acquisition module; RS485_2/UART12 is bound to the warning-light Agile Modbus direct-control protocol. RS485 direction is GPIO-controlled because HPM6750 SDK 1.11 does not provide automatic DE switching for this UART IP. `servo_drive_canopen` remains the device-level CiA 402 boundary for normal vehicle command fan-out and delegates NMT/SDO requests to `canopen_master_service`. Device adapters should call high-level control functions such as set drive velocity, set steering angle, read ADC module channels or set warning-light mode; they should not assemble protocol-stack internals manually.
 
-CAN3 has one strict realtime FIFO shared by Node9–12 lift interpolation and Node13 pump velocity. Ground-clearance motion follows the analyzer-verified sequence: SDO setup, measured post-enable settling, three stationary preload points, one four-axis RPDO2 batch plus one SYNC every 20 ms, and multi-sample final-position confirmation before drive-owned brake holding. Node13 synchronous RPDO0 is command-on-change; periodic pump refresh must not inject an extra SYNC into a running lift stream. A nonzero vendor fault latch is cleared and retried through the CAN3 owner without resetting drive position references, while a true CAN transport failure uses the bounded transport-recovery path.
+CAN3 has one strict realtime FIFO shared by Node9–12 lift interpolation and Node13 pump velocity. Ground-clearance motion uses disabled-state SDO configuration, synchronous four-axis switch-on/enable groups, measured settling, three stationary preload points, then one four-axis RPDO2 batch plus one SYNC every 20 ms. Normal motion is 6 mm/s with the configured ramp. Operator neutral is an explicit level-and-brake request: the active stream decelerates, all legs converge bidirectionally to a common measured height, and only stable <=3 mm spread plus zero-speed feedback permits a common disable. Safety stop bypasses leveling. Positions below 10 mm accept only extension toward the normal band; positions above 490 mm accept only retraction. Node13 synchronous RPDO0 is command-on-change; periodic pump refresh must not inject an extra SYNC into a running lift stream. A nonzero vendor fault latch is cleared and retried through the CAN3 owner without resetting drive position references, while a true CAN transport failure uses the bounded transport-recovery path.
 
 ## 8. Read CPU0/CPU1 data exchange
 
