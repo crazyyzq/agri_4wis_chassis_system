@@ -481,6 +481,8 @@ static void build_runtime_monitor_snapshot(uint32_t now_ms,
     out->gear_state = s_runtime.remote_request.gear_state;
     out->power_state = s_runtime.remote_request.power_state;
     out->authority_state = s_runtime.remote_request.authority_state;
+    out->power_on_block_mask =
+        s_runtime.remote_request.power_on_block_mask;
     out->adjust_state = s_runtime.remote_request.adjust_state;
     out->remote_steer_per_mille = s_runtime.remote_request.steer_per_mille;
     out->remote_throttle_per_mille = s_runtime.remote_request.throttle_per_mille;
@@ -778,6 +780,7 @@ static bool can3_lift_realtime_window_active(void)
     case LIFT_INTERPOLATION_STATE_SWITCHING_ON:
     case LIFT_INTERPOLATION_STATE_ENABLING_OPERATION:
     case LIFT_INTERPOLATION_STATE_LEVELING:
+    case LIFT_INTERPOLATION_STATE_STARVATION_CLEARING:
     case LIFT_INTERPOLATION_STATE_STOPPING:
         return true;
     default:

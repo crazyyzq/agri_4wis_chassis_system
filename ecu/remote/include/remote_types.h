@@ -179,6 +179,7 @@ typedef struct {
     remote_hydraulic_suspension_target_t hydraulic_suspension_target;
     remote_power_state_t power_state;
     remote_authority_state_t authority_state;
+    uint16_t power_on_block_mask;
     bool high_voltage_enable_request;
     bool high_voltage_disable_request;
     bool steer_zero_calibration_request;

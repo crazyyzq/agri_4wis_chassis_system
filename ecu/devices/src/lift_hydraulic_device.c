@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include "canopen_pdo_profile.h"
 #include "lift_hydraulic_device.h"
@@ -10,9 +11,9 @@
 #define SERVO_DRIVE_CONTROL_ENABLE_OPERATION ((uint16_t)0x000FU)
 #define SERVO_DRIVE_CONTROL_START_INTERPOLATION ((uint16_t)0x003FU)
 #define SERVO_DRIVE_CONTROL_FAULT_RESET ((uint16_t)0x0080U)
-#define LIFT_SETUP_SDO_WRITES_ENABLED_PER_NODE (11U)
-#define LIFT_SETUP_SDO_WRITES_DISABLED_PER_NODE (8U)
-#define PUMP_SETUP_SDO_WRITES (5U)
+#define LIFT_SETUP_SDO_WRITES_ENABLED_PER_NODE (12U)
+#define LIFT_SETUP_SDO_WRITES_DISABLED_PER_NODE (9U)
+#define PUMP_SETUP_SDO_WRITES (6U)
 
 typedef enum {
     LIFT_INTERP_DIRECTION_HOLD = 0,
@@ -83,11 +84,13 @@ static int32_t clamp_lift_position_counts(int32_t position_counts)
 static int32_t lift_interpolation_step_counts(lift_hydraulic_device_state_t *state,
                                               lift_interpolation_direction_t direction,
                                               int32_t remaining_counts,
+                                              int32_t speed_limit_counts_per_sec,
                                               uint32_t now_ms)
 {
     const int64_t acceleration =
         ECU_LIFT_INTERPOLATION_ACCEL_COUNTS_PER_SEC2;
     const int64_t period_ms = ECU_CANOPEN_LIFT_INTERPOLATION_PERIOD_MS;
+    int64_t requested_velocity;
     int64_t next_velocity;
     int64_t step;
 
@@ -115,26 +118,39 @@ static int32_t lift_interpolation_step_counts(lift_hydraulic_device_state_t *sta
         (velocity * velocity) / (2 * acceleration) : 0;
     const int64_t velocity_step = (acceleration * period_ms) / 1000;
 
-    /* Use the same trapezoidal idea as the analyzer script.  Start decelerating
-     * when the remaining distance reaches the discrete braking distance.  A
-     * fixed 20 ms integration interval keeps the generated trajectory
-     * independent of FreeRTOS scheduling jitter. */
+    speed_limit_counts_per_sec = clamp_i32(
+        speed_limit_counts_per_sec,
+        ECU_LIFT_FEEDBACK_GOVERNOR_MIN_SPEED_COUNTS_PER_SEC,
+        ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC);
+
+    /* The feedback governor may lower the allowed velocity while the target is
+     * still far from its final position.  Approach that lower limit with the
+     * same physical acceleration step instead of clamping velocity in one
+     * cycle; an instantaneous clamp was visible as a loaded-chassis jerk. */
+    requested_velocity = speed_limit_counts_per_sec;
     if ((int64_t)remaining_counts <= braking_distance) {
-        next_velocity = velocity > velocity_step ?
-            velocity - velocity_step : velocity_step;
-    } else {
-        next_velocity = velocity + velocity_step;
+        requested_velocity = velocity > velocity_step ?
+            velocity - velocity_step : 0;
     }
-    if (next_velocity > ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC) {
-        next_velocity = ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC;
+    if (velocity < requested_velocity) {
+        next_velocity = velocity + velocity_step;
+        if (next_velocity > requested_velocity) {
+            next_velocity = requested_velocity;
+        }
+    } else {
+        next_velocity = velocity > velocity_step ?
+            velocity - velocity_step : 0;
+        if (next_velocity < requested_velocity) {
+            next_velocity = requested_velocity;
+        }
     }
     state->lift_stream_velocity_counts_per_sec = (int32_t)next_velocity;
 
     step = (next_velocity * period_ms) / 1000;
-    if (step <= 0) {
+    if (step <= 0 && remaining_counts > 0) {
         step = 1;
     }
-    return step > 0 ? step : 1;
+    return step > 0 ? (int32_t)step : 0;
 }
 
 static uint32_t next_lift_group_sequence(lift_hydraulic_device_state_t *state)
@@ -544,6 +560,12 @@ static bool queue_lift_setup_sdos(lift_hydraulic_device_state_t *state,
             }
         }
         node_ok = node_ok &&
+            /* CiA-402 fault reset is edge-sensitive.  Drive the reset bit low
+             * first so a previous interrupted setup cannot leave bit 7 high
+             * and make the following 0x0080 write a no-op. */
+            canopen_master_service_request_sdo_write(
+                canopen, node->node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+                0U, 2U, SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE) &&
             canopen_master_service_request_sdo_write(
                 canopen, node->node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
                 0U, 2U, SERVO_DRIVE_CONTROL_FAULT_RESET) &&
@@ -638,6 +660,8 @@ static bool begin_lift_interpolation_setup(lift_hydraulic_device_state_t *state,
     state->lift_max_running_spread_counts = 0;
     state->lift_preload_points_completed = 0U;
     state->lift_preload_group_pending = false;
+    state->lift_starvation_candidate_samples = 0U;
+    state->lift_starvation_recovery_attempts = 0U;
     state->lift_progress_initialized = false;
     state->lift_interpolation_state = LIFT_INTERPOLATION_STATE_CONFIGURING;
     lift_stream_reset_trajectory(state, now_ms);
@@ -664,6 +688,8 @@ static bool begin_prepared_lift_enable(
     state->lift_max_running_spread_counts = 0;
     state->lift_preload_points_completed = 0U;
     state->lift_preload_group_pending = false;
+    state->lift_starvation_candidate_samples = 0U;
+    state->lift_starvation_recovery_attempts = 0U;
     state->lift_start_with_leveling = false;
     state->lift_progress_initialized = false;
     lift_settle_reset(state);
@@ -761,12 +787,14 @@ static bool lift_setup_completed(lift_hydraulic_device_state_t *state,
 static int32_t lift_interpolation_delta_counts(lift_hydraulic_device_state_t *state,
                                                lift_interpolation_direction_t direction,
                                                int32_t remaining_counts,
+                                               int32_t speed_limit_counts_per_sec,
                                                uint32_t now_ms)
 {
     int32_t step_counts =
         lift_interpolation_step_counts(state,
                                        direction,
                                        remaining_counts,
+                                       speed_limit_counts_per_sec,
                                        now_ms);
     return step_counts;
 }
@@ -814,6 +842,106 @@ static void update_lift_running_spread_diagnostics(
     }
 }
 
+static int32_t lift_direction_sign(lift_interpolation_direction_t direction)
+{
+    return direction == LIFT_INTERP_DIRECTION_EXTEND ? -1 :
+           direction == LIFT_INTERP_DIRECTION_RETRACT ? 1 : 0;
+}
+
+/* Choose the measured axis already furthest along the requested direction.
+ *
+ * The analyzer-proven stream first converges all axes to this position.  No
+ * axis is asked to reverse merely to establish the common start, and every
+ * later RPDO2 in the normal trajectory carries one identical absolute target.
+ */
+static int32_t lift_direction_leading_position(
+    const lift_hydraulic_device_state_t *state,
+    lift_interpolation_direction_t direction)
+{
+    int32_t target = state->lift_actual_position_counts[0];
+
+    for (uint32_t leg = 1U; leg < ECU_WHEEL_COUNT; ++leg) {
+        const int32_t position = state->lift_actual_position_counts[leg];
+        if ((direction == LIFT_INTERP_DIRECTION_EXTEND && position < target) ||
+            (direction == LIFT_INTERP_DIRECTION_RETRACT && position > target)) {
+            target = position;
+        }
+    }
+    return target;
+}
+
+static int32_t lift_common_following_error_counts(
+    const lift_hydraulic_device_state_t *state,
+    lift_interpolation_direction_t direction)
+{
+    const int32_t direction_sign = lift_direction_sign(direction);
+    int64_t slowest_progress;
+    int64_t target_progress;
+
+    if (state == 0 || direction_sign == 0) {
+        return 0;
+    }
+
+    slowest_progress =
+        (int64_t)direction_sign * state->lift_actual_position_counts[0];
+    for (uint32_t leg = 1U; leg < ECU_WHEEL_COUNT; ++leg) {
+        const int64_t progress =
+            (int64_t)direction_sign * state->lift_actual_position_counts[leg];
+        if (progress < slowest_progress) {
+            slowest_progress = progress;
+        }
+    }
+    target_progress =
+        (int64_t)direction_sign * state->lift_common_target_position_counts;
+    if (target_progress <= slowest_progress) {
+        return 0;
+    }
+    const int64_t error = target_progress - slowest_progress;
+    return error > INT32_MAX ? INT32_MAX : (int32_t)error;
+}
+
+/* Reduce one common trajectory velocity as its lead approaches the configured
+ * running following-error window.  This never changes relative leg targets:
+ * all four axes still receive the same absolute point and therefore remain
+ * synchronized by construction.
+ */
+static int32_t lift_feedback_governed_speed_counts_per_sec(
+    const lift_hydraulic_device_state_t *state,
+    lift_interpolation_direction_t direction)
+{
+    const int32_t following_error =
+        lift_common_following_error_counts(state, direction);
+    const int32_t normal_lead = ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS;
+    const int32_t guard = ECU_LIFT_FOLLOWING_ERROR_WINDOW_COUNTS;
+
+    if (following_error <= normal_lead || guard <= normal_lead) {
+        return ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC;
+    }
+    if (following_error >= guard) {
+        return ECU_LIFT_FEEDBACK_GOVERNOR_MIN_SPEED_COUNTS_PER_SEC;
+    }
+
+    const int64_t available_span = guard - normal_lead;
+    const int64_t remaining_span = guard - following_error;
+    const int64_t speed_span =
+        ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC -
+        ECU_LIFT_FEEDBACK_GOVERNOR_MIN_SPEED_COUNTS_PER_SEC;
+    return ECU_LIFT_FEEDBACK_GOVERNOR_MIN_SPEED_COUNTS_PER_SEC +
+           (int32_t)((speed_span * remaining_span) / available_span);
+}
+
+static bool lift_axes_near_zero_for_starvation(
+    const lift_hydraulic_device_state_t *state)
+{
+    for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg) {
+        if (i32_abs(state->lift_actual_velocity_units[leg]) >
+            ECU_LIFT_STARVATION_MAX_SPEED_VELOCITY_UNITS) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void lift_progress_watchdog_rebaseline(
     lift_hydraulic_device_state_t *state,
     uint32_t now_ms)
@@ -838,6 +966,8 @@ static void lift_stream_capture_origin(lift_hydraulic_device_state_t *state)
         state->lift_target_position_counts[leg] =
             state->lift_actual_position_counts[leg];
     }
+    state->lift_common_target_position_counts =
+        state->lift_actual_position_counts[0];
     state->lift_stream_planned_delta_counts = 0;
     state->lift_stream_total_distance_counts = 0;
 }
@@ -1014,45 +1144,6 @@ static bool lift_progress_stalled(lift_hydraulic_device_state_t *state,
     return false;
 }
 
-static bool lift_interpolation_motion_active(lift_interpolation_state_t state)
-{
-    return state == LIFT_INTERPOLATION_STATE_PRELOADING ||
-           state == LIFT_INTERPOLATION_STATE_TRIGGERING ||
-           state == LIFT_INTERPOLATION_STATE_RUNNING;
-}
-
-static bool lift_remote_neutral_stop_confirmed(lift_hydraulic_device_state_t *state,
-                                               const vehicle_actuator_command_t *command,
-                                               lift_interpolation_direction_t requested_direction,
-                                               uint32_t now_ms)
-{
-    if (state == 0 || command == 0) {
-        return true;
-    }
-
-    if (requested_direction != LIFT_INTERP_DIRECTION_HOLD) {
-        state->lift_remote_neutral_since_ms = 0U;
-        return true;
-    }
-
-    if (command->source != COMMAND_SOURCE_REMOTE ||
-        command->lift_request != VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL ||
-        !command->high_voltage_feedback_ready ||
-        !lift_interpolation_motion_active(state->lift_interpolation_state) ||
-        state->lift_requested_direction == (int8_t)LIFT_INTERP_DIRECTION_HOLD) {
-        state->lift_remote_neutral_since_ms = 0U;
-        return true;
-    }
-
-    if (state->lift_remote_neutral_since_ms == 0U) {
-        state->lift_remote_neutral_since_ms = now_ms;
-        return false;
-    }
-
-    return (uint32_t)(now_ms - state->lift_remote_neutral_since_ms) >=
-           ECU_LIFT_REMOTE_NEUTRAL_STOP_CONFIRM_MS;
-}
-
 static bool build_lift_interpolation_request(canopen_master_pdo_request_t *request,
                                              const ecu_canopen_node_config_t *node,
                                              int32_t target_position_counts,
@@ -1153,13 +1244,18 @@ static void reset_lift_motion_state(lift_hydraulic_device_state_t *state,
     state->lift_feedback_missing_since_ms = 0U;
     state->lift_active_direction = (int8_t)LIFT_INTERP_DIRECTION_HOLD;
     state->lift_running_spread_counts = 0;
+    state->lift_common_target_position_counts = 0;
     state->lift_preload_points_completed = 0U;
     state->lift_preload_group_pending = false;
+    state->lift_starvation_candidate_samples = 0U;
+    state->lift_starvation_recovery_attempts = 0U;
     state->lift_at_target_disabled = false;
     state->lift_transport_recovery_required = false;
     state->lift_level_target_valid = false;
     state->lift_start_with_leveling = false;
     state->lift_level_stable_samples = 0U;
+    state->lift_level_alignment_sample_count = 0U;
+    state->lift_level_alignment_sample_index = 0U;
     state->lift_progress_initialized = false;
     state->lift_level_resume_direction =
         (int8_t)LIFT_INTERP_DIRECTION_HOLD;
@@ -1325,7 +1421,16 @@ static bool queue_lift_interpolation_group(lift_hydraulic_device_state_t *state,
     }
 
     update_lift_position_range_masks(state);
-    if (!lift_direction_allowed_by_range(state, direction)) {
+    /* PRELOADING deliberately queues stationary points at each axis's freshly
+     * measured position, so its direction is HOLD.  Those points cannot move a
+     * leg farther out of range and must be allowed to fill the BC2
+     * interpolation buffers before the common trigger edge.  The previous
+     * unconditional direction gate rejected every HOLD preload, immediately
+     * disabled all four axes, and restarted setup forever.  Keep the range gate
+     * mandatory for every real extend/retract trajectory point.
+     */
+    if (direction != LIFT_INTERP_DIRECTION_HOLD &&
+        !lift_direction_allowed_by_range(state, direction)) {
         state->lift_range_direction_reject_count++;
         return queue_lift_interpolation_trigger(
             state,
@@ -1390,14 +1495,61 @@ static bool queue_lift_interpolation_group(lift_hydraulic_device_state_t *state,
     }
 
     if (direction != LIFT_INTERP_DIRECTION_HOLD) {
+        const int32_t following_error =
+            lift_common_following_error_counts(state, direction);
+        if (following_error > ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS &&
+            lift_axes_near_zero_for_starvation(state)) {
+            if (state->lift_starvation_candidate_samples <
+                ECU_LIFT_STARVATION_CONFIRM_SAMPLES) {
+                state->lift_starvation_candidate_samples++;
+            }
+        } else {
+            state->lift_starvation_candidate_samples = 0U;
+            if (following_error <=
+                    ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS ||
+                !lift_axes_near_zero_for_starvation(state)) {
+                state->lift_starvation_recovery_attempts = 0U;
+            }
+        }
+        if (state->lift_starvation_candidate_samples >=
+                ECU_LIFT_STARVATION_CONFIRM_SAMPLES &&
+            time_reached(now_ms, state->lift_recovery_not_before_ms)) {
+            if (state->lift_starvation_recovery_attempts >=
+                    ECU_LIFT_STARVATION_RECOVERY_LIMIT) {
+                /* Repeated starvation is still recoverable.  Rate-limit the
+                 * next re-prime instead of converting it into an axis disable
+                 * or transport reset. */
+                state->lift_starvation_recovery_attempts = 0U;
+                state->lift_recovery_not_before_ms =
+                    now_ms + ECU_LIFT_RECOVERY_BACKOFF_MS;
+                state->lift_starvation_candidate_samples = 0U;
+                return true;
+            }
+            state->lift_starvation_recovery_attempts++;
+            state->lift_starvation_recovery_count++;
+            state->lift_interpolation_recovery_count++;
+            state->lift_starvation_candidate_samples = 0U;
+            state->lift_level_resume_direction = (int8_t)direction;
+            state->lift_start_with_leveling = true;
+            return queue_lift_interpolation_trigger(
+                state,
+                canopen,
+                config,
+                SERVO_DRIVE_CONTROL_ENABLE_OPERATION,
+                LIFT_INTERPOLATION_STATE_STARVATION_CLEARING);
+        }
+
         const int32_t remaining_counts =
             state->lift_stream_total_distance_counts -
             state->lift_stream_planned_delta_counts;
+        const int32_t speed_limit_counts_per_sec =
+            lift_feedback_governed_speed_counts_per_sec(state, direction);
         const int32_t delta_counts =
             lift_interpolation_delta_counts(state,
                                             direction,
                                             remaining_counts > 0 ?
                                                 remaining_counts : 0,
+                                            speed_limit_counts_per_sec,
                                             now_ms);
         int64_t planned_delta =
             (int64_t)state->lift_stream_planned_delta_counts +
@@ -1413,65 +1565,39 @@ static bool queue_lift_interpolation_group(lift_hydraulic_device_state_t *state,
         state->lift_stream_velocity_counts_per_sec = 0;
         state->lift_last_stream_step_ms = now_ms;
         state->lift_stream_planned_delta_counts = 0;
+        /* Preload/re-prime points must hold each axis at its own fresh measured
+         * absolute position.  The common position is introduced only after the
+         * shared 0x003F trigger, through the smooth LEVELING stage. */
+        for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg) {
+            target_positions[leg] =
+                state->lift_stream_origin_position_counts[leg];
+        }
+        return submit_lift_target_group(state,
+                                        canopen,
+                                        config,
+                                        target_positions,
+                                        now_ms);
     }
 
+    const int32_t direction_sign = lift_direction_sign(direction);
+    const int32_t common_origin =
+        state->lift_stream_origin_position_counts[0];
+    int64_t common_target =
+        (int64_t)common_origin +
+        (int64_t)direction_sign *
+            state->lift_stream_planned_delta_counts;
+    if (direction == LIFT_INTERP_DIRECTION_EXTEND &&
+        common_target < command_target_position_counts) {
+        common_target = command_target_position_counts;
+    } else if (direction == LIFT_INTERP_DIRECTION_RETRACT &&
+               common_target > command_target_position_counts) {
+        common_target = command_target_position_counts;
+    }
+    state->lift_common_target_position_counts =
+        clamp_lift_position_counts((int32_t)common_target);
     for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg) {
-        const int32_t origin = state->lift_stream_origin_position_counts[leg];
-        const int32_t final_delta = command_target_position_counts - origin;
-        int32_t desired_delta = 0;
-        if (direction != LIFT_INTERP_DIRECTION_HOLD &&
-            state->lift_stream_total_distance_counts > 0) {
-            desired_delta = (int32_t)(
-                ((int64_t)final_delta *
-                 state->lift_stream_planned_delta_counts) /
-                state->lift_stream_total_distance_counts);
-        }
-        int32_t target_counts = clamp_lift_position_counts(origin + desired_delta);
-
-        if (direction != LIFT_INTERP_DIRECTION_HOLD) {
-            const int32_t direction_sign =
-                direction == LIFT_INTERP_DIRECTION_EXTEND ? -1 : 1;
-            const int32_t expected_error =
-                target_counts - state->lift_actual_position_counts[leg];
-            int32_t correction = (int32_t)(
-                ((int64_t)expected_error * direction_sign *
-                 ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR) /
-                ECU_LIFT_SYNC_CORRECTION_GAIN_DENOMINATOR);
-            correction = clamp_i32(correction,
-                                   -ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS,
-                                   ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS);
-            const int32_t lead_counts = clamp_i32(
-                ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS + correction,
-                1,
-                ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS +
-                    ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS);
-
-            if (direction == LIFT_INTERP_DIRECTION_EXTEND) {
-                const int32_t feedback_limited =
-                    state->lift_actual_position_counts[leg] - lead_counts;
-                if (target_counts < feedback_limited) {
-                    target_counts = feedback_limited;
-                }
-            } else {
-                const int32_t feedback_limited =
-                    state->lift_actual_position_counts[leg] + lead_counts;
-                if (target_counts > feedback_limited) {
-                    target_counts = feedback_limited;
-                }
-            }
-        }
-        if (state->lift_targets_initialized) {
-            const int32_t previous_target =
-                state->lift_target_position_counts[leg];
-            if (direction == LIFT_INTERP_DIRECTION_EXTEND &&
-                target_counts > previous_target) {
-                target_counts = previous_target;
-            } else if (direction == LIFT_INTERP_DIRECTION_RETRACT &&
-                       target_counts < previous_target) {
-                target_counts = previous_target;
-            }
-        }
-        target_positions[leg] = target_counts;
+        target_positions[leg] =
+            state->lift_common_target_position_counts;
     }
     return submit_lift_target_group(state,
                                     canopen,
@@ -1483,14 +1609,20 @@ static bool queue_lift_interpolation_group(lift_hydraulic_device_state_t *state,
 static void begin_lift_leveling(lift_hydraulic_device_state_t *state,
                                 lift_interpolation_direction_t resume_direction)
 {
+    int32_t maximum_alignment_distance = 0;
+
     if (state == 0) {
         return;
     }
     state->lift_level_target_position_counts =
-        lift_level_target_from_feedback(state);
+        resume_direction == LIFT_INTERP_DIRECTION_HOLD ?
+            lift_level_target_from_feedback(state) :
+            lift_direction_leading_position(state, resume_direction);
     state->lift_level_target_valid = true;
     state->lift_level_stable_samples = 0U;
     state->lift_level_resume_direction = (int8_t)resume_direction;
+    state->lift_level_alignment_sample_count = 0U;
+    state->lift_level_alignment_sample_index = 0U;
     state->lift_leveling_entry_count++;
 
     const int32_t signed_stream_velocity =
@@ -1499,15 +1631,69 @@ static void begin_lift_leveling(lift_hydraulic_device_state_t *state,
         state->lift_active_direction == (int8_t)LIFT_INTERP_DIRECTION_RETRACT ?
             state->lift_stream_velocity_counts_per_sec : 0;
     for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg) {
+        const int32_t distance = i32_abs(
+            state->lift_level_target_position_counts -
+            state->lift_actual_position_counts[leg]);
+        state->lift_level_origin_position_counts[leg] =
+            state->lift_actual_position_counts[leg];
         state->lift_level_velocity_counts_per_sec[leg] =
             signed_stream_velocity;
+        if (distance > maximum_alignment_distance) {
+            maximum_alignment_distance = distance;
+        }
         if (!state->lift_targets_initialized) {
             state->lift_target_position_counts[leg] =
                 state->lift_actual_position_counts[leg];
         }
     }
+    if (resume_direction != LIFT_INTERP_DIRECTION_HOLD &&
+        maximum_alignment_distance > 0) {
+        /* Match the analyzer script's cubic pre-alignment.  Cubic smoothstep
+         * has a peak normalized slope of 1.5, so size the fixed sample count
+         * from that peak and the configured 2 mm/s leveling speed. */
+        const int64_t numerator =
+            3LL * maximum_alignment_distance * 1000LL;
+        const int64_t denominator =
+            2LL * ECU_LIFT_LEVELING_SPEED_COUNTS_PER_SEC *
+            ECU_CANOPEN_LIFT_INTERPOLATION_REFRESH_MS;
+        uint32_t samples = denominator > 0 ?
+            (uint32_t)((numerator + denominator - 1LL) / denominator) : 0U;
+        if (samples < ECU_CANOPEN_LIFT_PRELOAD_POINTS) {
+            samples = ECU_CANOPEN_LIFT_PRELOAD_POINTS;
+        }
+        state->lift_level_alignment_sample_count = samples;
+    }
     state->lift_targets_initialized = true;
     state->lift_interpolation_state = LIFT_INTERPOLATION_STATE_LEVELING;
+}
+
+/* Return one analyzer-equivalent cubic smoothstep pre-alignment point.
+ *
+ * The origins and common endpoint are fixed when leveling begins.  No measured
+ * feedback is fed back into the point generator, so a responsive axis cannot
+ * be commanded alternately to opposite sides of the endpoint while another
+ * axis catches up.
+ */
+static int32_t lift_directional_alignment_target(
+    const lift_hydraulic_device_state_t *state,
+    uint32_t leg)
+{
+    const uint32_t count = state->lift_level_alignment_sample_count;
+    const uint32_t index = state->lift_level_alignment_sample_index + 1U;
+    const int32_t origin = state->lift_level_origin_position_counts[leg];
+    const int32_t distance = state->lift_level_target_position_counts - origin;
+
+    if (count == 0U || index >= count) {
+        return state->lift_level_target_position_counts;
+    }
+
+    /* smoothstep(i/n) = i^2 * (3n - 2i) / n^3 */
+    const int64_t numerator =
+        (int64_t)index * index * (3LL * count - 2LL * index);
+    const int64_t denominator = (int64_t)count * count * count;
+    const int64_t offset =
+        ((int64_t)distance * numerator) / denominator;
+    return origin + (int32_t)offset;
 }
 
 static int32_t approach_zero(int32_t value, int32_t step)
@@ -1608,8 +1794,12 @@ static void resume_lift_stream_after_leveling(
 {
     for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg) {
         state->lift_stream_origin_position_counts[leg] =
-            state->lift_target_position_counts[leg];
+            state->lift_level_target_position_counts;
+        state->lift_target_position_counts[leg] =
+            state->lift_level_target_position_counts;
     }
+    state->lift_common_target_position_counts =
+        state->lift_level_target_position_counts;
     state->lift_stream_planned_delta_counts = 0;
     state->lift_stream_velocity_counts_per_sec = 0;
     state->lift_stream_total_distance_counts =
@@ -1619,6 +1809,7 @@ static void resume_lift_stream_after_leveling(
     state->lift_level_stable_samples = 0U;
     state->lift_progress_initialized = false;
     state->lift_target_stable_samples = 0U;
+    state->lift_starvation_candidate_samples = 0U;
     state->lift_level_resume_direction = (int8_t)LIFT_INTERP_DIRECTION_HOLD;
     state->lift_requested_direction = (int8_t)direction;
     state->lift_active_direction = (int8_t)direction;
@@ -1641,6 +1832,17 @@ static bool queue_lift_leveling_group(lift_hydraulic_device_state_t *state,
     if (!lift_group_completed(state, canopen)) {
         return state->lift_interpolation_state != LIFT_INTERPOLATION_STATE_FAULT;
     }
+    const lift_interpolation_direction_t resume_direction =
+        (lift_interpolation_direction_t)state->lift_level_resume_direction;
+    if (resume_direction != LIFT_INTERP_DIRECTION_HOLD &&
+        state->lift_level_alignment_sample_index >=
+            state->lift_level_alignment_sample_count) {
+        resume_lift_stream_after_leveling(state,
+                                          command_target_position_counts,
+                                          resume_direction,
+                                          now_ms);
+        return true;
+    }
     if (!canopen_master_service_realtime_pdo_idle(canopen)) {
         return true;
     }
@@ -1658,17 +1860,31 @@ static bool queue_lift_leveling_group(lift_hydraulic_device_state_t *state,
             SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE,
             LIFT_INTERPOLATION_STATE_STOPPING);
     }
+    if (resume_direction != LIFT_INTERP_DIRECTION_HOLD) {
+        for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg) {
+            targets[leg] = lift_directional_alignment_target(state, leg);
+        }
+        if (!submit_lift_target_group(state,
+                                      canopen,
+                                      config,
+                                      targets,
+                                      now_ms)) {
+            return false;
+        }
+        if (state->lift_group_in_flight) {
+            state->lift_level_alignment_sample_index++;
+        }
+        return true;
+    }
     if (lift_progress_stalled(state,
                               state->lift_level_target_position_counts,
                               now_ms)) {
-        state->lift_interpolation_failure_count++;
-        state->lift_progress_initialized = false;
-        return queue_lift_interpolation_trigger(
-            state,
-            canopen,
-            config,
-            SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE,
-            LIFT_INTERPOLATION_STATE_STOPPING);
+        /* A loaded axis may pause briefly while the other axes converge.
+         * Preserve the continuous common interpolation window and rebaseline
+         * only the progress observer; disabling here would lock in an uneven
+         * height and make the next operator request start from a worse state. */
+        state->lift_interpolation_reject_count++;
+        lift_progress_watchdog_rebaseline(state, now_ms);
     }
 
     if (lift_level_feedback_stable(state)) {
@@ -1681,8 +1897,6 @@ static bool queue_lift_leveling_group(lift_hydraulic_device_state_t *state,
     }
     if (state->lift_level_stable_samples >=
             ECU_LIFT_LEVELING_STABLE_SAMPLES) {
-        const lift_interpolation_direction_t resume_direction =
-            (lift_interpolation_direction_t)state->lift_level_resume_direction;
         state->lift_leveling_complete_count++;
         if (resume_direction != LIFT_INTERP_DIRECTION_HOLD &&
             lift_direction_allowed_by_range(state, resume_direction)) {
@@ -1770,9 +1984,9 @@ static bool process_lift_interpolation(
     const bool safe_stop_requested =
         !high_voltage_feedback_ready ||
         lift_request == VEHICLE_LIFT_REQUEST_SAFE_STOP;
-    const bool neutral_level_requested =
+    const bool operator_neutral_requested =
         high_voltage_feedback_ready &&
-        lift_request == VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL;
+        lift_request == VEHICLE_LIFT_REQUEST_NEUTRAL_STOP;
     const bool direction_matches_request =
         (lift_request == VEHICLE_LIFT_REQUEST_EXTEND &&
          requested_direction == LIFT_INTERP_DIRECTION_EXTEND) ||
@@ -1796,6 +2010,21 @@ static bool process_lift_interpolation(
         state->lift_active_direction =
             (int8_t)LIFT_INTERP_DIRECTION_HOLD;
         state->lift_interpolation_state = LIFT_INTERPOLATION_STATE_STOPPED;
+        /* A normal synchronous disable does not invalidate the saved PDO
+         * mapping or interpolation setup. Keep the drives in the prepared,
+         * brake-held state so the next operator request can use the fast
+         * four-axis RPDO enable path. Faulted or de-energized axes must take
+         * the full setup path instead. */
+        state->lift_prepared_disabled =
+            high_voltage_feedback_ready &&
+            state->lift_axis_fault_mask == 0U &&
+            !state->lift_transport_recovery_required;
+        state->lift_level_target_valid = false;
+        state->lift_start_with_leveling = false;
+        state->lift_level_resume_direction =
+            (int8_t)LIFT_INTERP_DIRECTION_HOLD;
+        state->lift_level_alignment_sample_count = 0U;
+        state->lift_level_alignment_sample_index = 0U;
         bool same_target = state->lift_command_target_position_counts ==
                            command_target_position_counts;
         state->lift_command_target_position_counts =
@@ -1816,10 +2045,56 @@ static bool process_lift_interpolation(
     }
 
     if (state->lift_interpolation_state ==
-            LIFT_INTERPOLATION_STATE_LEVELING) {
+            LIFT_INTERPOLATION_STATE_STARVATION_CLEARING) {
+        if (!lift_group_completed(state, canopen)) {
+            return state->lift_interpolation_state !=
+                   LIFT_INTERPOLATION_STATE_FAULT;
+        }
         if (safe_stop_requested) {
+            return queue_lift_interpolation_trigger(
+                state,
+                canopen,
+                config,
+                SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE,
+                LIFT_INTERPOLATION_STATE_STOPPING);
+        }
+        if (!refresh_lift_feedback(state, canopen, config, now_ms)) {
+            return true;
+        }
+
+        /* Re-prime from fresh measured hold points.  No drive disable, NMT
+         * reset, SDO reconfiguration or cached nonzero point is replayed. */
+        lift_stream_reset_trajectory(state, now_ms);
+        lift_stream_capture_origin(state);
+        state->lift_preload_points_completed = 0U;
+        state->lift_preload_group_pending = false;
+        state->lift_active_direction =
+            (int8_t)LIFT_INTERP_DIRECTION_HOLD;
+        state->lift_requested_direction = (int8_t)desired_direction;
+        state->lift_level_resume_direction = (int8_t)desired_direction;
+        state->lift_start_with_leveling = true;
+        state->lift_interpolation_state =
+            LIFT_INTERPOLATION_STATE_PRELOADING;
+        return true;
+    }
+
+    if (state->lift_interpolation_state ==
+            LIFT_INTERPOLATION_STATE_LEVELING) {
+        const lift_interpolation_direction_t alignment_direction =
+            (lift_interpolation_direction_t)
+                state->lift_level_resume_direction;
+        /* Pre-alignment has a fixed origin, endpoint and direction. Never
+         * rewrite it from live joystick samples: doing so made one axis chase
+         * a moving endpoint and caused the observed random reversal/vibration.
+         * Neutral, safety stop or a direction change cancels the complete
+         * four-axis group and applies the brakes. A later request restarts from
+         * fresh TPDO positions. */
+        if (safe_stop_requested ||
+            desired_direction == LIFT_INTERP_DIRECTION_HOLD ||
+            desired_direction != alignment_direction) {
             state->lift_level_resume_direction =
                 (int8_t)LIFT_INTERP_DIRECTION_HOLD;
+            state->lift_at_target_disabled = false;
             if (!lift_group_completed(state, canopen)) {
                 return state->lift_interpolation_state !=
                        LIFT_INTERPOLATION_STATE_FAULT;
@@ -1831,20 +2106,6 @@ static bool process_lift_interpolation(
                 SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE,
                 LIFT_INTERPOLATION_STATE_STOPPING);
         }
-        if (desired_direction != LIFT_INTERP_DIRECTION_HOLD) {
-            update_lift_position_range_masks(state);
-            if (lift_direction_allowed_by_range(state, desired_direction)) {
-                state->lift_level_resume_direction =
-                    (int8_t)desired_direction;
-            } else {
-                state->lift_level_resume_direction =
-                    (int8_t)LIFT_INTERP_DIRECTION_HOLD;
-                state->lift_range_direction_reject_count++;
-            }
-        } else if (neutral_level_requested) {
-            state->lift_level_resume_direction =
-                (int8_t)LIFT_INTERP_DIRECTION_HOLD;
-        }
         return queue_lift_leveling_group(state,
                                          canopen,
                                          config,
@@ -1852,34 +2113,11 @@ static bool process_lift_interpolation(
                                          now_ms);
     }
 
-    if (neutral_level_requested &&
-        state->lift_interpolation_state ==
-            LIFT_INTERPOLATION_STATE_RUNNING) {
-        state->lift_hold_count++;
-        if (!lift_group_completed(state, canopen)) {
-            return state->lift_interpolation_state !=
-                   LIFT_INTERPOLATION_STATE_FAULT;
-        }
-        if (!refresh_lift_feedback(state, canopen, config, now_ms)) {
-            return true;
-        }
-        update_lift_position_range_masks(state);
-        if (state->lift_mechanical_range_invalid_mask != 0U) {
-            return queue_lift_interpolation_trigger(
-                state,
-                canopen,
-                config,
-                SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE,
-                LIFT_INTERPOLATION_STATE_STOPPING);
-        }
-        begin_lift_leveling(state, LIFT_INTERP_DIRECTION_HOLD);
-        return true;
-    }
-
-    if (safe_stop_requested || neutral_level_requested ||
+    if (safe_stop_requested || operator_neutral_requested ||
         desired_direction == LIFT_INTERP_DIRECTION_HOLD) {
         state->lift_hold_count++;
         state->lift_requested_direction = (int8_t)LIFT_INTERP_DIRECTION_HOLD;
+        state->lift_at_target_disabled = false;
         if (state->lift_interpolation_state ==
                 LIFT_INTERPOLATION_STATE_CONFIGURING) {
             const bool setup_was_enabling =
@@ -1916,26 +2154,15 @@ static bool process_lift_interpolation(
         }
         if (state->lift_interpolation_state ==
                 LIFT_INTERPOLATION_STATE_STOPPED) {
-            if (neutral_level_requested &&
-                !state->lift_prepared_disabled &&
-                time_reached(now_ms, state->lift_recovery_not_before_ms)) {
-                return begin_lift_interpolation_setup(
-                    state,
-                    canopen,
-                    config,
-                    LIFT_INTERP_DIRECTION_HOLD,
-                    false,
-                    now_ms);
-            }
             return true;
         }
         if (!lift_group_completed(state, canopen)) {
             return state->lift_interpolation_state !=
                    LIFT_INTERPOLATION_STATE_FAULT;
         }
-        /* Neutral first clears bit 4 synchronously on every axis.  Only after
-         * that group completes may the slower SDO shutdown/clear sequence run.
-         */
+        /* Operator neutral and all safe-stop sources synchronously disable the
+         * four axes. Do not continue the old endpoint for a debounce interval,
+         * and do not enter feedback-chasing leveling. */
         if (state->lift_interpolation_state ==
                 LIFT_INTERPOLATION_STATE_FAULT) {
             state->lift_interpolation_state =
@@ -2036,6 +2263,8 @@ static bool process_lift_interpolation(
 
     if (state->lift_interpolation_state ==
             LIFT_INTERPOLATION_STATE_SETTLING) {
+        const lift_interpolation_direction_t setup_direction =
+            (lift_interpolation_direction_t)state->lift_requested_direction;
         const bool feedback_fresh =
             refresh_lift_feedback(state, canopen, config, now_ms);
         if (!time_reached(now_ms, state->lift_enable_settle_until_ms)) {
@@ -2070,8 +2299,18 @@ static bool process_lift_interpolation(
             return true;
         }
         update_lift_position_range_masks(state);
+        /* The setup direction is latched when the four-axis enable sequence
+         * starts.  Use that coherent request for the post-enable range gate
+         * instead of the latest task snapshot parameter.  Near the 10 mm
+         * boundary, a one-cycle neutral/opposite snapshot previously made a
+         * healthy synchronous enable group immediately disable and restart,
+         * even though the operator's confirmed request and all node feedback
+         * remained valid.  A real neutral request is handled by the stop branch
+         * above; a real direction change is handled by the command-change
+         * branch after setup completes.
+         */
         if (state->lift_mechanical_range_invalid_mask != 0U ||
-            !lift_direction_allowed_by_range(state, requested_direction)) {
+            !lift_direction_allowed_by_range(state, setup_direction)) {
             state->lift_range_direction_reject_count++;
             return queue_lift_interpolation_trigger(
                 state,
@@ -2082,20 +2321,18 @@ static bool process_lift_interpolation(
         }
         update_lift_running_spread_diagnostics(state);
         state->lift_start_with_leveling =
-            state->lift_running_spread_counts >
-                ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS ||
+            state->lift_running_spread_counts > 0 ||
             state->lift_below_safe_range_mask != 0U ||
             state->lift_above_safe_range_mask != 0U;
         state->lift_progress_initialized = false;
         lift_stream_reset_trajectory(state, now_ms);
         state->lift_active_direction = (int8_t)LIFT_INTERP_DIRECTION_HOLD;
-        /* The analyzer-proven absolute trajectory starts every axis from its
-         * own measured position and scales each final delta to the same common
-         * progress.  A separate pre-trigger LEVELING move cannot work because
-         * BC2 has not yet received the 0x003F interpolation start edge.  It was
-         * the principal deadlock behind "sometimes does not move".  Initial
-         * height mismatch is now removed continuously by the per-axis final
-         * delta and bounded feedback correction in the running stream. */
+        /* Preload measured stationary points first, then create the common
+         * 0x003F trigger edge.  Once interpolation is running, smoothly align
+         * every axis to the direction-leading measured position before the
+         * normal common-target trajectory.  This is the analyzer-proven order:
+         * attempting to level before the trigger is a deadlock, while skipping
+         * alignment would turn the initial measured spread into a step. */
         state->lift_preload_points_completed = 0U;
         state->lift_preload_group_pending = false;
         state->lift_interpolation_state =
@@ -2459,6 +2696,9 @@ static bool ensure_hydraulic_pump_velocity_setup(lift_hydraulic_device_state_t *
             CANOPEN_MASTER_DEBUG_COMMAND_NMT_OPERATIONAL) &&
         canopen_master_service_request_sdo_write(
             canopen, node->node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
+            0U, 2U, SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE) &&
+        canopen_master_service_request_sdo_write(
+            canopen, node->node_id, ECU_CANOPEN_OBJ_CONTROLWORD,
             0U, 2U, SERVO_DRIVE_CONTROL_FAULT_RESET) &&
         canopen_master_service_request_sdo_write(
             canopen, node->node_id, ECU_CANOPEN_OBJ_MODES_OF_OPERATION,
@@ -2785,23 +3025,6 @@ ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_stat
     if (!command->high_voltage_feedback_ready) {
         lift_direction = LIFT_INTERP_DIRECTION_HOLD;
     }
-    float effective_target_height_mm = command->target_height_mm;
-    vehicle_lift_request_t effective_lift_request = command->lift_request;
-    if (!lift_remote_neutral_stop_confirmed(state,
-                                            command,
-                                            lift_direction,
-                                            now_ms)) {
-        lift_direction = (lift_interpolation_direction_t)
-            state->lift_requested_direction;
-        effective_lift_request =
-            lift_direction == LIFT_INTERP_DIRECTION_EXTEND ?
-                VEHICLE_LIFT_REQUEST_EXTEND :
-                VEHICLE_LIFT_REQUEST_RETRACT;
-        effective_target_height_mm =
-            lift_direction == LIFT_INTERP_DIRECTION_EXTEND ?
-            ECU_REMOTE_MAX_HEIGHT_TARGET_MM : ECU_REMOTE_MIN_HEIGHT_TARGET_MM;
-    }
-
     if (can3_actuator_command_changed(state, command)) {
         state->last_lift_command = *command;
         state->last_lift_command_valid = true;
@@ -2862,8 +3085,8 @@ ecu_device_apply_result_t lift_hydraulic_device_apply(lift_hydraulic_device_stat
                                     canopen,
                                     config,
                                     lift_direction,
-                                    effective_target_height_mm,
-                                    effective_lift_request,
+                                    command->target_height_mm,
+                                    command->lift_request,
                                     command->high_voltage_feedback_ready,
                                     now_ms) && ok;
     state->apply_count++;

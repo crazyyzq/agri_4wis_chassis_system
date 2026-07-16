@@ -191,15 +191,23 @@ CAN1 10 ms, CAN3 10 ms, IO 10 ms, diagnostics 100 ms
 
 Ground-clearance lift is electric Node9–12 motion; it does not start Node13.
 
-- Normal trajectory: 6 mm/s, 8 mm/s^2, three stationary preload points, then
-  coherent four-axis RPDO2 + SYNC every 20 ms.
+- Normal trajectory: 20 mm/s, 8 mm/s^2, three stationary preload points,
+  smooth direction-leading alignment, then one identical four-axis absolute
+  RPDO2 target + SYNC every 20 ms. The normal target look-ahead is 2.5 mm; a
+  feedback governor acts inside the 10 mm running following-error window.
+- A healthy Operation-Enabled group that consumes its interpolation buffers is
+  re-primed without axis disable or node reset: clear the bit-4 trigger edge,
+  preload three fresh measured hold points, retrigger synchronously, align and
+  resume the latest common target. Final arrival/neutral disable still requires
+  position/spread <=3 mm and zero speed.
 - In HOME-center idle, drives may be configured while disabled. Switch-on and
   operation-enable use separate four-axis RPDO1 groups plus SYNC, avoiding
   sequential brake release.
-- Operator neutral is distinct from safety stop: smoothly decelerate, converge
-  all four legs toward a common measured height at the configured leveling
-  profile, confirm position/spread <=3 mm and zero speed for the configured
-  stable samples, then disable all axes so drive brakes hold.
+- Operator neutral cancels the old endpoint immediately and synchronously
+  disables all four axes so drive brakes hold. It must not keep the previous
+  extend/retract command alive for debounce, enter feedback-chasing leveling or
+  replay cached points. The next non-neutral request starts from fresh TPDO
+  positions through the coherent four-axis enable/preload path.
 - Safety stop/high-voltage loss/stale command disables immediately; it does not
   wait for leveling.
 - During motion, spread up to the running warning threshold is corrected rather

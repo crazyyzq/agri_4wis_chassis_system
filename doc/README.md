@@ -16,6 +16,7 @@
 | Node1–13 PDO 映射 | `doc/CANOPEN_PDO_MAPPING_RECORD_V1.md` |
 | PDO 字节级操作 | `doc/ECU/CANopen_RPDO_Operation_Manual_Node1-13_V2.md` |
 | 遥控器实际操作逻辑 | `doc/ECU/遥控操作逻辑说明书.md` |
+| 四腿同步变地隙调试与失败恢复证据 | `doc/ECU/四腿同步变地隙调试记录_2026-07-16.md` |
 | 待现场确认配置 | `docs/ecu-configuration-open-items.md` |
 | 工具与脚本入口 | `tools/README.md` |
 
@@ -25,7 +26,8 @@
 - Node1–8/13 为 10000 count/rev；Node9–12 为 131072 count/rev。
 - 变地隙机构为 20 motor rev/10 mm，即 262144 count/mm；正常范围
   10–490 mm，伸腿时位置向负方向变化。
-- 变地隙正常轨迹为 6 mm/s、8 mm/s²；回中先减速和四腿找平，再统一失能抱闸。
+- 变地隙正常轨迹为 20 mm/s、8 mm/s²；四轴使用同一绝对位置点，运行跟随窗口
+  为 10 mm，回中/到端点仍需四腿误差和高度差不超过 3 mm 后统一失能抱闸。
 - Node13 只允许反转；悬挂液压使用 1500 rpm，变轮距使用 2400 rpm。
 - 固件默认仍为转向调试安全模式；编译成功不代表整车已经安全验收。
 

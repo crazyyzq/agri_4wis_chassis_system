@@ -35,7 +35,7 @@ typedef struct {
  * brakes. */
 typedef enum {
     VEHICLE_LIFT_REQUEST_SAFE_STOP = 0,
-    VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL,
+    VEHICLE_LIFT_REQUEST_NEUTRAL_STOP,
     VEHICLE_LIFT_REQUEST_EXTEND,
     VEHICLE_LIFT_REQUEST_RETRACT
 } vehicle_lift_request_t;

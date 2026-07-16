@@ -295,7 +295,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
 
     printf("[ECU MON] t=%lu seq=%lu led=%s sbus_valid=%s sbus_conn=%s fs=%s "
            "frames=%lu dec_err=%lu link=%s "
-           "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s "
+           "arm=%s gear_fsm=%s power=%s pwr_ch4=%u pwr_blk=0x%02x "
+           "auth=%s adjust=%s "
            "estop=%s diag=%s "
            "remote[steer=%d thr=%d clr=%d trk=%d ch10=%u ch14=%u "
            "b1_cnt=%u b1_lat=%s zero_raw=%s zero_req=%s zero_blk=%s "
@@ -312,6 +313,8 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            arm_state_text(snapshot->arm_state),
            gear_state_text(snapshot->gear_state),
            power_state_text(snapshot->power_state),
+           (unsigned int)snapshot->sbus_ppm_channels[ECU_SBUS_CH_POWER],
+           (unsigned int)snapshot->power_on_block_mask,
            authority_state_text(snapshot->authority_state),
            adjust_state_text(snapshot->adjust_state),
            estop_state_text(snapshot->estop_state),
@@ -481,7 +484,9 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            "valve_block=0x%08lx pump[state=%u fb=%s vel=%ld timeout=%lu] "
            "pump_tpdo[fresh=%s t0=%lu/%lu t1=%lu/%lu sw=0x%04x flt=0x%08lx] "
            "lift[state=%u req=%d active=%d fresh=0x%02x fault=0x%02x pre=%u q=%lu rej=%lu fail=%lu rec=%lu "
-           "delta=%ld spread=%ld max_spread=%ld spread_warn=%lu a0=%ld t0=%ld e0=%ld] "
+           "range[rej=%lu low=0x%02x high=0x%02x invalid=0x%02x] "
+           "delta=%ld spread=%ld max_spread=%ld spread_warn=%lu "
+           "actual=%ld/%ld/%ld/%ld t0=%ld e0=%ld] "
            "can3[tx=%lu err=%lu q=%lu drop=%lu st=%u grp=%lu done=%u fail=%u] "
            "res[lift=%u io=%u]\r\n",
            bool_text(snapshot->hydraulic_enable),
@@ -510,11 +515,18 @@ void runtime_monitor_print_cpu0(const runtime_monitor_snapshot_t *snapshot)
            (unsigned long)snapshot->lift_interpolation_reject_count,
            (unsigned long)snapshot->lift_interpolation_failure_count,
            (unsigned long)snapshot->lift_interpolation_recovery_count,
+           (unsigned long)snapshot->lift_range_direction_reject_count,
+           (unsigned int)snapshot->lift_below_safe_range_mask,
+           (unsigned int)snapshot->lift_above_safe_range_mask,
+           (unsigned int)snapshot->lift_mechanical_range_invalid_mask,
            (long)snapshot->lift_stream_planned_delta_counts,
            (long)snapshot->lift_running_spread_counts,
            (long)snapshot->lift_max_running_spread_counts,
            (unsigned long)snapshot->lift_running_spread_warning_count,
            (long)snapshot->lift_actual_position_counts[0],
+           (long)snapshot->lift_actual_position_counts[1],
+           (long)snapshot->lift_actual_position_counts[2],
+           (long)snapshot->lift_actual_position_counts[3],
            (long)snapshot->lift_target_position_counts[0],
            (long)lift_axis0_error_counts,
            (unsigned long)snapshot->can3_canopen_snapshot.pdo_tx_count,

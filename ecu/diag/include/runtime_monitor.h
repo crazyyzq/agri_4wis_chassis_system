@@ -89,6 +89,7 @@ typedef struct {
     remote_gear_state_t gear_state;
     remote_power_state_t power_state;
     remote_authority_state_t authority_state;
+    uint16_t power_on_block_mask;
     remote_adjust_state_t adjust_state;
     int16_t remote_steer_per_mille;
     int16_t remote_throttle_per_mille;

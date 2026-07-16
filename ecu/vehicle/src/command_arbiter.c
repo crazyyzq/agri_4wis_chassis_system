@@ -352,10 +352,11 @@ static void apply_remote_adjust_command(const remote_control_request_t *remote,
         return;
     }
 
-    /* HOME-center neutral is an intentional level-and-hold request.  Safety
-     * overrides and leaving the adjustment domain retain SAFE_STOP from the
-     * complete command default instead. */
-    out->lift_request = VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL;
+    /* HOME-center neutral is an intentional operator stop request. The CAN3
+     * owner cancels the old interpolation endpoint and synchronously disables
+     * all four lift axes. Safety overrides and leaving the adjustment domain
+     * retain SAFE_STOP from the complete command default instead. */
+    out->lift_request = VEHICLE_LIFT_REQUEST_NEUTRAL_STOP;
 
     if (remote_adjust_state_allows_clearance(remote->adjust_state) &&
         remote->clearance_per_mille <= ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX) {

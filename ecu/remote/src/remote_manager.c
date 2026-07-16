@@ -156,6 +156,8 @@ void remote_manager_update(remote_manager_t *manager,
         manager->adjust.hydraulic_suspension_target;
     manager->request.power_state = manager->power.state;
     manager->request.authority_state = manager->authority.state;
+    manager->request.power_on_block_mask =
+        manager->power.power_on_block_mask;
     manager->request.high_voltage_enable_request = manager->power.high_voltage_enable_request;
     manager->request.high_voltage_disable_request = manager->power.high_voltage_disable_request;
     manager->request.steer_zero_calibration_request =

@@ -4,10 +4,26 @@
 #include "ecu_config.h"
 #include "remote_types.h"
 
+/* Bit mask reported when the operator requests high voltage but one or more
+ * startup interlocks are not satisfied.  These bits are diagnostic evidence
+ * only; the power FSM remains the sole owner of the actual acceptance policy.
+ */
+typedef enum {
+    REMOTE_POWER_BLOCK_GEAR_NOT_P          = (1U << 0),
+    REMOTE_POWER_BLOCK_SPEED_NOT_ZERO      = (1U << 1),
+    REMOTE_POWER_BLOCK_THROTTLE_NOT_LOW    = (1U << 2),
+    REMOTE_POWER_BLOCK_STEERING_NOT_CENTER = (1U << 3),
+    REMOTE_POWER_BLOCK_ARM_NOT_READY       = (1U << 4),
+    REMOTE_POWER_BLOCK_ESTOP_LATCHED       = (1U << 5),
+    REMOTE_POWER_BLOCK_A_CLASS_FAULT       = (1U << 6),
+    REMOTE_POWER_BLOCK_CAN1_POWER_OFFLINE  = (1U << 7)
+} remote_power_block_t;
+
 typedef struct {
     remote_power_state_t state;
     remote_position_t hold_position;
     uint32_t hold_since_ms;
+    uint16_t power_on_block_mask;
     bool high_voltage_enable_request;
     bool high_voltage_disable_request;
     bool orderly_shutdown_request;

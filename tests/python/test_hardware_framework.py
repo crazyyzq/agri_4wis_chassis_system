@@ -765,7 +765,7 @@ def test_servo_drive_adapter_is_device_level_and_cmake_owned(root: pathlib.Path)
     assert "ECU_LIFT_MM_TO_COUNTS" in config_h
     assert "#define ECU_LIFT_ENCODER_COUNTS_PER_REV              (131072.0f)" in config_h
     assert "#define ECU_LIFT_MOTOR_REVS_PER_MM                   (2.0f)" in config_h
-    assert "#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (6.0f)" in config_h
+    assert "#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)" in config_h
     assert "ECU_LIFT_ENCODER_COUNTS_PER_REV * ECU_LIFT_MOTOR_REVS_PER_MM" in config_h
     assert "ECU_LIFT_PROFILE_VELOCITY_UNITS_PER_MM_S" not in config_h
     assert "ECU_LIFT_PROFILE_ACCEL_UNITS_PER_RPS2" not in config_h
@@ -808,12 +808,68 @@ def test_lift_commissioning_tools_match_installed_mechanical_scale(
     profile_tool = read(
         root, "tools/canopen_interp_debug/lift4_profile_position_cycle.py"
     )
+    cycle_tool = read(
+        root,
+        "tools/canopen_interp_debug/lift4_sync_cycle_validation.py",
+    )
 
     assert "LIFT_MOTOR_REVS_PER_MM = 20.0 / 10.0" in sync_tool
-    assert "LIFT_MIN_POSITION_COUNTS = -128_450_560" in sync_tool
+    assert "LIFT_SAFE_MIN_HEIGHT_MM = 10.0" in sync_tool
+    assert "LIFT_SAFE_MAX_HEIGHT_MM = 490.0" in sync_tool
+    assert "DEFAULT_SPEED_MM_S = 20.0" in sync_tool
+    assert "DEFAULT_ACCEL_MM_S2 = 8.0" in sync_tool
+    assert "DEFAULT_SPEED_MM_S = 20.0" in sync_tool
+    assert "DEFAULT_ACCEL_MM_S2 = 8.0" in sync_tool
+    assert "DEFAULT_PROFILE_VELOCITY_UNITS = 53_000_000" in sync_tool
+    assert "DEFAULT_PROFILE_ACCELERATION_UNITS = 250_000" in sync_tool
+    assert (
+        "DEFAULT_MAX_FOLLOWING_LEAD_COUNTS = round(2.5 * LIFT_COUNTS_PER_MM)"
+        in sync_tool
+    )
+    assert "DEFAULT_TRACKING_WINDOW_MM = 10.0" in sync_tool
+    assert "ACTUAL_CURRENT_AMPS_PER_UNIT = 0.01" in sync_tool
+    assert '"motion_current_stats": motion_current_stats' in sync_tool
+    assert '"tick_resync_count": tick_resync_count' in sync_tool
+    assert "Never \"catch up\"" in sync_tool
+    assert "DEFAULT_TPDO0_RECOVERY_RETRIES = 2" in sync_tool
+    assert '"tpdo0_recovery_count": tpdo0_recovery_count' in sync_tool
+    assert "for node in self.nodes:" in sync_tool
+    assert "self.send(SYNC_COB_ID, b\"\")" in sync_tool
+    assert "gc.disable()" in sync_tool
+    assert "gc.enable()" in sync_tool
+    assert '"feedback_governor_count": feedback_governor_count' in sync_tool
+    assert '"starvation_recovery_count": starvation_recovery_count' in sync_tool
+    assert "def recover_interpolation_starvation(" in sync_tool
+    assert "self.send_interpolation_trigger_group(0x000F, measured)" in sync_tool
+    assert "self.send_interpolation_trigger_group(0x003F, measured)" in sync_tool
+    assert '"maximum_following_error_mm": round(' in sync_tool
+    assert "Never freeze a fixed-period interpolation stream" in sync_tool
+    assert "self.wait_axes_settled(stable_ms=300)" in sync_tool
+    assert "next enable cannot replay a trajectory" in sync_tool
+    assert "DEFAULT_PREALIGN_SPEED_MM_S = 2.0" in sync_tool
+    assert '"prealign_sample_count": prealign_sample_count' in sync_tool
+    assert "3.0 * normalized_time * normalized_time" in sync_tool
+    assert "All axes receive exactly the same absolute point" in sync_tool
+    assert "braking_velocity = math.sqrt" in sync_tool
+    assert "common_velocity_counts_s = actual_step / period_s" not in sync_tool
+    assert "LIFT_RUNNING_SPREAD_WARNING_MM = 15.0" in sync_tool
+    assert "LIFT_FINAL_SYNC_SPREAD_MM = 3.0" in sync_tool
+    assert "nodes != LIFT_NODES" in sync_tool
+    assert "def verify_pdo_contract" in sync_tool
+    assert "build_node_configuration" in sync_tool
+    assert "wait_for_fresh_tpdo0" in sync_tool
+    assert "if exc_type is None:" in sync_tool
+    assert "--absolute-target-mm is required with --allow-motion" in sync_tool
     assert "DEFAULT_MOTOR_REVS_PER_MM = 20 / 10" in velocity_tool
     assert 'parser.add_argument("--short-mm", type=float, default=10.0)' in profile_tool
     assert 'parser.add_argument("--safe-min-mm", type=float, default=10.0)' in profile_tool
+    assert 'parser.add_argument("--cycles", type=int, default=10)' in cycle_tool
+    assert 'default=20.0' in cycle_tool
+    assert 'default=8.0' in cycle_tool
+    assert "default=53_000_000" in cycle_tool
+    assert "default=250_000" in cycle_tool
+    assert "default=655_360" in cycle_tool
+    assert "A failed leg stops" in cycle_tool
     assert "12.0 / 10.0" not in sync_tool
     assert "DEFAULT_MOTOR_REVS_PER_MM = 12 / 10" not in velocity_tool
 
@@ -2037,7 +2093,7 @@ def test_runtime_monitor_reports_remote_fsm_states(root: pathlib.Path) -> None:
     ]:
         assert helper in monitor_c, helper
 
-    assert "arm=%s gear_fsm=%s power=%s auth=%s adjust=%s" in monitor_c
+    assert "arm=%s gear_fsm=%s power=%s pwr_ch4=%u pwr_blk=0x%02x" in monitor_c
     assert "out->arm_state = s_runtime.remote_request.arm_state;" in tasks_c
     assert "out->gear_state = s_runtime.remote_request.gear_state;" in tasks_c
     assert "out->power_state = s_runtime.remote_request.power_state;" in tasks_c
@@ -2609,7 +2665,13 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
     )
     assert "SERVO_DRIVE_CONTROL_SWITCH_ON" not in setup
     assert "SERVO_DRIVE_CONTROL_ENABLE_OPERATION" not in setup
-    assert "LIFT_SETUP_SDO_WRITES_ENABLED_PER_NODE (11U)" in lift_c
+    assert "LIFT_SETUP_SDO_WRITES_ENABLED_PER_NODE (12U)" in lift_c
+    assert "LIFT_SETUP_SDO_WRITES_DISABLED_PER_NODE (9U)" in lift_c
+    assert (
+        setup.index("SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE")
+        < setup.index("SERVO_DRIVE_CONTROL_FAULT_RESET")
+        < shutdown_at
+    )
     assert "ECU_CANOPEN_OBJ_INTERPOLATION_MODE" in setup
     assert "0U, 2U, ECU_CANOPEN_LIFT_INTERPOLATION_MODE" in setup
     assert "ECU_CANOPEN_OBJ_BC_INTERPOLATION_OPTION" in setup
@@ -2660,26 +2722,35 @@ def test_can3_lift_direction_change_clears_buffer_outside_operation_enabled(
         "                LIFT_INTERP_DIRECTION_HOLD,"
     ) in lift_c
     assert "ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC \\" in config_h
-    assert "(ECU_LIFT_MM_TO_COUNTS * 6.0f)" in config_h
+    assert "(ECU_LIFT_MM_TO_COUNTS * 20.0f)" in config_h
     assert "ECU_LIFT_INTERPOLATION_ACCEL_COUNTS_PER_SEC2" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 8.0f)" in config_h
-    assert "#define ECU_LIFT_PROFILE_VELOCITY_UNITS             (24000000)" in config_h
-    assert "#define ECU_LIFT_PROFILE_ACCEL_UNITS                (500000)" in config_h
+    assert "#define ECU_LIFT_PROFILE_VELOCITY_UNITS             (53000000)" in config_h
+    assert "#define ECU_LIFT_PROFILE_ACCEL_UNITS                (250000)" in config_h
     assert "ECU_LIFT_FOLLOWING_ERROR_WINDOW_COUNTS \\" in config_h
-    assert "(ECU_LIFT_MM_TO_COUNTS * 3.0f)" in config_h
+    assert "(ECU_LIFT_MM_TO_COUNTS * 10.0f)" in config_h
     assert "ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS \\" in config_h
     assert "#define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS \\" in config_h
-    assert "    (75000)" in config_h
+    assert "(ECU_LIFT_MM_TO_COUNTS * 2.5f)" in config_h
     assert "ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS \\" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 3.0f)" in config_h
     assert "ECU_LIFT_RUNNING_SPREAD_WARNING_COUNTS \\" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 15.0f)" in config_h
-    assert "ECU_LIFT_REMOTE_NEUTRAL_STOP_CONFIRM_MS" in config_h
-    assert "lift_remote_neutral_stop_confirmed" in lift_c
-    assert "command->source != COMMAND_SOURCE_REMOTE" in lift_c
-    assert "lift_remote_neutral_since_ms" in lift_h
-    assert "effective_target_height_mm" in lift_c
-    assert "ECU_REMOTE_MAX_HEIGHT_TARGET_MM : ECU_REMOTE_MIN_HEIGHT_TARGET_MM" in lift_c
+    # P0 contract: a neutral sample must never be replaced by the previous
+    # endpoint command. The four-axis disable group is emitted immediately and
+    # the next request uses the prepared synchronous enable path.
+    assert "ECU_LIFT_REMOTE_NEUTRAL_STOP_CONFIRM_MS" not in config_h
+    assert "lift_remote_neutral_stop_confirmed" not in lift_c
+    assert "lift_remote_neutral_since_ms" not in lift_h
+    assert "operator_neutral_requested" in lift_c
+    assert "begin_lift_leveling(state, LIFT_INTERP_DIRECTION_HOLD)" not in lift_c
+    stopping = lift_c.split(
+        "LIFT_INTERPOLATION_STATE_STOPPING) {", 1
+    )[1].split(
+        "LIFT_INTERPOLATION_STATE_STARVATION_CLEARING", 1
+    )[0]
+    assert "state->lift_prepared_disabled =" in stopping
+    assert "state->lift_axis_fault_mask == 0U" in stopping
     running_sync = lift_c.split("static int32_t lift_interpolation_delta_counts", 1)[1]
     running_sync = running_sync.split("static bool lift_positions_at_target", 1)[0]
     final_sync = lift_c.split("static bool lift_positions_at_target", 1)[1]
@@ -2893,7 +2964,7 @@ def test_can3_lift_progress_stall_soft_recovers_without_axis_disable(
     stall_block = lift_c.split(
         "if (lift_progress_stalled(state, command_target_position_counts, now_ms))",
         1,
-    )[1].split("for (uint32_t leg = 0U; leg < ECU_WHEEL_COUNT; ++leg)", 1)[0]
+    )[1].split("if (!state->lift_targets_initialized)", 1)[0]
     assert "visible jerk" in stall_block
     assert "same absolute-position stream" in stall_block
     assert "state->lift_interpolation_reject_count++" in stall_block
@@ -2904,7 +2975,7 @@ def test_can3_lift_progress_stall_soft_recovers_without_axis_disable(
     assert "state->lift_recovery_not_before_ms" not in stall_block
 
 
-def test_can3_lift_uses_script_equivalent_per_axis_trajectory_without_pretrigger_leveling(
+def test_can3_lift_uses_script_equivalent_common_trajectory_after_triggered_alignment(
     root: pathlib.Path,
 ) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
@@ -2912,25 +2983,34 @@ def test_can3_lift_uses_script_equivalent_per_axis_trajectory_without_pretrigger
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
     assert "#define ECU_CANOPEN_LIFT_PRELOAD_POINTS           (3U)" in config_h
-    assert "(75000)" in config_h.split(
+    assert "(ECU_LIFT_MM_TO_COUNTS * 2.5f)" in config_h.split(
         "#define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS", 1
-    )[1].split("#define ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR", 1)[0]
-    assert "ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR" in config_h
-    assert "ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS" in config_h
+    )[1].split("#define ECU_LIFT_TARGET_REACHED_TOLERANCE_COUNTS", 1)[0]
+    assert "ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR" not in config_h
+    assert "ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS" not in config_h
     assert "LIFT_INTERPOLATION_STATE_LEVELING" in lift_h
+    assert "LIFT_INTERPOLATION_STATE_STARVATION_CLEARING" in lift_h
     assert "lift_stream_total_distance_counts" in lift_h
-    assert "const int32_t final_delta = command_target_position_counts - origin" in lift_c
-    assert "((int64_t)final_delta *" in lift_c
-    assert "ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR" in lift_c
+    assert "state->lift_common_target_position_counts" in lift_c
+    assert "target_positions[leg] =\n            state->lift_common_target_position_counts" in lift_c
+    assert "lift_feedback_governed_speed_counts_per_sec" in lift_c
+    assert "lift_common_following_error_counts" in lift_c
+    assert "lift_axes_near_zero_for_starvation" in lift_c
+    assert "SERVO_DRIVE_CONTROL_ENABLE_OPERATION,\n                LIFT_INTERPOLATION_STATE_STARVATION_CLEARING" in lift_c
     settling = lift_c.split(
         "LIFT_INTERPOLATION_STATE_SETTLING", 2
     )[2].split("if (state->lift_interpolation_state == LIFT_INTERPOLATION_STATE_STOPPED)", 1)[0]
     assert "LIFT_INTERPOLATION_STATE_PRELOADING" in settling
     assert "state->lift_start_with_leveling" in settling
-    preloading = lift_c.split(
-        "LIFT_INTERPOLATION_STATE_PRELOADING", 2
-    )[2].split("LIFT_INTERPOLATION_STATE_TRIGGERING", 1)[0]
-    assert "begin_lift_leveling" not in preloading
+    assert (
+        "Preload/re-prime points must hold each axis at its own fresh measured"
+        in lift_c
+    )
+    assert (
+        "target_positions[leg] =\n"
+        "                state->lift_stream_origin_position_counts[leg]"
+        in lift_c
+    )
     triggering = lift_c.split(
         "LIFT_INTERPOLATION_STATE_TRIGGERING", 2
     )[2].split("LIFT_INTERPOLATION_STATE_RUNNING", 1)[0]
@@ -2944,7 +3024,7 @@ def test_can3_lift_neutral_during_setup_runs_disable_setup_before_stopped(
     lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
 
     neutral_configuring = lift_c.split(
-        "if (safe_stop_requested || neutral_level_requested ||", 1
+        "if (safe_stop_requested || operator_neutral_requested ||", 1
     )[1].split(
         "if (state->lift_interpolation_state ==\n"
         "                LIFT_INTERPOLATION_STATE_STOPPED)",
@@ -2983,9 +3063,57 @@ def test_can3_lift_waits_for_measured_axis_settle_before_capturing_origin(
     )[2].split("if (state->lift_interpolation_state == LIFT_INTERPOLATION_STATE_STOPPED)", 1)[0]
     assert "lift_axes_settled(state, now_ms)" in settling
     assert settling.index("refresh_lift_feedback") < settling.index("lift_axes_settled")
+    assert (
+        "lift_direction_allowed_by_range(state, setup_direction)" in settling
+    )
+    assert (
+        "lift_direction_allowed_by_range(state, requested_direction)"
+        not in settling
+    )
 
 
-def test_can3_lift_new_reducer_neutral_leveling_and_range_direction_contract(
+def test_can3_lift_stationary_preload_bypasses_motion_direction_gate(
+    root: pathlib.Path,
+) -> None:
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    queue_group = lift_c.split(
+        "static bool queue_lift_interpolation_group", 1
+    )[1].split(
+        "static void begin_lift_leveling", 1
+    )[0]
+    assert "PRELOADING deliberately queues stationary points" in queue_group
+    assert (
+        "direction != LIFT_INTERP_DIRECTION_HOLD &&\n"
+        "        !lift_direction_allowed_by_range(state, direction)"
+        in queue_group
+    )
+
+
+def test_can3_lift_directional_prealign_matches_fixed_script_smoothstep(
+    root: pathlib.Path,
+) -> None:
+    lift_h = read(root, "ecu/devices/include/lift_hydraulic_device.h")
+    lift_c = read(root, "ecu/devices/src/lift_hydraulic_device.c")
+
+    for token in [
+        "lift_level_alignment_sample_count",
+        "lift_level_alignment_sample_index",
+        "lift_level_origin_position_counts",
+    ]:
+        assert token in lift_h, token
+    assert "lift_directional_alignment_target" in lift_c
+    assert "smoothstep(i/n)" in lift_c
+    assert "No measured\n * feedback is fed back into the point generator" in lift_c
+    leveling = lift_c.split("static bool queue_lift_leveling_group", 1)[1].split(
+        "static bool build_pump_velocity_request", 1
+    )[0]
+    assert "resume_direction != LIFT_INTERP_DIRECTION_HOLD" in leveling
+    assert "lift_directional_alignment_target(state, leg)" in leveling
+    assert "lift_level_alignment_sample_index++" in leveling
+
+
+def test_can3_lift_new_reducer_immediate_neutral_stop_and_range_direction_contract(
     root: pathlib.Path,
 ) -> None:
     config_h = read(root, "ecu/config/include/ecu_config.h")
@@ -2997,7 +3125,7 @@ def test_can3_lift_new_reducer_neutral_leveling_and_range_direction_contract(
     tasks_c = read(root, "ecu/os/src/ecu_tasks_cpu0.c")
 
     assert "#define ECU_LIFT_MOTOR_REVS_PER_MM                   (2.0f)" in config_h
-    assert "(ECU_LIFT_MM_TO_COUNTS * 6.0f)" in config_h
+    assert "(ECU_LIFT_MM_TO_COUNTS * 20.0f)" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 2.0f)" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 4.0f)" in config_h
     assert "(ECU_LIFT_MM_TO_COUNTS * 15.0f)" in config_h
@@ -3006,12 +3134,12 @@ def test_can3_lift_new_reducer_neutral_leveling_and_range_direction_contract(
 
     for token in [
         "VEHICLE_LIFT_REQUEST_SAFE_STOP",
-        "VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL",
+        "VEHICLE_LIFT_REQUEST_NEUTRAL_STOP",
         "VEHICLE_LIFT_REQUEST_EXTEND",
         "VEHICLE_LIFT_REQUEST_RETRACT",
     ]:
         assert token in vehicle_h
-    assert "out->lift_request = VEHICLE_LIFT_REQUEST_NEUTRAL_LEVEL" in arbiter_c
+    assert "out->lift_request = VEHICLE_LIFT_REQUEST_NEUTRAL_STOP" in arbiter_c
     assert "out->lift_request = VEHICLE_LIFT_REQUEST_EXTEND" in arbiter_c
     assert "out->lift_request = VEHICLE_LIFT_REQUEST_RETRACT" in arbiter_c
     assert "command->lift_request = VEHICLE_LIFT_REQUEST_SAFE_STOP" in safety_c
@@ -3022,9 +3150,6 @@ def test_can3_lift_new_reducer_neutral_leveling_and_range_direction_contract(
         "lift_below_safe_range_mask",
         "lift_above_safe_range_mask",
         "lift_mechanical_range_invalid_mask",
-        "lift_level_target_from_feedback",
-        "lift_level_next_target",
-        "lift_level_feedback_stable",
         "queue_lift_leveling_group",
         "LIFT_INTERPOLATION_STATE_LEVELING",
     ]:
@@ -3038,19 +3163,25 @@ def test_can3_lift_new_reducer_neutral_leveling_and_range_direction_contract(
     assert "return direction == LIFT_INTERP_DIRECTION_RETRACT;" in range_gate
     assert "lift_below_safe_range_mask != 0U &&" in range_gate
     assert "lift_above_safe_range_mask != 0U" in range_gate
-    planner = lift_c.split("static int32_t lift_level_next_target", 1)[1].split(
-        "static bool lift_level_feedback_stable", 1
+    process = lift_c.split("static bool process_lift_interpolation", 1)[1].split(
+        "static bool build_pump_velocity_request", 1
     )[0]
-    assert "state->lift_target_position_counts[leg]" in planner
-    assert "approach_zero" in planner
-    assert "ECU_LIFT_LEVELING_ACCEL_COUNTS_PER_SEC2" in planner
-    assert "ECU_LIFT_LEVELING_SPEED_COUNTS_PER_SEC" in planner
-    assert "ECU_LIFT_ZERO_SPEED_VELOCITY_UNITS" in lift_c
+    assert "operator_neutral_requested" in process
+    assert "SERVO_DRIVE_CONTROL_DISABLE_VOLTAGE" in process
+    assert "begin_lift_leveling(state, LIFT_INTERP_DIRECTION_HOLD)" not in process
+    leveling = process.split(
+        "LIFT_INTERPOLATION_STATE_LEVELING) {", 1
+    )[1].split("if (safe_stop_requested || operator_neutral_requested", 1)[0]
+    assert "desired_direction != alignment_direction" in leveling
+    assert "state->lift_level_resume_direction =" not in leveling.split(
+        "if (safe_stop_requested", 1
+    )[0]
     for token in [
         "LIFT_INTERPOLATION_STATE_READY_TO_SWITCH_ON",
         "LIFT_INTERPOLATION_STATE_SWITCHING_ON",
         "LIFT_INTERPOLATION_STATE_ENABLING_OPERATION",
         "LIFT_INTERPOLATION_STATE_LEVELING",
+        "LIFT_INTERPOLATION_STATE_STARVATION_CLEARING",
     ]:
         assert token in tasks_c
 
@@ -3070,7 +3201,7 @@ def test_current_documentation_uses_one_lift_contract_and_index(root: pathlib.Pa
 
     assert "20 motor rev/10 mm" in current or "20 rev/10 mm" in current
     assert "262144 count/mm" in current
-    assert "6 mm/s" in current
+    assert "20 mm/s" in current
     assert "12 rev/10 mm" not in current
     assert "normal speed is 5 mm/s" not in current.lower()
     assert "doc/README.md" in read(root, "AGENTS.md")

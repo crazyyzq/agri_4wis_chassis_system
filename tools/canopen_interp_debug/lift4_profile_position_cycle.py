@@ -25,7 +25,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from lift4_sync_debug import (  # noqa: E402
     CAN_CHANNEL,
     LIFT_COUNTS_PER_MM,
-    LIFT_MAX_SYNC_SPREAD_MM,
+    LIFT_FINAL_SYNC_SPREAD_MM,
     LIFT_MAX_POSITION_COUNTS,
     LIFT_MIN_POSITION_COUNTS,
     LIFT_MOTOR_REVS_PER_MM,
@@ -208,7 +208,7 @@ class LiftProfilePositionCycle:
     ) -> list[dict[str, object]]:
         positions = self.prime_feedback()
         spread = max(positions.values()) - min(positions.values())
-        if spread > round(LIFT_MAX_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM):
+        if spread > round(LIFT_FINAL_SYNC_SPREAD_MM * LIFT_COUNTS_PER_MM):
             raise RuntimeError(
                 "absolute synchronization error before segmented move "
                 f"{spread / LIFT_COUNTS_PER_MM:.3f}mm"

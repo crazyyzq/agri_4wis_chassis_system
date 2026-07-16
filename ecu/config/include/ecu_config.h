@@ -748,7 +748,7 @@ typedef enum {
 #define ECU_LIFT_LONGEST_POSITION_COUNTS \
     ((int32_t)(-(ECU_LIFT_MM_TO_COUNTS * 490.0f)))
 #define ECU_LIFT_INTERPOLATION_SPEED_COUNTS_PER_SEC \
-    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 6.0f))
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 20.0f))
 #define ECU_LIFT_INTERPOLATION_ACCEL_COUNTS_PER_SEC2 \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 8.0f))
 #define ECU_LIFT_LEVELING_SPEED_COUNTS_PER_SEC \
@@ -759,38 +759,34 @@ typedef enum {
 #define ECU_LIFT_MECHANICAL_MIN_HEIGHT_MM             (0.0f)
 #define ECU_LIFT_MECHANICAL_MAX_HEIGHT_MM             (500.0f)
 #define ECU_LIFT_MECHANICAL_PLAUSIBILITY_MARGIN_MM    (1.0f)
-/* Analyzer-derived full-stroke lift parameters, 2026-07-11:
- * The original analyzer run used 5.0 mm/s.  The installed higher-reduction
- * gearbox now uses a 6.0 mm/s stream with the same 8.0 mm/s^2 physical ramp.
- * 75000-count nominal target lead,
- * 24,000,000 vendor profile-velocity units and 500,000 vendor
- * profile-acceleration units. These two vendor object values are analyzer
- * tuned; do not derive them from the Node1..8 10000-count velocity scale.
- * The successful analyzer sequence starts all four trajectories from measured
- * positions and runs 10->490->10 mm without EMCY. 20 mm/s and 7.5 mm/s
- * full-stroke attempts tripped Node9 0x7390.
- * ECU uses the script's minimum proven preload of three stationary points.
- * Every running point uses a per-axis final displacement, monotonic lead clamp
- * and bounded 0.25 feedback correction; the four-axis batch is followed by one
- * common SYNC.
+/* Analyzer-derived full-stroke lift parameters, 2026-07-16:
+ * - one common absolute-position stream at 20 mm/s and 8 mm/s^2;
+ * - 53,000,000 vendor profile-velocity units;
+ * - 250,000 vendor profile-acceleration/deceleration units;
+ * - 2.5 mm normal common-target look-ahead;
+ * - 10 mm running following-error window, with final leveling still 3 mm.
+ *
+ * Following error is target lead over the slowest measured axis, not the
+ * measured height spread between legs.  The online governor and bounded
+ * interpolation re-prime recover transient scheduling starvation without
+ * disabling loaded axes.  ECU uses exactly three stationary preload points.
  */
-#define ECU_LIFT_PROFILE_VELOCITY_UNITS             (24000000)
-#define ECU_LIFT_PROFILE_ACCEL_UNITS                (500000)
+#define ECU_LIFT_PROFILE_VELOCITY_UNITS             (53000000)
+#define ECU_LIFT_PROFILE_ACCEL_UNITS                (250000)
 #define ECU_LIFT_FOLLOWING_ERROR_WINDOW_COUNTS \
-    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 10.0f))
 #define ECU_LIFT_INTERPOLATION_TARGET_LEAD_COUNTS \
-    (75000)
-#define ECU_LIFT_SYNC_CORRECTION_GAIN_NUMERATOR   (1)
-#define ECU_LIFT_SYNC_CORRECTION_GAIN_DENOMINATOR (4)
-#define ECU_LIFT_SYNC_CORRECTION_MAX_COUNTS       (50000)
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 2.5f))
+#define ECU_LIFT_FEEDBACK_GOVERNOR_MIN_SPEED_COUNTS_PER_SEC \
+    ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 2.0f))
 #define ECU_LIFT_TARGET_REACHED_TOLERANCE_COUNTS \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 3.0f))
 /* Analyzer-proven lift contract:
  * - 20 ms interpolation period;
  * - three preloaded stationary points;
- * - no impossible pre-trigger leveling stage;
+ * - smooth post-trigger alignment to one direction-leading common position;
  * - one coherent absolute-position target stream per four-axis cycle;
- * - 75000-count maximum command lead over measured feedback;
+ * - feedback-governed 2.5 mm normal target lead;
  * - final acceptance only after all axes are within 3 mm.
  */
 #define ECU_LIFT_FINAL_SPREAD_TOLERANCE_COUNTS \
@@ -808,11 +804,12 @@ typedef enum {
 #define ECU_LIFT_ZERO_SPEED_VELOCITY_UNITS \
     ((int32_t)((ECU_CANOPEN_ZERO_SPEED_RPM_TOLERANCE * \
                 ECU_LIFT_VELOCITY_UNITS_PER_RPM) + 0.5f))
-/* Normal remote-center confirmation while lift interpolation is already
- * running. This filters SBUS threshold chatter only; safety-source stops,
- * high-voltage loss, CAN faults and non-remote commands still stop immediately.
- */
-#define ECU_LIFT_REMOTE_NEUTRAL_STOP_CONFIRM_MS     (150U)
+#define ECU_LIFT_STARVATION_MAX_SPEED_RPM            (10.0f)
+#define ECU_LIFT_STARVATION_MAX_SPEED_VELOCITY_UNITS \
+    ((int32_t)((ECU_LIFT_STARVATION_MAX_SPEED_RPM * \
+                ECU_LIFT_VELOCITY_UNITS_PER_RPM) + 0.5f))
+#define ECU_LIFT_STARVATION_CONFIRM_SAMPLES          (3U)
+#define ECU_LIFT_STARVATION_RECOVERY_LIMIT           (3U)
 #define ECU_LIFT_STALL_PROGRESS_COUNTS \
     ((int32_t)(ECU_LIFT_MM_TO_COUNTS * 0.05f))
 #define ECU_LIFT_STALL_TIMEOUT_MS                   (5000U)
@@ -1038,8 +1035,8 @@ typedef enum {
 #define ECU_REMOTE_MIN_HEIGHT_TARGET_MM   (10.0f)
 #define ECU_REMOTE_MAX_HEIGHT_TARGET_MM   (490.0f)
 /* Operator command magnitude and diagnostic unit.  The lift device consumes
- * only the sign and generates the configured 6 mm/s trajectory below. */
-#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (6.0f)
+ * only the sign and generates the configured 20 mm/s trajectory below. */
+#define ECU_REMOTE_MAX_HEIGHT_RATE_MM_S   (20.0f)
 #define ECU_REMOTE_CLEARANCE_UP_PER_MILLE_MIN     (778)
 #define ECU_REMOTE_CLEARANCE_DOWN_PER_MILLE_MAX   (-778)
 #define ECU_REMOTE_MAX_TRACK_RATE_MM_S    (20.0f)

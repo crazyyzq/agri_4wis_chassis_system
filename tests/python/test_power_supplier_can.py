@@ -173,12 +173,37 @@ def test_power_can_online_uses_current_bus_state_not_cumulative_errors(root: pat
 def test_remote_power_request_does_not_require_outputs_that_it_starts(root: pathlib.Path) -> None:
     power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
 
-    precondition_body = power_fsm_c.split("static bool power_on_preconditions_ok", 1)[1]
+    precondition_body = power_fsm_c.split(
+        "static uint16_t power_on_precondition_block_mask", 1
+    )[1]
     precondition_body = precondition_body.split("static bool power_down_preconditions_ok", 1)[0]
 
     assert "preconditions->can1_power_online" in precondition_body
     assert "preconditions->power_ready" not in precondition_body
     assert "preconditions->low_voltage_ok" not in precondition_body
+
+
+def test_remote_power_rejection_exposes_each_startup_interlock(root: pathlib.Path) -> None:
+    power_fsm_h = read(root, "ecu/remote/include/remote_power_fsm.h")
+    power_fsm_c = read(root, "ecu/remote/src/remote_power_fsm.c")
+    monitor_c = read(root, "ecu/diag/src/runtime_monitor.c")
+
+    for token in [
+        "REMOTE_POWER_BLOCK_GEAR_NOT_P",
+        "REMOTE_POWER_BLOCK_SPEED_NOT_ZERO",
+        "REMOTE_POWER_BLOCK_THROTTLE_NOT_LOW",
+        "REMOTE_POWER_BLOCK_STEERING_NOT_CENTER",
+        "REMOTE_POWER_BLOCK_ARM_NOT_READY",
+        "REMOTE_POWER_BLOCK_ESTOP_LATCHED",
+        "REMOTE_POWER_BLOCK_A_CLASS_FAULT",
+        "REMOTE_POWER_BLOCK_CAN1_POWER_OFFLINE",
+    ]:
+        assert token in power_fsm_h
+        assert token in power_fsm_c
+
+    assert "fsm->power_on_block_mask == 0U" in power_fsm_c
+    assert "pwr_blk=0x%02x" in monitor_c
+    assert "pwr_ch4=%u" in monitor_c
 
 
 def test_remote_power_on_latch_does_not_chatter_on_post_hv_tpdo_gap(root: pathlib.Path) -> None:
@@ -191,7 +216,7 @@ def test_remote_power_on_latch_does_not_chatter_on_post_hv_tpdo_gap(root: pathli
     assert "fsm->state = REMOTE_POWER_ON;" in high_block
     assert "return;" in high_block
     assert high_block.index("if (fsm->high_voltage_enable_request)") < high_block.index(
-        "power_on_preconditions_ok(preconditions)"
+        "fsm->power_on_block_mask == 0U"
     )
 
 

@@ -1,16 +1,36 @@
 #include "ecu_time.h"
 #include "remote_power_fsm.h"
 
-static bool power_on_preconditions_ok(const remote_preconditions_t *preconditions)
+static uint16_t power_on_precondition_block_mask(
+    const remote_preconditions_t *preconditions)
 {
-    return preconditions->active_gear == ECU_GEAR_REQUEST_P &&
-           preconditions->zero_speed &&
-           preconditions->throttle_low &&
-           preconditions->steering_neutral &&
-           preconditions->arm_ready &&
-           !preconditions->estop_latched &&
-           !preconditions->a_class_fault &&
-           preconditions->can1_power_online;
+    uint16_t mask = 0U;
+
+    if (preconditions->active_gear != ECU_GEAR_REQUEST_P) {
+        mask |= REMOTE_POWER_BLOCK_GEAR_NOT_P;
+    }
+    if (!preconditions->zero_speed) {
+        mask |= REMOTE_POWER_BLOCK_SPEED_NOT_ZERO;
+    }
+    if (!preconditions->throttle_low) {
+        mask |= REMOTE_POWER_BLOCK_THROTTLE_NOT_LOW;
+    }
+    if (!preconditions->steering_neutral) {
+        mask |= REMOTE_POWER_BLOCK_STEERING_NOT_CENTER;
+    }
+    if (!preconditions->arm_ready) {
+        mask |= REMOTE_POWER_BLOCK_ARM_NOT_READY;
+    }
+    if (preconditions->estop_latched) {
+        mask |= REMOTE_POWER_BLOCK_ESTOP_LATCHED;
+    }
+    if (preconditions->a_class_fault) {
+        mask |= REMOTE_POWER_BLOCK_A_CLASS_FAULT;
+    }
+    if (!preconditions->can1_power_online) {
+        mask |= REMOTE_POWER_BLOCK_CAN1_POWER_OFFLINE;
+    }
+    return mask;
 }
 
 static bool power_down_preconditions_ok(const remote_preconditions_t *preconditions)
@@ -54,6 +74,7 @@ void remote_power_fsm_init(remote_power_fsm_t *fsm, uint32_t now_ms)
     fsm->state = REMOTE_POWER_OFF;
     fsm->hold_position = REMOTE_POS_CENTER;
     fsm->hold_since_ms = now_ms;
+    fsm->power_on_block_mask = 0U;
     fsm->high_voltage_enable_request = false;
     fsm->high_voltage_disable_request = false;
     fsm->orderly_shutdown_request = false;
@@ -73,6 +94,8 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
     fsm->request_rejected = false;
     fsm->high_voltage_disable_request = false;
     fsm->orderly_shutdown_request = false;
+    fsm->power_on_block_mask =
+        power_on_precondition_block_mask(preconditions);
 
     if (preconditions->estop_latched || preconditions->a_class_fault) {
         /* The safety/actuator layers own the controlled stop.  Preserve the
@@ -112,7 +135,7 @@ void remote_power_fsm_update(remote_power_fsm_t *fsm,
             fsm->diagnostic = DIAG_OK;
             return;
         }
-        if (power_on_preconditions_ok(preconditions)) {
+        if (fsm->power_on_block_mask == 0U) {
             fsm->state = REMOTE_POWER_ON;
             fsm->high_voltage_enable_request = true;
             fsm->diagnostic = DIAG_OK;

@@ -34,9 +34,15 @@ typedef enum {
     LIFT_INTERPOLATION_STATE_READY_TO_SWITCH_ON,
     LIFT_INTERPOLATION_STATE_SWITCHING_ON,
     LIFT_INTERPOLATION_STATE_ENABLING_OPERATION,
-    /* Operator neutral keeps interpolation active until all four legs have
-     * converged to one safe common height and reached zero speed. */
-    LIFT_INTERPOLATION_STATE_LEVELING
+    /* Fixed, finite four-axis pre-alignment used only before a new common
+     * extend/retract stream. Operator neutral never enters this state: it
+     * cancels the old trajectory and synchronously disables all four axes. */
+    LIFT_INTERPOLATION_STATE_LEVELING,
+    /* A healthy Operation-Enabled group can stop if all interpolation buffers
+     * are consumed after an abnormally late producer cycle.  Clear only the
+     * bit-4 trigger edge, re-prime measured hold points, then resume without
+     * disabling axes or resetting their absolute references. */
+    LIFT_INTERPOLATION_STATE_STARVATION_CLEARING
 } lift_interpolation_state_t;
 
 typedef struct {
@@ -51,6 +57,7 @@ typedef struct {
     uint32_t lift_interpolation_reject_count;
     uint32_t lift_interpolation_failure_count;
     uint32_t lift_interpolation_recovery_count;
+    uint32_t lift_starvation_recovery_count;
     uint32_t lift_running_spread_warning_count;
     uint32_t lift_hold_count;
     uint32_t lift_leveling_entry_count;
@@ -88,11 +95,12 @@ typedef struct {
     uint32_t lift_setup_abort_count_baseline;
     uint32_t lift_active_group_sequence;
     uint32_t lift_recovery_not_before_ms;
-    uint32_t lift_remote_neutral_since_ms;
     uint32_t lift_enable_settle_until_ms;
     uint32_t lift_settle_sample_ms;
     uint32_t lift_settle_stable_since_ms;
     uint32_t lift_last_stream_step_ms;
+    uint32_t lift_level_alignment_sample_count;
+    uint32_t lift_level_alignment_sample_index;
     uint32_t last_pump_velocity_ms;
     uint32_t lift_progress_timestamp_ms[ECU_WHEEL_COUNT];
     int32_t lift_actual_position_counts[ECU_WHEEL_COUNT];
@@ -102,10 +110,12 @@ typedef struct {
     int32_t lift_stream_origin_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_progress_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_settle_reference_position_counts[ECU_WHEEL_COUNT];
+    int32_t lift_level_origin_position_counts[ECU_WHEEL_COUNT];
     int32_t lift_command_target_position_counts;
     int32_t lift_stream_planned_delta_counts;
     int32_t lift_stream_total_distance_counts;
     int32_t lift_stream_velocity_counts_per_sec;
+    int32_t lift_common_target_position_counts;
     int32_t lift_running_spread_counts;
     int32_t lift_max_running_spread_counts;
     int32_t lift_level_target_position_counts;
@@ -118,6 +128,8 @@ typedef struct {
     uint8_t lift_preload_points_completed;
     uint8_t lift_target_stable_samples;
     uint8_t lift_level_stable_samples;
+    uint8_t lift_starvation_candidate_samples;
+    uint8_t lift_starvation_recovery_attempts;
     uint8_t lift_below_safe_range_mask;
     uint8_t lift_above_safe_range_mask;
     uint8_t lift_mechanical_range_invalid_mask;
